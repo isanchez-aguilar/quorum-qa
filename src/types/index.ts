@@ -22,6 +22,9 @@ export interface Finding {
   verified?: boolean;
   verification_note?: string;
   reproduction?: ReproductionProposal;
+  // Set by dedupe: other findings at the same place whose text overlaps but was not strong enough
+  // to merge. A pointer for a human, never a reason to change severity or confidence.
+  possibly_related?: Array<{ provider: string; model: string; line: number; similarity: number }>;
 }
 
 export interface CatalogEntry {

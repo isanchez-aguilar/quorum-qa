@@ -33,7 +33,7 @@ function realpathOfDeepestExisting(absolute: string): string | null {
 }
 
 /**
- * Turns a path cited by a model into an absolute path that is safely inside `root`, or null.
+ * Turns a path cited by a model into the REAL absolute path that is safely inside `root`, or null.
  * Paths are never URL-decoded. Any colon is rejected: it covers drive letters, URL schemes and
  * Windows alternate data streams (name:stream).
  */
@@ -63,5 +63,7 @@ export function normalizePath(root: string, relativePath: string): string | null
   const absolute = path.resolve(root, normalized);
   const real = realpathOfDeepestExisting(absolute);
   if (real === null || !isInside(realRoot, real)) return null;
-  return absolute;
+  // The real path, so the caller opens exactly what was checked: symlinks are already resolved
+  // (the real parent plus the leaf when the file does not exist).
+  return real;
 }

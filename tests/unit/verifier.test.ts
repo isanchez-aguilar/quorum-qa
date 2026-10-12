@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +9,20 @@ import { isCitableLine, localWindow, splitLines } from '../../src/verifier/lines
 import { normalizePath } from '../../src/verifier/path.js';
 import {
   FUZZY,
+  MAX_LINE,
   MAX_QUOTE_CHARS,
   MAX_QUOTE_LINES,
+  MAX_RAW_QUOTE,
+  MIN_ALNUM,
+  WORK_BUDGET,
+  WorkBudget,
+  BudgetExceeded,
   calculateSimilarity,
+  findQuote,
   levenshtein,
   normalizeQuote,
 } from '../../src/verifier/quote.js';
+import { semanticDifference, semanticTokens } from '../../src/verifier/semantic.js';
 
 const FIXTURES = fileURLToPath(new URL('../fixtures/sources', import.meta.url));
 const QUOTE = 'if (!user.token) return false;';
@@ -23,7 +31,8 @@ let sandbox: string;
 let root: string;
 
 beforeEach(async () => {
-  sandbox = await mkdtemp(path.join(tmpdir(), 'quorum-verifier-'));
+  // The real path: normalizePath returns real paths, and a temp dir may be a short or aliased name.
+  sandbox = await realpath(await mkdtemp(path.join(tmpdir(), 'quorum-verifier-')));
   root = path.join(sandbox, 'worktree');
   await mkdir(root);
 });
@@ -343,10 +352,12 @@ describe('verifyFinding: more cases', () => {
     expect(result.correctedFinding?.verification_note).toMatch(/corrected from/);
   });
 
-  it('an unusable cited line still resolves ties to the lowest line', async () => {
+  it('an unusable cited line never resolves a duplicate by distance or by line number', async () => {
     await put('src/dup.ts', sourceFile(60, { 12: 'return null;', 30: 'return null;' }));
     const result = await verify({ file: 'src/dup.ts', line: Number.NaN, evidence_quote: 'return null;' });
-    expect(result.correctedFinding?.line).toBe(12);
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/ambiguous: matches 2 places/);
+    expect(result.correctedFinding).toBeUndefined();
   });
 
   it('a directory is rejected', async () => {
@@ -358,16 +369,28 @@ describe('verifyFinding: more cases', () => {
 
   it('a file over the size limit is rejected without being read', async () => {
     await put('src/big.ts', 'a'.repeat(MAX_FILE_BYTES + 1));
-    const result = await verify({ file: 'src/big.ts', line: 1, evidence_quote: 'aaa' });
+    const result = await verify({ file: 'src/big.ts', line: 1, evidence_quote: QUOTE });
     expect(result.verified).toBe(false);
     expect(result.reason).toMatch(/too large/);
   });
 
-  it('a file exactly at the size limit is still searched', async () => {
-    const content = 'x'.repeat(MAX_FILE_BYTES - 40) + `\n${QUOTE}\n`;
-    await put('src/big.ts', content.slice(0, MAX_FILE_BYTES));
-    const result = await verify({ file: 'src/big.ts', line: 2 });
-    expect(result.verified).toBe(true);
+  it('a file of exactly MAX_FILE_BYTES is searched, one byte more is rejected', async () => {
+    // Short lines, so the size limit and not the line limit is what is being tested.
+    const tail = `\n${QUOTE}\n`;
+    const filler = 'x'.repeat(100) + '\n';
+    const rows = Math.floor((MAX_FILE_BYTES - tail.length) / filler.length);
+    const rest = MAX_FILE_BYTES - tail.length - rows * filler.length;
+    const content = filler.repeat(rows) + 'y'.repeat(rest) + tail;
+    expect(Buffer.byteLength(content)).toBe(MAX_FILE_BYTES);
+    await put('src/limit.ts', content);
+    const at = await verify({ file: 'src/limit.ts', line: splitLines(content).length });
+    expect(at.verified).toBe(true);
+
+    await put('src/over.ts', `${content}z`);
+    expect(Buffer.byteLength(`${content}z`)).toBe(MAX_FILE_BYTES + 1);
+    const over = await verify({ file: 'src/over.ts', line: 1 });
+    expect(over.verified).toBe(false);
+    expect(over.reason).toMatch(/too large/);
   });
 
   it('a quote with too many lines is rejected', async () => {
@@ -572,5 +595,481 @@ describe('lines helpers', () => {
     expect(localWindow(Number.NaN, 300)).toBeNull();
     expect(isCitableLine(1)).toBe(true);
     expect(isCitableLine(1.5)).toBe(false);
+  });
+});
+
+describe('M1 fix 1: a fuzzy match must not flip the meaning', () => {
+  // The file holds `code`; the model quoted `quoted`. Both are close enough to be located.
+  async function against(code: string, quoted: string, over: Partial<Finding> = {}) {
+    await put('src/sem.ts', sourceFile(60, { 30: code }));
+    expect(calculateSimilarity(quoted, code)).toBeGreaterThanOrEqual(FUZZY);
+    return verify({ file: 'src/sem.ts', line: 30, evidence_quote: quoted, ...over });
+  }
+
+  it('negation removed (0.97 similar) is rejected and names the token', async () => {
+    const result = await against('if (!user.token) return false;', 'if (user.token) return false;');
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/changes the meaning of the quote/);
+    expect(result.reason).toContain('the code has "!" that the quote does not');
+    expect(result.reason).toContain('found in code: "if (!user.token) return false;"');
+    expect(result.correctedFinding).toBeUndefined();
+  });
+
+  it('negation added is rejected', async () => {
+    const result = await against('if (user.token) return false;', 'if (!user.token) return false;');
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain('the quote has "!" that the code does not');
+  });
+
+  it('true and false swapped (0.87 similar) is rejected', async () => {
+    const result = await against('if (!user.token) return false;', 'if (!user.token) return true;');
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain('the quote has "true" where the code has "false"');
+  });
+
+  it('=== against !== is rejected', async () => {
+    const result = await against(
+      'if (a.id === b.id) return found(a);',
+      'if (a.id !== b.id) return found(a);',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain('the quote has "!==" where the code has "==="');
+  });
+
+  it('a changed number is rejected', async () => {
+    const result = await against('const retries = 3;', 'const retries = 5;');
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain('the quote has "5" where the code has "3"');
+  });
+
+  it('a changed string literal is rejected', async () => {
+    const result = await against("const mode = 'strict';", "const mode = 'script';");
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain(
+      'the quote has the string "script" where the code has the string "strict"',
+    );
+  });
+
+  it('a changed comparison, arithmetic or logical operator is rejected', async () => {
+    const pairs = [
+      ['if (count < limit) retry(job);', 'if (count > limit) retry(job);'],
+      ['total = price + fee + tax;', 'total = price - fee + tax;'],
+      ['if (a && b) save(item);', 'if (a || b) save(item);'],
+      ['count += 1;', 'count -= 1;'],
+    ] as const;
+    for (const [code, quoted] of pairs) {
+      const result = await against(code, quoted);
+      expect(result.verified, quoted).toBe(false);
+      expect(result.reason, quoted).toMatch(/changes the meaning/);
+    }
+  });
+
+  it('an identifier typo still verifies, and the note carries both texts', async () => {
+    const code = 'total = price * (1 + TAX_RATIO)';
+    const quoted = 'total = price * (1 + TAX_RATE)';
+    await put('src/pay.ts', sourceFile(40, { 15: code }));
+    const result = await verify({ file: 'src/pay.ts', line: 15, evidence_quote: quoted });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(quoted);
+    expect(result.correctedFinding?.verification_note).toContain(`found in code: "${code}"`);
+  });
+
+  it('a typo in a name next to a string and a number still verifies', async () => {
+    const result = await against(
+      "const limit = Math.min(requestCount, 100); // 'max'",
+      "const limit = Math.min(requestCnt, 100); // 'max'",
+    );
+    expect(result.verified).toBe(true);
+  });
+
+  it('a local fuzzy match that changes the meaning is not replaced by an exact one far away', async () => {
+    await put(
+      'src/sem.ts',
+      sourceFile(300, { 12: 'if (!user.token) return false;', 200: 'if (user.token) return false;' }),
+    );
+    const result = await verify({
+      file: 'src/sem.ts',
+      line: 10,
+      evidence_quote: 'if (user.token) return false;',
+    });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/changes the meaning/);
+  });
+
+  it('a global fuzzy match is held to the same rule', async () => {
+    await put('src/sem.ts', sourceFile(300, { 200: 'if (!user.token) return false;' }));
+    const result = await verify({
+      file: 'src/sem.ts',
+      line: 5000,
+      evidence_quote: 'if (user.token) return false;',
+    });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/changes the meaning/);
+  });
+});
+
+describe('semantic tokens', () => {
+  it('keeps operators, negation, truth words, numbers and strings, and drops identifiers', () => {
+    expect(semanticTokens('if (!user.token) return false;')).toEqual([
+      'word:if',
+      'operator:!',
+      'word:return',
+      'word:false',
+    ]);
+    expect(semanticTokens('a !== b ?? c => 0x1F + 1_000 - 2.5e3')).toEqual([
+      'operator:!==',
+      'operator:??',
+      'operator:=>',
+      'number:0x1f',
+      'operator:+',
+      'number:1000',
+      'operator:-',
+      'number:2.5e3',
+    ]);
+    expect(semanticTokens('x = "a" + \'b\' + `c`')).toEqual([
+      'operator:=',
+      'string:a',
+      'operator:+',
+      'string:b',
+      'operator:+',
+      'string:c',
+    ]);
+  });
+
+  it('matches words whole and case-insensitively', () => {
+    expect(semanticTokens('notify(nothing); isNull; returnValue')).toEqual([]);
+    expect(semanticTokens('if x is None: return True')).toEqual([
+      'word:if',
+      'word:none',
+      'word:return',
+      'word:true',
+    ]);
+  });
+
+  it('ignores identifier spelling, quote style and number separators', () => {
+    expect(semanticDifference('a = fooBar + 1_000;', 'a = fooBaz + 1000;')).toBeNull();
+    expect(semanticDifference("x = 'same'", 'x = "same"')).toBeNull();
+  });
+
+  it('names the first token that differs', () => {
+    expect(semanticDifference('return a;', 'return !a;')).toBe('the code has "!" that the quote does not');
+    expect(semanticDifference('return !a;', 'return a;')).toBe('the quote has "!" that the code does not');
+    expect(semanticDifference('if (a) x', 'if (a) x; else y')).toBe(
+      'the code has "else" that the quote does not',
+    );
+    expect(semanticDifference('a < b', 'a > b')).toBe('the quote has "<" where the code has ">"');
+  });
+
+  it('is linear on a long, hostile text', () => {
+    const hostile = `${"'".repeat(1000)}${'"'.repeat(1000)}${'`'.repeat(1000)}${'1'.repeat(8000)}`;
+    const started = performance.now();
+    semanticTokens(hostile);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+});
+
+describe('M1 fix 2: trivial or out-of-context evidence', () => {
+  it.each(['}', '});', ';', ')', '  {  ', 'abc', '=> {}'])(
+    'rejects the trivial quote %j',
+    async (quote) => {
+      await put('src/auth.ts', sourceFile(100, { 42: '  }' }));
+      const result = await verify({ line: 42, evidence_quote: quote });
+      expect(result.verified).toBe(false);
+      expect(result.reason).toMatch(/too short/);
+      expect(result.correctedFinding).toBeUndefined();
+    },
+  );
+
+  it('accepts a quote of exactly MIN_ALNUM letters or digits', async () => {
+    expect(MIN_ALNUM).toBe(4);
+    await put('src/auth.ts', sourceFile(100, { 42: 'abcd();' }));
+    const result = await verify({ line: 42, evidence_quote: 'abcd();' });
+    expect(result.verified).toBe(true);
+  });
+
+  it('counts letters and digits of any script after normalization', async () => {
+    await put('src/auth.ts', sourceFile(100, { 42: '// ключ' }));
+    expect((await verify({ line: 42, evidence_quote: '//   ключ' })).verified).toBe(true);
+  });
+
+  describe('a match outside the window is corrected only when it is the only one', () => {
+    const twoFunctions = sourceFile(300, {
+      10: 'function a() {',
+      11: '  return false;',
+      30: 'function b() {',
+      31: '  return false;',
+    });
+
+    it('rejects `return false;` cited at line 5000 when it appears in two functions', async () => {
+      await put('src/two.ts', twoFunctions);
+      const result = await verify({ file: 'src/two.ts', line: 5000, evidence_quote: 'return false;' });
+      expect(result.verified).toBe(false);
+      expect(result.reason).toMatch(/^ambiguous: matches 2 places/);
+      expect(result.correctedFinding).toBeUndefined();
+    });
+
+    it('rejects it when the cited line is inside the file but near neither copy', async () => {
+      await put('src/two.ts', twoFunctions);
+      const result = await verify({ file: 'src/two.ts', line: 200, evidence_quote: 'return false;' });
+      expect(result.verified).toBe(false);
+      expect(result.reason).toMatch(/ambiguous: matches 2 places/);
+    });
+
+    it('still takes the nearest copy inside the window', async () => {
+      await put('src/two.ts', twoFunctions);
+      const near = await verify({ file: 'src/two.ts', line: 14, evidence_quote: 'return false;' });
+      expect(near.correctedFinding?.line).toBe(11);
+      const other = await verify({ file: 'src/two.ts', line: 28, evidence_quote: 'return false;' });
+      expect(other.correctedFinding?.line).toBe(31);
+    });
+
+    it('still corrects a quote that appears once (row 6)', async () => {
+      await put('src/one.ts', sourceFile(300, { 11: '  return false;' }));
+      const result = await verify({ file: 'src/one.ts', line: 5000, evidence_quote: 'return false;' });
+      expect(result.verified).toBe(true);
+      expect(result.correctedFinding?.line).toBe(11);
+    });
+
+    it('counts two occurrences on one line as two places', async () => {
+      await put('src/one.ts', sourceFile(300, { 11: 'return false; return false;' }));
+      const result = await verify({ file: 'src/one.ts', line: 5000, evidence_quote: 'return false;' });
+      expect(result.verified).toBe(false);
+      expect(result.reason).toMatch(/matches 2 places/);
+    });
+
+    it('treats two equally close fuzzy candidates as ambiguous, and a clear winner as unique', async () => {
+      const quoted = 'compute(alpha, beta);';
+      await put('src/fz.ts', sourceFile(300, { 20: 'compute(alpha, betaX);', 80: 'compute(alpha, betaY);' }));
+      const tied = await verify({ file: 'src/fz.ts', line: 5000, evidence_quote: quoted });
+      expect(tied.verified).toBe(false);
+      expect(tied.reason).toMatch(/ambiguous: matches 2 places/);
+
+      await put('src/fz.ts', sourceFile(300, { 20: 'compute(alpha, betaX);', 80: 'compute(alpha, betaXYZ);' }));
+      expect(calculateSimilarity(quoted, 'compute(alpha, betaXYZ);')).toBeGreaterThanOrEqual(FUZZY);
+      const clear = await verify({ file: 'src/fz.ts', line: 5000, evidence_quote: quoted });
+      expect(clear.verified).toBe(true);
+      expect(clear.correctedFinding?.line).toBe(20);
+    });
+
+    it('treats a multi-line quote that matches in shifted slices as one place', async () => {
+      const lines = {
+        50: 'const totla = price * qty;',
+        51: 'const fee = rate * totla;',
+        52: 'return totla + fee;',
+      };
+      await put('src/ml.ts', sourceFile(300, lines));
+      const result = await verify({
+        file: 'src/ml.ts',
+        line: 5000,
+        evidence_quote: 'const total = price * qty;\nconst fee = rate * total;\nreturn total + fee;',
+      });
+      expect(result.verified).toBe(true);
+      expect(result.correctedFinding?.line).toBe(50);
+    });
+  });
+});
+
+describe('M1 fix 4: confinement holds for the read', () => {
+  it('returns the real path of an existing target and the real parent plus the leaf of a missing one', async (ctx) => {
+    await put('real/auth.ts', `${QUOTE}\n`);
+    try {
+      await symlink(
+        path.join(root, 'real'),
+        path.join(root, 'alias'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      ctx.skip(`this OS refused to create a directory link (${(error as Error).message})`);
+      return;
+    }
+    expect(normalizePath(root, 'alias/auth.ts')).toBe(path.join(root, 'real', 'auth.ts'));
+    expect(normalizePath(root, 'alias/new.ts')).toBe(path.join(root, 'real', 'new.ts'));
+    const result = await verify({ file: 'alias/auth.ts', line: 1 });
+    expect(result.verified).toBe(true);
+  });
+
+  it('rejects a missing file and a directory before reading anything', async () => {
+    await mkdir(path.join(root, 'src', 'dir'), { recursive: true });
+    expect((await verify({ file: 'src/dir', line: 1 })).reason).toMatch(/directory/);
+    expect((await verify({ file: 'src/none.ts', line: 1 })).reason).toMatch(/file not found/);
+  });
+});
+
+describe('M1 fix 5: linear normalization', () => {
+  it('normalizes 40000 interior spaces in well under 100 ms', () => {
+    const inputs = [
+      `a${' '.repeat(40000)}b`,
+      `abcd${' '.repeat(40000)}efgh`,
+      `${' '.repeat(40000)}x`,
+      `x${' '.repeat(40000)}`,
+    ];
+    for (const raw of inputs) {
+      const started = performance.now();
+      const normalized = normalizeQuote(raw);
+      expect(performance.now() - started).toBeLessThan(100);
+      expect(normalized.length).toBeLessThanOrEqual(9);
+    }
+    expect(normalizeQuote(`a${' '.repeat(40000)}b`)).toBe('a b');
+  });
+
+  it('normalizes a long run of tabs and mixed whitespace quickly', () => {
+    const started = performance.now();
+    normalizeQuote(`abcd${'\t '.repeat(20000)}efgh\n${' \t'.repeat(10000)}`);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  it('verifies a 40000-space quote without a stall', async () => {
+    await put('src/auth.ts', sourceFile(300, { 42: 'abcd efgh' }));
+    const started = performance.now();
+    const result = await verify({ line: 42, evidence_quote: `abcd${' '.repeat(40000)}efgh` });
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.line).toBe(42);
+  });
+
+  it('rejects a raw quote over 64 KiB before normalizing it', async () => {
+    await put('src/auth.ts', sourceFile(100, {}));
+    const huge = 'abcd'.repeat(MAX_RAW_QUOTE / 4 + 1);
+    expect(huge.length).toBeGreaterThan(MAX_RAW_QUOTE);
+    const result = await verify({ evidence_quote: huge });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/quote too large.*before normalization/);
+    // Spaces that would normalize to something tiny are still refused: the raw size decides.
+    const spaces = await verify({ evidence_quote: `abcd${' '.repeat(MAX_RAW_QUOTE)}efgh` });
+    expect(spaces.verified).toBe(false);
+    expect(spaces.reason).toMatch(/quote too large/);
+  });
+
+  it('skips a file line over 16 KiB instead of crashing, and still finds the quote elsewhere', async () => {
+    const longLine = `${QUOTE} ${'x'.repeat(MAX_LINE)}`;
+    expect(longLine.length).toBeGreaterThan(MAX_LINE);
+    await put('src/long.ts', sourceFile(60, { 10: longLine }));
+    const skipped = await verify({ file: 'src/long.ts', line: 10 });
+    expect(skipped.verified).toBe(false);
+    expect(skipped.reason).toMatch(/quote not found.*1 over-long lines were skipped/);
+
+    await put('src/long.ts', sourceFile(60, { 10: longLine, 40: QUOTE }));
+    const found = await verify({ file: 'src/long.ts', line: 10 });
+    expect(found.verified).toBe(true);
+    expect(found.correctedFinding?.line).toBe(40);
+  });
+
+  it('a multi-line quote never matches across an over-long line', async () => {
+    const wide = `const b = ${'y'.repeat(MAX_LINE)};`;
+    await put('src/long.ts', sourceFile(60, { 10: 'const a = 1;', 11: wide, 12: 'const c = 3;' }));
+    const result = await verify({
+      file: 'src/long.ts',
+      line: 10,
+      evidence_quote: `const a = 1;\n${wide}\nconst c = 3;`,
+    });
+    expect(result.verified).toBe(false);
+  });
+});
+
+describe('M1 fix 6: bounded edit distance and a work budget', () => {
+  // The plain dynamic program, as the reference.
+  function reference(a: string, b: string): number {
+    let previous = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i += 1) {
+      const current = [i];
+      for (let j = 1; j <= b.length; j += 1) {
+        current[j] = Math.min(
+          (previous[j - 1] as number) + (a[i - 1] === b[j - 1] ? 0 : 1),
+          (previous[j] as number) + 1,
+          (current[j - 1] as number) + 1,
+        );
+      }
+      previous = current;
+    }
+    return previous[b.length] as number;
+  }
+
+  // A tiny deterministic generator, so a failure reproduces.
+  function random(seed: number): () => number {
+    let state = seed;
+    return () => {
+      state = (state * 1664525 + 1013904223) % 4294967296;
+      return state / 4294967296;
+    };
+  }
+
+  it('agrees with the plain algorithm: exact below the bound, above it otherwise', () => {
+    const next = random(7);
+    const word = (length: number) =>
+      Array.from({ length }, () => 'abc'[Math.floor(next() * 3)]).join('');
+    for (let round = 0; round < 400; round += 1) {
+      const a = word(Math.floor(next() * 60));
+      const b = word(Math.floor(next() * 60));
+      const truth = reference(a, b);
+      expect(levenshtein(a, b)).toBe(truth);
+      for (const bound of [0, 1, 3, 8, 20, 100]) {
+        const bounded = levenshtein(a, b, bound);
+        if (truth <= bound) expect(bounded).toBe(truth);
+        else expect(bounded).toBeGreaterThan(bound);
+      }
+    }
+  });
+
+  it('near-identical long strings cost O(length * distance), not O(length * bound)', () => {
+    const a = 'a'.repeat(8192);
+    const b = `${'a'.repeat(8191)}b`;
+    const budget = new WorkBudget();
+    expect(levenshtein(a, b, Math.floor(8192 * (1 - FUZZY)), budget)).toBe(1);
+    expect(budget.used).toBeLessThan(500_000);
+  });
+
+  it('throws BudgetExceeded when the budget is spent', () => {
+    const budget = new WorkBudget(1000);
+    expect(() => levenshtein('a'.repeat(500), 'b'.repeat(500), 400, budget)).toThrow(BudgetExceeded);
+  });
+
+  it('findQuote reports a spent budget instead of searching on', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `const value${i} = compute(${i}, alpha, beta);`);
+    const quote = 'const value5 = compute(5, alpha, gamma);';
+    expect(findQuote(lines, quote, 5000, 100)).toEqual({ kind: 'budget' });
+    expect(findQuote(lines, quote, 5000, WORK_BUDGET).kind).not.toBe('budget');
+    // Exact scans are not charged: a verbatim quote is found even with an empty budget.
+    const exact = findQuote(lines, 'const value5 = compute(5, alpha, beta);', 5000, 0);
+    expect(exact.kind).toBe('match');
+  });
+
+  it('an 8192-character quote against 255 lines of 8191 "a" and a "b" finishes fast and deterministically', async () => {
+    const quote = 'a'.repeat(8192);
+    const line = `${'a'.repeat(8191)}b`;
+    await put('src/adv.ts', `${Array.from({ length: 255 }, () => line).join('\n')}\n`);
+
+    const started = performance.now();
+    const first = await verify({ file: 'src/adv.ts', line: 5000, evidence_quote: quote });
+    const elapsed = performance.now() - started;
+    const second = await verify({ file: 'src/adv.ts', line: 5000, evidence_quote: quote });
+
+    expect(elapsed).toBeLessThan(2000);
+    expect(second).toEqual(first);
+    expect(first.verified).toBe(false);
+    expect(first.reason).toMatch(/search budget exceeded|ambiguous: matches \d+ places/);
+  });
+
+  it('the same file is resolved at once when the cited line is inside it', async () => {
+    const line = `${'a'.repeat(8191)}b`;
+    await put('src/adv.ts', `${Array.from({ length: 255 }, () => line).join('\n')}\n`);
+    const started = performance.now();
+    const result = await verify({ file: 'src/adv.ts', line: 100, evidence_quote: 'a'.repeat(8192) });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.line).toBe(100);
+  });
+
+  it('a large file with a long absent quote is a clean "not found", inside the budget', async () => {
+    const lines = Array.from(
+      { length: 20000 },
+      (_, i) => `    const item${i} = items[${i}] ?? defaults.get('k${i}');`,
+    );
+    await put('src/big.ts', `${lines.join('\n')}\n`);
+    const quote = Array.from({ length: 30 }, (_, i) => `  hallucinated(${i}, 'never in the file');`).join('\n');
+    const started = performance.now();
+    const result = await verify({ file: 'src/big.ts', line: 10, evidence_quote: quote });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/quote not found/);
   });
 });

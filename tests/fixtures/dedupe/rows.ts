@@ -45,24 +45,21 @@ export function finding(spec: Spec): Finding {
 export interface DedupeRow {
   row: number;
   findings: Finding[];
-  result: 'merged' | 'separate';
-  // The expected single finding when merged.
-  finalSeverity?: Severity;
-  finalConfidence?: number;
-  finalOrigin?: Origin;
-  // Index pairs whose text similarity must reach the threshold for the rows to be linked.
-  linked?: Array<[number, number]>;
-  // Index pairs that share a location but are different defects: text must stay below threshold.
+  // What the confidence arithmetic of 5.3 gives when the reviewers used the same words, so that
+  // the findings are a strong match and merge. This is the "Final Sev / Final Conf" of the table.
+  sameWording?: { severity: Severity; confidence: number; origin?: Origin };
+  // Index pairs that paraphrase one defect. They are never merged (the wording is not strongly
+  // similar) but each is annotated as possibly related to the other.
+  paraphrases?: Array<[number, number]>;
+  // Index pairs that share a location but are different defects: not merged, not annotated.
   distinct?: Array<[number, number]>;
 }
 
 export const ROWS: DedupeRow[] = [
   {
     row: 1,
-    result: 'merged',
-    finalSeverity: 'BLOCKER',
-    finalConfidence: 0.95,
-    linked: [[0, 1]],
+    sameWording: { severity: 'BLOCKER', confidence: 0.95 },
+    paraphrases: [[0, 1]],
     findings: [
       finding({
         line: 40,
@@ -88,10 +85,8 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 2,
-    result: 'merged',
-    finalSeverity: 'IMPORTANT',
-    finalConfidence: 0.8,
-    linked: [[0, 1]],
+    sameWording: { severity: 'IMPORTANT', confidence: 0.8 },
+    paraphrases: [[0, 1]],
     findings: [
       finding({
         line: 100,
@@ -121,7 +116,6 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 3,
-    result: 'separate',
     findings: [
       finding({
         line: 20,
@@ -147,7 +141,6 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 4,
-    result: 'separate',
     distinct: [[0, 1]],
     findings: [
       finding({
@@ -173,10 +166,8 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 5,
-    result: 'merged',
-    finalSeverity: 'IMPORTANT',
-    finalConfidence: 0.95,
-    linked: [[0, 1]],
+    sameWording: { severity: 'IMPORTANT', confidence: 0.95 },
+    paraphrases: [[0, 1]],
     findings: [
       finding({
         line: 12,
@@ -201,10 +192,8 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 6,
-    result: 'merged',
-    finalSeverity: 'BLOCKER',
-    finalConfidence: 1,
-    linked: [
+    sameWording: { severity: 'BLOCKER', confidence: 1 },
+    paraphrases: [
       [0, 1],
       [1, 2],
     ],
@@ -243,7 +232,6 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 7,
-    result: 'separate',
     findings: [
       finding({
         file: 'src/a.ts',
@@ -269,10 +257,8 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 8,
-    result: 'merged',
-    finalSeverity: 'OPTIONAL',
-    finalConfidence: 0.75,
-    linked: [[0, 1]],
+    sameWording: { severity: 'OPTIONAL', confidence: 0.75 },
+    paraphrases: [[0, 1]],
     findings: [
       finding({
         line: 60,
@@ -296,11 +282,8 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 9,
-    result: 'merged',
-    finalSeverity: 'IMPORTANT',
-    finalConfidence: 1,
-    finalOrigin: 'introduced',
-    linked: [[0, 1]],
+    sameWording: { severity: 'IMPORTANT', confidence: 1, origin: 'introduced' },
+    paraphrases: [[0, 1]],
     findings: [
       finding({
         line: 90,
@@ -328,7 +311,6 @@ export const ROWS: DedupeRow[] = [
   },
   {
     row: 10,
-    result: 'separate',
     distinct: [[0, 1]],
     findings: [
       finding({
@@ -357,14 +339,14 @@ export const ROWS: DedupeRow[] = [
 
 export interface ControlPair {
   name: string;
-  expect: 'merge' | 'separate';
+  expect: 'paraphrase' | 'distinct';
   a: Finding;
   b: Finding;
 }
 
 function pair(
   name: string,
-  expect: 'merge' | 'separate',
+  expect: 'paraphrase' | 'distinct',
   a: Pick<Spec, 'trigger' | 'impact' | 'fix'>,
   b: Pick<Spec, 'trigger' | 'impact' | 'fix'>,
 ): ControlPair {
@@ -380,8 +362,8 @@ function pair(
 // not just memorizing them. They are not part of the spec table.
 export const CONTROLS: ControlPair[] = [
   pair(
-    'merge: hardcoded credential',
-    'merge',
+    'paraphrase: hardcoded credential',
+    'paraphrase',
     {
       trigger: 'Hardcoded API key in source',
       impact: 'The key is readable by anyone who can open the repository.',
@@ -394,8 +376,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'merge: cart race',
-    'merge',
+    'paraphrase: cart race',
+    'paraphrase',
     {
       trigger: 'Race condition when two requests update the same cart',
       impact: 'The second write replaces the first, so items added by the other request are lost.',
@@ -408,8 +390,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'merge: pagination bound',
-    'merge',
+    'paraphrase: pagination bound',
+    'paraphrase',
     {
       trigger: 'Off-by-one in pagination loop skips last page',
       impact: 'Users never see the final page of results.',
@@ -422,8 +404,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'merge: open redirect',
-    'merge',
+    'paraphrase: open redirect',
+    'paraphrase',
     {
       trigger: 'Unvalidated redirect target in login callback',
       impact: 'An attacker can send users to a malicious site after they sign in.',
@@ -436,8 +418,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'merge: due date timezone',
-    'merge',
+    'paraphrase: due date timezone',
+    'paraphrase',
     {
       trigger: 'Timezone ignored when computing invoice due date',
       impact: 'Invoices become due a day early for customers west of UTC.',
@@ -450,8 +432,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'merge: stream not closed',
-    'merge',
+    'paraphrase: stream not closed',
+    'paraphrase',
     {
       trigger: 'File handle never closed on error path',
       impact: 'Repeated failures exhaust the process file descriptors.',
@@ -464,8 +446,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'separate: await vs import',
-    'separate',
+    'distinct: await vs import',
+    'distinct',
     {
       trigger: 'Missing await on database save',
       impact: 'The handler responds before the record is persisted, so failures are lost.',
@@ -478,8 +460,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'separate: injection vs timeout',
-    'separate',
+    'distinct: injection vs timeout',
+    'distinct',
     {
       trigger: 'SQL injection in search filter',
       impact: 'An attacker controls the WHERE clause and can read other tenants data.',
@@ -492,8 +474,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'separate: division vs shadowing',
-    'separate',
+    'distinct: division vs shadowing',
+    'distinct',
     {
       trigger: 'Division by zero when the cart is empty',
       impact: 'The average price computation returns NaN and breaks the summary page.',
@@ -506,8 +488,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'separate: password log vs reset token',
-    'separate',
+    'distinct: password log vs reset token',
+    'distinct',
     {
       trigger: 'Password logged in plain text',
       impact: 'Anyone with access to the logs can read user passwords.',
@@ -520,8 +502,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'separate: null check vs email validation',
-    'separate',
+    'distinct: null check vs email validation',
+    'distinct',
     {
       trigger: 'Missing null check on user profile',
       impact: 'Accounts without a profile make the page throw.',
@@ -534,8 +516,8 @@ export const CONTROLS: ControlPair[] = [
     },
   ),
   pair(
-    'separate: leak vs naming',
-    'separate',
+    'distinct: leak vs naming',
+    'distinct',
     {
       trigger: 'Event listener registered on every render and never removed',
       impact: 'Listeners pile up and the page slows down over time.',
@@ -547,4 +529,31 @@ export const CONTROLS: ControlPair[] = [
       fix: 'Rename to loadAndCacheData.',
     },
   ),
+];
+
+// Two different defects at nearby lines whose wording is close ("Missing authorization when
+// deleting users" and "Missing audit when deleting users"). Two families, equal confidence. A
+// merge would hide one of them and raise the survivor to 0.95; they must stay apart and only
+// point at each other.
+export const ADVERSARIAL: [Finding, Finding] = [
+  finding({
+    file: 'src/users.ts',
+    line: 10,
+    severity: 'IMPORTANT',
+    confidence: 0.7,
+    family: 'google',
+    trigger: 'Missing authorization when deleting users',
+    impact: "Lets one delete other people's accounts.",
+    fix: 'Check that the caller is an administrator before deleting.',
+  }),
+  finding({
+    file: 'src/users.ts',
+    line: 12,
+    severity: 'IMPORTANT',
+    confidence: 0.7,
+    family: 'openai',
+    trigger: 'Missing audit when deleting users',
+    impact: 'Makes it impossible to trace who deleted an account.',
+    fix: 'Write an audit record for every deletion.',
+  }),
 ];

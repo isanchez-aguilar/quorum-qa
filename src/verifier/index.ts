@@ -1,22 +1,33 @@
-import { readFile, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import type { Finding } from '../types/index.js';
 import { isCitableLine, splitLines, WINDOW_RADIUS } from './lines.js';
 import { normalizePath } from './path.js';
 import {
-  FUZZY,
+  countAlphanumeric,
   findQuote,
+  FUZZY,
   MAX_QUOTE_CHARS,
   MAX_QUOTE_LINES,
+  MAX_RAW_QUOTE,
+  MIN_ALNUM,
   normalizeQuote,
+  WORK_BUDGET,
 } from './quote.js';
+import { semanticDifference } from './semantic.js';
 
 // Files bigger than this are not read: a model citing a bundle or a data dump is not a review.
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
+// How much of the code a note quotes back.
+const FOUND_NOTE_CHARS = 240;
+
 export interface VerifyResult {
   verified: boolean;
   // Present when verified: a copy of the finding with `verified: true`, the real line, and a
-  // `verification_note` when the line was corrected or the match was fuzzy.
+  // `verification_note` when the line was corrected or the match was fuzzy. `evidence_quote`
+  // stays the ORIGINAL quote; a fuzzy note carries the text actually found in the code.
   correctedFinding?: Finding;
   reason?: string;
 }
@@ -29,71 +40,161 @@ function formatSimilarity(similarity: number): string {
   return similarity.toFixed(2);
 }
 
+function showCode(text: string): string {
+  const shown = text.length > FOUND_NOTE_CHARS ? `${text.slice(0, FOUND_NOTE_CHARS)}...` : text;
+  return JSON.stringify(shown);
+}
+
+// Reads at most size + 1 bytes from the descriptor that was already checked with fstat. A file
+// that grows between the fstat and the read is reported, never read past its checked size.
+async function readBounded(handle: FileHandle, size: number): Promise<string | null> {
+  const capacity = size + 1;
+  const buffer = Buffer.allocUnsafe(capacity);
+  let total = 0;
+  while (total < capacity) {
+    const { bytesRead } = await handle.read(buffer, total, capacity - total, total);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+  }
+  return total > size ? null : buffer.toString('utf8', 0, total);
+}
+
 /**
  * Checks that a finding points at real code: the path stays inside the worktree, the file exists,
  * and the evidence quote is found at (or near) the cited line. Never mutates the finding.
+ *
+ * A quote is verified when it appears verbatim, or when a fuzzy match (similarity >= 0.85) has the
+ * same semantic tokens: negation, comparison and arithmetic operators, true/false/null and the like,
+ * numbers and strings. A fuzzy match that flips one of them is rejected naming the token.
+ *
+ * Confinement: normalizePath returns the REAL path, which is opened once; the checks (regular
+ * file, size) and the read use that one descriptor. This is meant for a worktree the provider
+ * process has already stopped writing to. It is not a defence against a concurrent attacker who
+ * swaps path components between the confinement check and the open.
  */
 export async function verifyFinding(worktreeRoot: string, finding: Finding): Promise<VerifyResult> {
-  const absolute = normalizePath(worktreeRoot, finding.file);
-  if (absolute === null) {
+  const real = normalizePath(worktreeRoot, finding.file);
+  if (real === null) {
     return reject(`invalid path: "${String(finding.file)}" is not a relative path inside the worktree`);
   }
 
-  let info;
+  let handle: FileHandle;
   try {
-    info = await stat(absolute);
-  } catch {
-    return reject(`file not found: "${finding.file}" does not exist in the worktree`);
-  }
-  if (info.isDirectory()) return reject(`"${finding.file}" is a directory, not a file`);
-  if (!info.isFile()) return reject(`"${finding.file}" is not a regular file`);
-  if (info.size > MAX_FILE_BYTES) {
-    return reject(
-      `file too large to verify: "${finding.file}" is ${info.size} bytes (limit ${MAX_FILE_BYTES})`,
-    );
-  }
-
-  const quote = typeof finding.evidence_quote === 'string' ? normalizeQuote(finding.evidence_quote) : '';
-  if (quote === '') return reject('empty evidence quote');
-  const quoteLines = quote.split('\n').length;
-  if (quoteLines > MAX_QUOTE_LINES || quote.length > MAX_QUOTE_CHARS) {
-    return reject(
-      `evidence quote too large to verify (${quoteLines} lines, ${quote.length} characters; ` +
-        `limits ${MAX_QUOTE_LINES} lines and ${MAX_QUOTE_CHARS} characters)`,
-    );
-  }
-
-  let content: string;
-  try {
-    content = await readFile(absolute, 'utf8');
-  } catch {
+    // O_NONBLOCK keeps a FIFO from blocking the open; the fstat below then rejects it.
+    handle = await open(real, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return reject(`file not found: "${finding.file}" does not exist in the worktree`);
+    }
+    // Only to word the reason: a directory cannot be opened as a file on every platform.
+    const info = await stat(real).catch(() => null);
+    if (info?.isDirectory() === true) return reject(`"${finding.file}" is a directory, not a file`);
     return reject(`file not readable: "${finding.file}"`);
   }
-  const lines = splitLines(content);
-  if (lines.length === 0) return reject(`"${finding.file}" is empty, so the quote cannot be there`);
 
-  const match = findQuote(lines, quote, finding.line);
-  if (match === null) {
-    return reject(
-      `evidence quote not found in "${finding.file}": no match within ${WINDOW_RADIUS} lines of ` +
-        `line ${String(finding.line)} or anywhere else in the file (similarity threshold ${FUZZY})`,
-    );
-  }
+  try {
+    const info = await handle.stat();
+    if (info.isDirectory()) return reject(`"${finding.file}" is a directory, not a file`);
+    if (!info.isFile()) return reject(`"${finding.file}" is not a regular file`);
+    if (info.size > MAX_FILE_BYTES) {
+      return reject(
+        `file too large to verify: "${finding.file}" is ${info.size} bytes (limit ${MAX_FILE_BYTES})`,
+      );
+    }
 
-  const notes: string[] = [];
-  if (match.line !== finding.line) {
-    const cited = isCitableLine(finding.line)
-      ? `line ${finding.line}`
-      : `unusable line ${String(finding.line)}`;
-    const where =
-      match.scope === 'local' ? `within ${WINDOW_RADIUS} lines` : 'elsewhere in the file';
-    notes.push(`corrected from ${cited} to line ${match.line} (${where})`);
-  }
-  if (!match.exact) {
-    notes.push(`fuzzy quote match, similarity ${formatSimilarity(match.similarity)}`);
-  }
+    // Checked before the quote is normalized, so a huge quote costs nothing.
+    const raw = typeof finding.evidence_quote === 'string' ? finding.evidence_quote : '';
+    if (raw.length > MAX_RAW_QUOTE) {
+      return reject(
+        `evidence quote too large to verify (${raw.length} characters before normalization; ` +
+          `limit ${MAX_RAW_QUOTE})`,
+      );
+    }
+    const quote = normalizeQuote(raw);
+    if (quote === '') return reject('empty evidence quote');
+    const alphanumeric = countAlphanumeric(quote);
+    if (alphanumeric < MIN_ALNUM) {
+      return reject(
+        `evidence quote too short to verify: it has ${alphanumeric} letters or digits, ` +
+          `at least ${MIN_ALNUM} are needed`,
+      );
+    }
+    const quoteLines = quote.split('\n').length;
+    if (quoteLines > MAX_QUOTE_LINES || quote.length > MAX_QUOTE_CHARS) {
+      return reject(
+        `evidence quote too large to verify (${quoteLines} lines, ${quote.length} characters; ` +
+          `limits ${MAX_QUOTE_LINES} lines and ${MAX_QUOTE_CHARS} characters)`,
+      );
+    }
 
-  const correctedFinding: Finding = { ...finding, line: match.line, verified: true };
-  if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
-  return { verified: true, correctedFinding };
+    let content: string | null;
+    try {
+      content = await readBounded(handle, info.size);
+    } catch {
+      return reject(`file not readable: "${finding.file}"`);
+    }
+    if (content === null) {
+      return reject(`file changed while it was being verified: "${finding.file}" grew past ${info.size} bytes`);
+    }
+    const lines = splitLines(content);
+    if (lines.length === 0) return reject(`"${finding.file}" is empty, so the quote cannot be there`);
+
+    const outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
+    if (outcome.kind === 'budget') {
+      return reject(
+        `search budget exceeded: finding the quote in "${finding.file}" needs more than ` +
+          `${WORK_BUDGET} comparisons`,
+      );
+    }
+    if (outcome.kind === 'ambiguous') {
+      return reject(
+        `ambiguous: matches ${outcome.places} places in "${finding.file}" and none is within ` +
+          `${WINDOW_RADIUS} lines of line ${String(finding.line)}, so the line cannot be corrected safely`,
+      );
+    }
+    if (outcome.kind === 'none') {
+      const skipped =
+        outcome.skippedLongLines > 0
+          ? `; ${outcome.skippedLongLines} over-long lines were skipped`
+          : '';
+      return reject(
+        `evidence quote not found in "${finding.file}": no match within ${WINDOW_RADIUS} lines of ` +
+          `line ${String(finding.line)} or anywhere else in the file (similarity threshold ${FUZZY})${skipped}`,
+      );
+    }
+
+    const { match } = outcome;
+    if (!match.exact) {
+      const difference = semanticDifference(quote, match.text);
+      if (difference !== null) {
+        return reject(
+          `fuzzy match at line ${match.line} (similarity ${formatSimilarity(match.similarity)}) ` +
+            `changes the meaning of the quote: ${difference}; found in code: ${showCode(match.text)}`,
+        );
+      }
+    }
+
+    const notes: string[] = [];
+    if (match.line !== finding.line) {
+      const cited = isCitableLine(finding.line)
+        ? `line ${finding.line}`
+        : `unusable line ${String(finding.line)}`;
+      const where =
+        match.scope === 'local' ? `within ${WINDOW_RADIUS} lines` : 'elsewhere in the file';
+      notes.push(`corrected from ${cited} to line ${match.line} (${where})`);
+    }
+    if (!match.exact) {
+      notes.push(
+        `fuzzy quote match, similarity ${formatSimilarity(match.similarity)}; ` +
+          `found in code: ${showCode(match.text)}`,
+      );
+    }
+
+    const correctedFinding: Finding = { ...finding, line: match.line, verified: true };
+    if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
+    return { verified: true, correctedFinding };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }

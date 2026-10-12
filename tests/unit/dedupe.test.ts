@@ -3,18 +3,20 @@ import { combinedConfidence } from '../../src/dedupe/cluster.js';
 import { dedupeFindings } from '../../src/dedupe/index.js';
 import {
   CANDIDATE_METRICS,
-  DEDUPE_THRESHOLD,
+  MERGE_JACCARD,
   MIN_SHARED_TOKENS,
-  dedupeMetric,
-  findingSimilarity,
+  RELATED_OVERLAP,
+  findingJaccard,
+  findingOverlap,
   findingText,
-  isSameDefect,
+  isRelated,
+  isStrongMatch,
   tokenJaccard,
   tokenOverlap,
   tokenize,
 } from '../../src/dedupe/similarity.js';
 import type { Family, Finding, Origin, Severity, Tier } from '../../src/types/index.js';
-import { CONTROLS, ROWS, finding } from '../fixtures/dedupe/rows.js';
+import { ADVERSARIAL, CONTROLS, ROWS, finding } from '../fixtures/dedupe/rows.js';
 
 const SAME_TEXT = {
   trigger: 'Refund amount is not validated against the original payment',
@@ -49,79 +51,265 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+const keyOf = (f: Finding) => `${f.file}:${f.line}:${f.trigger}`;
+
+function rowFindings(number: number): Finding[] {
+  return (ROWS.find((candidate) => candidate.row === number) as (typeof ROWS)[number]).findings;
+}
+
 describe('table 5.5: the ten rows', () => {
+  // The paraphrased rows no longer merge: only near-identical wording does. Each paraphrase pair
+  // stays separate, keeps its own severity and confidence, and points at the other.
   for (const row of ROWS) {
-    it(`row ${row.row}: ${row.result}`, () => {
+    it(`row ${row.row}: separate, ${row.paraphrases === undefined ? 'not related' : 'possibly related'}`, () => {
       const output = dedupeFindings(row.findings);
-      if (row.result === 'separate') {
-        expect(output).toHaveLength(row.findings.length);
-        const key = (f: Finding) => `${f.file}:${f.line}:${f.trigger}`;
-        expect(output.map(key).sort()).toEqual(row.findings.map(key).sort());
-        return;
+      expect(output).toHaveLength(row.findings.length);
+      expect(output.map(keyOf).sort()).toEqual(row.findings.map(keyOf).sort());
+      for (const original of row.findings) {
+        const kept = output.find((candidate) => keyOf(candidate) === keyOf(original)) as Finding;
+        expect(kept.severity).toBe(original.severity);
+        expect(kept.confidence).toBe(original.confidence);
+        expect(kept.origin).toBe(original.origin);
       }
-      expect(output).toHaveLength(1);
-      const [merged] = output as [Finding];
-      expect(merged.severity).toBe(row.finalSeverity);
-      expect(merged.confidence).toBeCloseTo(row.finalConfidence as number, 9);
-      if (row.finalOrigin !== undefined) expect(merged.origin).toBe(row.finalOrigin);
+
+      const related = new Set<string>();
+      row.findings.forEach((original, index) => {
+        const kept = output.find((candidate) => keyOf(candidate) === keyOf(original)) as Finding;
+        for (const entry of kept.possibly_related ?? []) {
+          const other = row.findings.findIndex(
+            (candidate) =>
+              candidate.provider === entry.provider &&
+              candidate.model === entry.model &&
+              candidate.line === entry.line,
+          );
+          expect(other).toBeGreaterThanOrEqual(0);
+          related.add([index, other].sort().join('-'));
+        }
+      });
+      // Row 6 also relates its first and last finding, which the table does not list.
+      for (const pair of row.paraphrases ?? []) expect(related.has([...pair].sort().join('-'))).toBe(true);
+      if (row.paraphrases === undefined) expect(related.size).toBe(0);
     });
   }
 
   it('rows 3 and 7 stay apart only because of location, not because of their text', () => {
+    // Row 7 has identical text; row 3 has the same trigger and a paraphrased impact.
+    const [seven, other] = rowFindings(7) as [Finding, Finding];
+    expect(isStrongMatch(seven, other)).toBe(true);
+    const [three, far] = rowFindings(3) as [Finding, Finding];
+    expect(isStrongMatch(three, far)).toBe(false);
+    expect(isRelated(three, far)).toBe(true);
+    // They are not annotated either: row 3 is 12 lines apart, row 7 is two files.
     for (const number of [3, 7]) {
-      const row = ROWS.find((candidate) => candidate.row === number);
-      const [first, second] = (row as (typeof ROWS)[number]).findings as [Finding, Finding];
-      expect(isSameDefect(first, second)).toBe(true);
+      expect(dedupeFindings(rowFindings(number)).every((f) => f.possibly_related === undefined)).toBe(true);
+    }
+  });
+
+  describe('with the reviewers using the same words, the confidence arithmetic of the table holds', () => {
+    for (const row of ROWS.filter((candidate) => candidate.sameWording !== undefined)) {
+      it(`row ${row.row}`, () => {
+        const expected = row.sameWording as NonNullable<(typeof row)['sameWording']>;
+        const [anchor] = row.findings as [Finding];
+        const output = dedupeFindings(
+          row.findings.map((f) => ({ ...f, trigger: anchor.trigger, impact: anchor.impact })),
+        );
+        expect(output).toHaveLength(1);
+        const [merged] = output as [Finding];
+        expect(merged.severity).toBe(expected.severity);
+        expect(merged.confidence).toBeCloseTo(expected.confidence, 9);
+        if (expected.origin !== undefined) expect(merged.origin).toBe(expected.origin);
+        expect(merged.possibly_related).toBeUndefined();
+      });
     }
   });
 });
 
+describe('adversarial pair: a different defect is never hidden', () => {
+  it('"missing authorization" and "missing audit" stay separate at confidence 0.70', () => {
+    const [authorization, audit] = ADVERSARIAL;
+    expect(isStrongMatch(authorization, audit)).toBe(false);
+    expect(isRelated(authorization, audit)).toBe(true);
+
+    const output = dedupeFindings([authorization, audit]);
+    expect(output).toHaveLength(2);
+    expect(output.map((f) => f.confidence)).toEqual([0.7, 0.7]);
+    expect(output.map((f) => f.severity)).toEqual(['IMPORTANT', 'IMPORTANT']);
+    const [first, second] = output as [Finding, Finding];
+    expect(first.possibly_related).toEqual([
+      { provider: audit.provider, model: audit.model, line: 12, similarity: expect.any(Number) },
+    ]);
+    expect(second.possibly_related).toEqual([
+      { provider: authorization.provider, model: authorization.model, line: 10, similarity: expect.any(Number) },
+    ]);
+    expect(first.possibly_related?.[0]?.similarity).toBeGreaterThanOrEqual(RELATED_OVERLAP);
+    expect(first.verification_note).toBeUndefined();
+  });
+
+  it('is stable whatever the order, and annotating twice changes nothing', () => {
+    const once = dedupeFindings([...ADVERSARIAL]);
+    expect(dedupeFindings([...ADVERSARIAL].reverse())).toEqual(once);
+    expect(dedupeFindings(once)).toEqual(once);
+  });
+});
+
+describe('strong match and annotation rules', () => {
+  const base = {
+    severity: 'IMPORTANT' as const,
+    confidence: 0.6,
+    trigger: SAME_TEXT.trigger,
+    impact: SAME_TEXT.impact,
+    fix: '',
+  };
+
+  it('the merge threshold is 0.85 and related starts at 0.15', () => {
+    expect(MERGE_JACCARD).toBe(0.85);
+    expect(RELATED_OVERLAP).toBe(0.15);
+    expect(MIN_SHARED_TOKENS).toBe(2);
+  });
+
+  it('near-identical wording merges across families, one extra word is still strong', () => {
+    const a = finding({ ...base, line: 10, family: 'google' });
+    const b = finding({ ...base, line: 12, family: 'openai', impact: `${base.impact} Monitoring` });
+    expect(findingJaccard(a, b)).toBeGreaterThanOrEqual(MERGE_JACCARD);
+    const out = dedupeFindings([a, b]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.confidence).toBeCloseTo(0.85, 9);
+  });
+
+  it('wording just below the threshold does not merge', () => {
+    const a = finding({ ...base, line: 10, family: 'google' });
+    const b = finding({
+      ...base,
+      line: 12,
+      family: 'openai',
+      impact: `${base.impact} Monitoring alerting reporting audit.`,
+    });
+    expect(findingJaccard(a, b)).toBeLessThan(MERGE_JACCARD);
+    const out = dedupeFindings([a, b]);
+    expect(out).toHaveLength(2);
+    expect(out.map((f) => f.confidence)).toEqual([0.6, 0.6]);
+    expect(out[0]?.possibly_related).toHaveLength(1);
+  });
+
+  it('the cross-family boost never comes from a related annotation', () => {
+    const [a, b] = ADVERSARIAL;
+    const strong = dedupeFindings([a, { ...a, line: 11, family: 'openai', provider: 'codex' }]);
+    expect(strong).toHaveLength(1);
+    expect(strong[0]?.confidence).toBeCloseTo(0.95, 9);
+    const related = dedupeFindings([a, b]);
+    expect(Math.max(...related.map((f) => f.confidence))).toBe(0.7);
+  });
+
+  it('annotates only inside the same file and within 5 lines, symmetrically', () => {
+    const [a, b] = ADVERSARIAL;
+    const farther = dedupeFindings([a, { ...b, line: a.line + 6 }]);
+    expect(farther.every((f) => f.possibly_related === undefined)).toBe(true);
+    const edge = dedupeFindings([a, { ...b, line: a.line + 5 }]);
+    expect(edge.every((f) => f.possibly_related?.length === 1)).toBe(true);
+    const otherFile = dedupeFindings([a, { ...b, file: 'src/other.ts' }]);
+    expect(otherFile.every((f) => f.possibly_related === undefined)).toBe(true);
+  });
+
+  it('a merged cluster is annotated against a separate neighbour, never merged with it', () => {
+    const [a, b] = ADVERSARIAL;
+    const twin = { ...a, line: 11, family: 'anthropic' as const, provider: 'claude', model: 'sonnet' };
+    const out = dedupeFindings([a, twin, b]);
+    expect(out).toHaveLength(2);
+    const authorization = out.find((f) => f.trigger === a.trigger) as Finding;
+    const audit = out.find((f) => f.trigger === b.trigger) as Finding;
+    expect(authorization.confidence).toBeCloseTo(0.95, 9);
+    expect(audit.confidence).toBe(0.7);
+    expect(authorization.possibly_related?.map((entry) => entry.line)).toEqual([12]);
+    expect(audit.possibly_related?.map((entry) => entry.line)).toEqual([10, 11]);
+  });
+
+  it('a finding that strongly matches a member but is 6 lines from another does not join', () => {
+    const out = dedupeFindings([
+      same(10, 'google', 0.5),
+      same(15, 'openai', 0.5),
+      same(16, 'anthropic', 0.5),
+    ]);
+    // 10 and 15 merge; 16 is 6 lines from 10, so it stays alone, annotated against the one at 15.
+    expect(out).toHaveLength(2);
+    expect(out.find((f) => f.line === 16)?.possibly_related?.map((entry) => entry.line)).toEqual([15]);
+  });
+
+  it('the same text twice from one provider still merges, without a boost', () => {
+    const out = dedupeFindings([
+      same(10, 'google', 0.6, { provider: 'agy', model: 'gemini-3.1-pro-high' }),
+      same(10, 'google', 0.6, { provider: 'agy', model: 'gemini-3.1-pro-high' }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.confidence).toBe(0.6);
+    expect(out[0]?.verification_note).toBeUndefined();
+    expect(out[0]?.possibly_related).toBeUndefined();
+  });
+
+  it('a finding without a usable line is never annotated or merged', () => {
+    const out = dedupeFindings([same(Number.NaN, 'google', 0.5), same(10, 'openai', 0.5)]);
+    expect(out).toHaveLength(2);
+    expect(out.every((f) => f.possibly_related === undefined)).toBe(true);
+  });
+});
+
 describe('similarity calibration against table 5.5', () => {
-  const merges: Array<[Finding, Finding]> = [];
+  const paraphrases: Array<[Finding, Finding]> = [];
   const apart: Array<[Finding, Finding]> = [];
   for (const row of ROWS) {
-    for (const [i, j] of row.linked ?? []) merges.push([row.findings[i] as Finding, row.findings[j] as Finding]);
-    for (const [i, j] of row.distinct ?? []) apart.push([row.findings[i] as Finding, row.findings[j] as Finding]);
+    for (const [i, j] of row.paraphrases ?? []) {
+      paraphrases.push([row.findings[i] as Finding, row.findings[j] as Finding]);
+    }
+    for (const [i, j] of row.distinct ?? []) {
+      apart.push([row.findings[i] as Finding, row.findings[j] as Finding]);
+    }
   }
 
   function window(metric: (a: string, b: string) => number) {
     const score = ([a, b]: [Finding, Finding]) => metric(findingText(a), findingText(b));
     return {
-      minMerge: Math.min(...merges.map(score)),
+      minParaphrase: Math.min(...paraphrases.map(score)),
       maxApart: Math.max(...apart.map(score)),
     };
   }
 
-  it('has the pairs the spec requires: rows 1, 2, 5, 6 (twice), 8, 9 merge; 4 and 10 stay apart', () => {
-    expect(merges).toHaveLength(7);
+  it('has the pairs the spec requires: rows 1, 2, 5, 6 (twice), 8, 9 paraphrase; 4 and 10 are distinct', () => {
+    expect(paraphrases).toHaveLength(7);
     expect(apart).toHaveLength(2);
   });
 
-  it('the chosen metric separates the two groups with room on both sides', () => {
-    const { minMerge, maxApart } = window(dedupeMetric);
-    expect(dedupeMetric).toBe(tokenOverlap);
-    expect(maxApart).toBeLessThan(DEDUPE_THRESHOLD - 0.04);
-    expect(minMerge).toBeGreaterThan(DEDUPE_THRESHOLD + 0.04);
+  it('no paraphrase is a strong match, but every one is related and no distinct pair is', () => {
+    for (const [a, b] of paraphrases) {
+      expect(isStrongMatch(a, b)).toBe(false);
+      expect(findingJaccard(a, b)).toBeLessThan(MERGE_JACCARD - 0.5);
+      expect(isRelated(a, b)).toBe(true);
+    }
+    for (const [a, b] of apart) {
+      expect(isStrongMatch(a, b)).toBe(false);
+      expect(isRelated(a, b)).toBe(false);
+      expect(findingOverlap(a, b)).toBeLessThan(RELATED_OVERLAP);
+    }
   });
 
-  it('every pair that must merge is similar and every pair that must stay apart is not', () => {
-    for (const [a, b] of merges) expect(isSameDefect(a, b)).toBe(true);
-    for (const [a, b] of apart) expect(isSameDefect(a, b)).toBe(false);
+  it('the related threshold separates the groups with room on both sides', () => {
+    const { minParaphrase, maxApart } = window(tokenOverlap);
+    expect(maxApart).toBeLessThan(RELATED_OVERLAP - 0.04);
+    expect(minParaphrase).toBeGreaterThan(RELATED_OVERLAP + 0.04);
   });
 
-  it('the Jaccard threshold of 0.70 in 5.2 would merge none of the paraphrase rows', () => {
-    for (const [a, b] of merges) {
+  it('the Jaccard threshold of 0.70 in 5.2 would merge none of the paraphrase rows either', () => {
+    for (const [a, b] of paraphrases) {
       expect(tokenJaccard(findingText(a), findingText(b))).toBeLessThan(0.7);
     }
   });
 
   it('the word-level candidates all separate the rows at some threshold; the overlap gap is widest', () => {
-    const windows: Record<string, { minMerge: number; maxApart: number }> = {};
+    const windows: Record<string, { minParaphrase: number; maxApart: number }> = {};
     for (const name of ['tokenJaccard', 'trigramDice', 'tokenOverlap']) {
       windows[name] = window(CANDIDATE_METRICS[name] as (a: string, b: string) => number);
-      expect(windows[name]?.minMerge, name).toBeGreaterThan(windows[name]?.maxApart as number);
+      expect(windows[name]?.minParaphrase, name).toBeGreaterThan(windows[name]?.maxApart as number);
     }
-    const gap = (name: string) => (windows[name]?.minMerge ?? 0) - (windows[name]?.maxApart ?? 0);
+    const gap = (name: string) =>
+      (windows[name]?.minParaphrase ?? 0) - (windows[name]?.maxApart ?? 0);
     expect(gap('tokenOverlap')).toBeGreaterThan(gap('tokenJaccard'));
     expect(gap('tokenOverlap')).toBeGreaterThan(gap('trigramDice'));
   });
@@ -130,36 +318,52 @@ describe('similarity calibration against table 5.5', () => {
   // Levenshtein similarity scores the distinct defects of row 4 (about 0.23) above the paraphrase
   // of row 8 (about 0.22), so no threshold separates the ten rows.
   it('the character-level Levenshtein candidate cannot satisfy the rows', () => {
-    const { minMerge, maxApart } = window(CANDIDATE_METRICS.characterSimilarity as (a: string, b: string) => number);
-    expect(minMerge).toBeLessThan(maxApart);
+    const { minParaphrase, maxApart } = window(
+      CANDIDATE_METRICS.characterSimilarity as (a: string, b: string) => number,
+    );
+    expect(minParaphrase).toBeLessThan(maxApart);
   });
 
   describe('control pairs written after the table (not part of the spec)', () => {
-    it('no distinct defect is merged', () => {
-      for (const control of CONTROLS.filter((c) => c.expect === 'separate')) {
-        expect(isSameDefect(control.a, control.b), control.name).toBe(false);
+    it('no control pair is merged, paraphrased or not', () => {
+      for (const control of CONTROLS) {
+        expect(isStrongMatch(control.a, control.b), control.name).toBe(false);
+        const out = dedupeFindings([control.a, control.b]);
+        expect(out, control.name).toHaveLength(2);
+        expect(out.map((f) => f.confidence), control.name).toEqual([0.7, 0.7]);
       }
     });
 
-    // Paraphrases with (almost) no words in common cannot be matched by any lexical metric.
-    // Kept separate on purpose: a missed merge costs a duplicate, a false merge hides a defect.
-    const KNOWN_MISSES = ['merge: hardcoded credential', 'merge: stream not closed'];
+    it('no distinct defect is even annotated as related', () => {
+      for (const control of CONTROLS.filter((c) => c.expect === 'distinct')) {
+        expect(isRelated(control.a, control.b), control.name).toBe(false);
+      }
+    });
 
-    it('most paraphrases merge and the known lexical misses stay separate', () => {
-      const merged = CONTROLS.filter((c) => c.expect === 'merge');
-      const missed = merged.filter((c) => !isSameDefect(c.a, c.b)).map((c) => c.name);
+    // Paraphrases with (almost) no words in common cannot be related by any lexical metric.
+    // Kept separate on purpose: a missed merge costs a duplicate, a false merge hides a defect.
+    const KNOWN_MISSES = ['paraphrase: hardcoded credential', 'paraphrase: stream not closed'];
+
+    it('most paraphrases are related and the known lexical misses are not', () => {
+      const paraphrased = CONTROLS.filter((c) => c.expect === 'paraphrase');
+      const missed = paraphrased.filter((c) => !isRelated(c.a, c.b)).map((c) => c.name);
       expect(missed.sort()).toEqual([...KNOWN_MISSES].sort());
-      expect(merged.length - missed.length).toBeGreaterThanOrEqual(4);
+      expect(paraphrased.length - missed.length).toBeGreaterThanOrEqual(4);
     });
   });
 
   it('one shared word is never enough, even in very short texts', () => {
     const a = finding({ line: 1, severity: 'OPTIONAL', confidence: 0.5, family: 'google', trigger: 'Dead code', impact: 'Never runs', fix: '' });
     const b = finding({ line: 2, severity: 'OPTIONAL', confidence: 0.5, family: 'openai', trigger: 'Dead branch', impact: 'Wasted effort', fix: '' });
-    expect(tokenOverlap(findingText(a), findingText(b))).toBeGreaterThanOrEqual(DEDUPE_THRESHOLD);
+    expect(tokenOverlap(findingText(a), findingText(b))).toBeGreaterThanOrEqual(RELATED_OVERLAP);
     expect(MIN_SHARED_TOKENS).toBe(2);
-    expect(findingSimilarity(a, b)).toBe(0);
-    expect(dedupeFindings([a, b])).toHaveLength(2);
+    expect(findingOverlap(a, b)).toBe(0);
+    const out = dedupeFindings([a, b]);
+    expect(out).toHaveLength(2);
+    expect(out.every((f) => f.possibly_related === undefined)).toBe(true);
+    // Identical one-word texts are not enough to merge either.
+    const twin = { ...a, trigger: 'Typo', impact: '' };
+    expect(dedupeFindings([twin, { ...twin, line: 2, family: 'openai' as const }])).toHaveLength(2);
   });
 
   it('tokenizes with stop words removed, stemming and camelCase splitting', () => {
@@ -249,8 +453,12 @@ describe('merging rules', () => {
   });
 
   it('keeps the text, line and source of the most confident finding', () => {
-    const low = finding({ line: 40, severity: 'IMPORTANT', confidence: 0.5, family: 'google', trigger: 'Refund exceeds payment amount', impact: 'The refund can be larger than the payment that was captured.', fix: 'low fix' });
-    const high = finding({ line: 42, severity: 'IMPORTANT', confidence: 0.9, family: 'openai', trigger: 'Refund larger than captured payment', impact: 'A refund bigger than the payment amount drains the merchant balance.', fix: 'high fix' });
+    const low = { ...same(40, 'google', 0.5), fix: 'low fix' };
+    const high = {
+      ...same(42, 'openai', 0.9),
+      trigger: `${SAME_TEXT.trigger} (high)`,
+      fix: 'high fix',
+    };
     const out = dedupeFindings([low, high]);
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({
@@ -345,6 +553,7 @@ describe('clustering', () => {
       ROWS.filter((row) => row.row === 4 || row.row === 10).flatMap((row) => row.findings),
     );
     expect(out).toHaveLength(4);
+    expect(out.every((f) => f.possibly_related === undefined)).toBe(true);
   });
 
   it('orders output by file first seen, then by line', () => {
@@ -388,5 +597,14 @@ describe('purity and edge cases', () => {
     expect(out[0]?.reproduction).toEqual(withProof.reproduction);
     expect(out[0]?.reproduction).not.toBe(withProof.reproduction);
     expect(out[0]?.reproduction).toBeDefined();
+  });
+
+  it('does not modify its input when it annotates', () => {
+    const inputs = deepFreeze([...ADVERSARIAL]);
+    const snapshot = structuredClone(inputs);
+    const out = dedupeFindings(inputs);
+    expect(inputs).toEqual(snapshot);
+    expect(out.every((f) => f.possibly_related !== undefined)).toBe(true);
+    expect(inputs.every((f) => f.possibly_related === undefined)).toBe(true);
   });
 });

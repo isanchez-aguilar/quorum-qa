@@ -101,30 +101,61 @@ export function findingText(finding: Pick<Finding, 'trigger' | 'impact'>): strin
   return `${finding.trigger}. ${finding.impact}`;
 }
 
-// Chosen metric: the token overlap coefficient over trigger + impact.
+// Two thresholds, because "same defect" cannot be decided by a lexical metric.
 //
-// The Jaccard threshold of 0.70 in IMPLEMENTATION.md 5.2 does not reproduce table 5.5: paraphrases
-// of one defect share a few words out of many, so their Jaccard is 0.12 to 0.21. On the ten rows
-// of 5.5, token Jaccard, trigram Dice and the overlap coefficient each separate the rows to merge
-// from the rows to keep apart at some threshold, and character-level Levenshtein cannot. The
-// overlap coefficient has the widest gap (rows to merge score at least 0.23, rows to keep apart
-// at most 0.09) and tolerates one reviewer being wordier than the other. Rows 3 and 7 are kept
-// apart by the line and file rules, not by text. The numbers are in docs/IMPLEMENTATION.md.
-export const DEDUPE_THRESHOLD = 0.15;
-// The coefficient divides by the smaller token set, so one shared word between two short texts
-// would pass the threshold. One shared word is never enough evidence.
+// MERGE_JACCARD: findings are merged automatically only on a STRONG match, the token Jaccard of
+// trigger + impact at or above this value. Paraphrases of one defect score 0.12 to 0.21 on the
+// ten rows of IMPLEMENTATION.md 5.5, and two different defects ("Missing authorization when
+// deleting users" and "Missing audit when deleting users") share enough words to look alike, so
+// only near-identical wording merges. A missed merge costs a duplicate; a false merge hides a
+// defect, so the threshold errs high.
+export const MERGE_JACCARD = 0.85;
+// RELATED_OVERLAP: below the merge threshold, findings at the same place whose overlap coefficient
+// reaches this value are not merged but annotated as possibly related, on both findings. The
+// overlap divides by the smaller token set, so paraphrases of one defect (0.23 to 0.36 on the
+// rows) clear it while the unrelated rows (0.00 and 0.09) do not.
+export const RELATED_OVERLAP = 0.15;
+// Both rules need at least this many shared words: one shared word between two short texts would
+// otherwise pass either threshold.
 export const MIN_SHARED_TOKENS = 2;
 
-export const dedupeMetric: SimilarityMetric = tokenOverlap;
+export type TokenSet = ReadonlySet<string>;
 
-/** Overlap of two findings on trigger + impact, or 0 when they share fewer than two words. */
-export function findingSimilarity(a: Finding, b: Finding): number {
-  const first = toSet(tokenize(findingText(a)));
-  const second = toSet(tokenize(findingText(b)));
-  if (intersectionSize(first, second) < MIN_SHARED_TOKENS) return 0;
-  return dedupeMetric(findingText(a), findingText(b));
+/** The word tokens two findings are compared on: trigger + impact. */
+export function findingTokens(finding: Pick<Finding, 'trigger' | 'impact'>): TokenSet {
+  return toSet(tokenize(findingText(finding)));
 }
 
-export function isSameDefect(a: Finding, b: Finding): boolean {
-  return findingSimilarity(a, b) >= DEDUPE_THRESHOLD;
+/** Jaccard of two token sets, or 0 when they share fewer than MIN_SHARED_TOKENS words. */
+export function strongSimilarity(a: TokenSet, b: TokenSet): number {
+  const shared = intersectionSize(a, b);
+  if (shared < MIN_SHARED_TOKENS) return 0;
+  return shared / (a.size + b.size - shared);
+}
+
+/** Overlap coefficient of two token sets, or 0 when they share fewer than MIN_SHARED_TOKENS words. */
+export function relatedSimilarity(a: TokenSet, b: TokenSet): number {
+  const shared = intersectionSize(a, b);
+  if (shared < MIN_SHARED_TOKENS) return 0;
+  return shared / Math.min(a.size, b.size);
+}
+
+/** Jaccard of two findings on trigger + impact (0 under two shared words). */
+export function findingJaccard(a: Finding, b: Finding): number {
+  return strongSimilarity(findingTokens(a), findingTokens(b));
+}
+
+/** Overlap coefficient of two findings on trigger + impact (0 under two shared words). */
+export function findingOverlap(a: Finding, b: Finding): number {
+  return relatedSimilarity(findingTokens(a), findingTokens(b));
+}
+
+/** The text of the two findings is near-identical: the only case that is merged. */
+export function isStrongMatch(a: Finding, b: Finding): boolean {
+  return findingJaccard(a, b) >= MERGE_JACCARD;
+}
+
+/** The text overlaps enough to point a human at the pair, never enough to merge. */
+export function isRelated(a: Finding, b: Finding): boolean {
+  return findingOverlap(a, b) >= RELATED_OVERLAP;
 }
