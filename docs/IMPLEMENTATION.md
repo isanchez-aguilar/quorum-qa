@@ -157,6 +157,7 @@ export type CommandRunner = (
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
+    windowsVerbatimArguments?: boolean;   // set by the cmd.exe resolver so Node doesn't re-quote
   }
 ) => Promise<{
   stdout: string;
@@ -207,6 +208,8 @@ export interface QuorumConfig {
   };
   reproduce: {
     isolation: 'container' | 'interactive';
+    image?: string;               // default node:22-bookworm-slim, pinned by digest at M6
+    timeoutSeconds?: number;      // hard limit per test run, default 120
     testGlobs: string[];
     testCommand: string[];
   };
@@ -233,7 +236,8 @@ export interface LedgerEntry {
   verifiedFindingsCount: number;
   rejectedFindingsCount: number;
   durationMs: number;
-  callsUsed: number;              // subscription CLIs have no per-call price; Quorum never estimates dollars
+  callsUsed: number;
+  timedOutCalls: number;          // calls killed at the deadline              // subscription CLIs have no per-call price; Quorum never estimates dollars
   tokensReported?: number;        // only when the CLI itself reports tokens
   reproducedBlockersCount: number;
 }
@@ -249,7 +253,7 @@ export interface ReproductionProposal {
   path: string;
   content: string;
   expect: string;
-  status?: 'pending' | 'reproduced' | 'failed' | 'rejected' | 'unproven';
+  status?: 'pending' | 'reproduced' | 'not-reproduced' | 'rejected' | 'unproven';
   failureReason?: string;
 }
 
@@ -474,19 +478,20 @@ export interface ProviderAdapter {
 - **Public Functions & Signatures:**
   - `reproduceBlocker(finding: Finding, proposal: ReproductionProposal, context: ReviewContext, config: QuorumConfig, runner: CommandRunner): Promise<{ status: 'reproduced' | 'not-reproduced' | 'rejected' | 'unproven'; reason?: string }>` (receives the finding, so `origin` decides whether the base check runs)
   - `createDisposableWorktree(repoPath: string, commit: string): Promise<{ worktreePath: string; cleanup: () => Promise<void> }>` (always under `<repo>/.quorum/worktrees/`)
-  - `writeProposedTest(worktreePath: string, relPath: string, content: string, testGlobs: string[]): Promise<string>` (returns the absolute path written)
+  - `writeProposedTest(worktreePath: string, relPath: string, content: string, testGlobs: string[]): Promise<{ absolute: string; relative: string }>` (the host path for writing and checking, and the path relative to the worktree root, which is what the container sees under `/work`)
   - `runIsolatedTest(worktreePath: string, testFile: string, config: QuorumConfig['reproduce'], runner: CommandRunner): Promise<{ timedOut: boolean; report: TestReport | null; exitCode: number }>` (runs **only** `testFile`)
-  - `evaluateReproduction(report: TestReport, testFile: string, expect: string): 'assertion-failure-matching' | 'assertion-failure-other-message' | 'non-assertion-failure' | 'passed' | 'other-test-failed'`
+  - `evaluateReproduction(report: TestReport, testFile: string, expect: string): 'assertion-failure-matching' | 'assertion-failure-other-message' | 'non-assertion-failure' | 'passed' | 'other-test-failed'` (head only)
+  - `passedAtBase(report: TestReport, testFile: string): boolean`
 - **Writing the proposed test safely (`writeProposedTest`), the same at head and at base:**
   1. Reject the path if it is absolute, contains `..` segments, NUL or `:` (Windows streams), or doesn't match `testGlobs`.
   2. Walk the parent directories from the worktree root down. Each one that exists must be a real directory, not a symlink or junction (`lstat`), and its `realpath` must stay inside the worktree's `realpath`. Missing ones are created one at a time with `mkdir` (not recursive), and checked again after creation.
   3. Create the file with flag `wx` (exclusive), so an existing file is never overwritten. If the file exists, the proposal is **rejected**.
   4. All of this happens before the container starts. Nothing is written outside `.quorum/worktrees/<id>/`.
 - **Container contract (`isolation: "container"`):**
-  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per lockfile hash: same image, network **on**, only the worktree mounted, and the lockfile's own command (`pnpm install --frozen-lockfile`, `npm ci` or `yarn install --immutable`, picked by which lockfile exists). The result is cached as a volume keyed by the lockfile hash.
+  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per lockfile hash: same image, network **on**, the worktree mounted at `/work` read-only except for a named volume `quorum-deps-<lockfile hash>` mounted at `/work/node_modules`, and the lockfile's own command picked by which lockfile exists. For pnpm and yarn it first runs `corepack enable`, which uses the `packageManager` field of `package.json` (the image has corepack, not pnpm). The commands are `pnpm install --frozen-lockfile`, `npm ci` or `yarn install --immutable`. pnpm keeps its virtual store inside `node_modules`, so the volume is self-contained. The test step mounts the same volume **read-only** at `/work/node_modules`, so nothing the test does can change it.
   - **Test step:** network **off** (`--network none`), non-root user (`--user 1000:1000`), `--read-only` root filesystem with a tmpfs `/tmp`, the worktree mounted read-write at `/work`, the dependency volume mounted read-only, `--memory` and `--pids-limit` caps, and a hard timeout (`reproduce.timeoutSeconds`, default 120) enforced by killing the container.
   - **Missing infrastructure:** no container runtime, or a failed preparation step -> status `unproven` with the reason. The severity is not changed. An infrastructure failure is never read as "not reproduced".
-- **Evaluation:** `reproduced` requires `assertion-failure-matching` at head, **in `testFile` only**. For `origin: introduced`, the same file must also give `passed` at base. For `pre-existing`, the base run is skipped. Any other result -> `not-reproduced`, and the finding is downgraded to IMPORTANT with the reason.
+- **Evaluation:** `reproduced` requires `assertion-failure-matching` at head, **in `testFile` only**. For `origin: introduced`, the same file must also give `passed` at base, with one exception: if the finding's file does not exist at the base SHA (new code), the test can't import it at base, so the base run is skipped and the report says "new code: no base to compare". For `pre-existing`, the base run is skipped. The base run is judged only by `passedAtBase(report, testFile)`: `expect` plays no part there. Any other result -> `not-reproduced`, and the finding is downgraded to IMPORTANT with the reason.
 - **Synthetic infrastructure for tests:** `tests/fixtures/repro-repo/` (a tiny vitest project with a lockfile) and a fake container runner that replays recorded `TestReport` JSON. The real-container tests run only when a runtime is present, and are skipped otherwise (never in CI without one).
 - **Test Cases:**
   - `testReproduction_RealAssertionFailureKeepsBlocker`: Test fails with assertion error on head; passes on base -> Retained as BLOCKER.
@@ -495,6 +500,7 @@ export interface ProviderAdapter {
   - `testReproduction_SymlinkParentRejected`: `tests/` is a symlink (or junction) to a directory outside the worktree -> Rejected before anything is written.
   - `testReproduction_ExistingFileNotOverwritten`: The proposed path already exists at head or base -> Rejected; the file is unchanged.
   - `testReproduction_PreexistingSkipsBase`: An `origin: pre-existing` BLOCKER whose test fails at head (and also at base) -> Reproduced; base is not required to pass.
+  - `testReproduction_NewCodeSkipsBase`: An `introduced` BLOCKER in a file that doesn't exist at base; the test fails by assertion at head -> Reproduced, with the "no base to compare" note.
   - `testReproduction_WrongMessageDowngrades`: An assertion fails with a message that doesn't match `expect` -> Downgraded.
   - `testReproduction_OtherTestFailureIgnored`: Only an unrelated test fails -> Not reproduced (the command ran `testFile` only).
   - `testReproduction_NoRuntimeUnproven`: No container runtime -> `unproven`, severity unchanged.
@@ -588,7 +594,7 @@ The verifier eliminates AI hallucinations before findings reach deduplication or
    - If an exact match is found at line $L_{match}$, set `finding.line = L_{match}` and verify.
    - If no exact match, compute **one** similarity against every candidate slice with the same number of lines as the quote: $\text{sim} = 1 - \frac{\text{levenshtein}(q, c)}{\max(|q|, |c|)}$ on the normalized text (characters, not tokens). There is one threshold everywhere: $\text{FUZZY} = 0.85$.
    - If the best $\text{sim} \ge 0.85$, set `finding.line = L_{match}`, flag as verified with a fuzzy note.
-   - **Tie-breaks, in order:** an exact match beats a fuzzy one; a local match beats a global one; a higher sim wins; then the smallest $|L_{match} - L|$; then the lower line number.
+   - **Tie-breaks, in order:** (1) a **local** match (inside the window) beats a global one, even when the global one is exact; (2) inside the same scope, an exact match beats a fuzzy one; (3) a higher sim wins; (4) then the smallest $|L_{match} - L|$; (5) then the lower line number. This is the same order as the flow diagram: local exact, local fuzzy, then global.
 4. **Global Search (Drift Correction):**
    - If local search fails (e.g. Gemini cites line 5200 in a 600-line file), scan the entire file for the exact normalized quote.
    - If exact match is found at line $L_{global}$, correct `finding.line = L_{global}` and mark verified.
@@ -621,7 +627,7 @@ The verifier eliminates AI hallucinations before findings reach deduplication or
 | 17 | `src\win\path.ts` | 5 | `export const WIN = true;` | Line 5: `export const WIN = true;` | **VERIFIED** | 5 | Windows backslash path converted to forward slash. |
 | 18 | `src/t.ts` | 10 | a quote whose best match has sim 0.849 | — | **REJECTED** | - | Just below the single 0.85 threshold. |
 | 19 | `src/t.ts` | 10 | a quote whose best match has sim exactly 0.85 | — | **VERIFIED** | match line | Threshold is inclusive. |
-| 20 | `src/dup.ts` | 10 | `return null;` | Lines 8 and 12: `return null;` | **VERIFIED** | 8 | Equal distance; the lower line number wins. |
+| 20 | `src/dup.ts` | 10 | `return null;` | Lines 8 and 12: `return null;` | **CORRECTED** | 8 | Equal distance; the lower line number wins. |
 | 21 | `src/t.ts` | 10 | `foo();` | Line 30 exact, line 12 fuzzy 0.9 | **CORRECTED** | 12 | Local beats global, even when global is exact. |
 
 ---
@@ -740,11 +746,12 @@ Deduplication groups findings reporting the same defect across independent model
      - If no confirm models remain, retain triage finding but mark `unconfirmed` in report.
 
 ### 6.3 Budget Ceilings
+- **Every call has a deadline**, whether or not a ceiling has been reached: the run's remaining time, shared with its retries. The runner kills the process tree at the deadline, and agy also gets `--print-timeout <remaining>s` (a real flag in `agy --help`; its default of 0 waits forever). A killed call returns no findings, and the ledger counts it in `timedOutCalls`.
 - `budget.maxCalls` (default: 12 calls per review run).
 - `budget.maxMinutes` (default: 20 minutes elapsed runtime).
 - If either ceiling is reached:
   1. Abort any unstarted escalation calls.
-  2. Every call gets a deadline equal to the run's remaining time (retries share it). The runner kills the process tree at the deadline, and agy also gets `--print-timeout <remaining>s`. A cancelled call yields no findings and is logged as `timeout` in the ledger.
+  2. A call still running at the deadline is killed, as described above.
      Test: `testBudget_DeadlineKillsInFlight` — fake clock and a fake runner that never returns -> it is killed at `maxMinutes`, and the run reports what it has.
   3. Run verifier and dedupe on all gathered findings.
   4. Emit report with warning: `"Run terminated early: review budget ceiling reached."`
@@ -897,7 +904,7 @@ OUTPUT JSON FORMAT:
 Stored at `.quorum/ledger.jsonl`. Each run appends a single serialized line:
 
 ```json
-{"runId":"qrm-20261012-0481","timestamp":"2026-10-12T00:30:15.120Z","mode":"feature","headSha":"f4e5d6c8b9a0","baseSha":"a1b2c3d4e5f6","provider":"agy","model":"gemini-3.8-flash-medium","family":"google","rawFindingsCount":6,"verifiedFindingsCount":4,"rejectedFindingsCount":2,"durationMs":3420,"callsUsed":1,"reproducedBlockersCount":1}
+{"runId":"qrm-20261012-0481","timestamp":"2026-10-12T00:30:15.120Z","mode":"feature","headSha":"f4e5d6c8b9a0","baseSha":"a1b2c3d4e5f6","provider":"agy","model":"gemini-3.8-flash-medium","family":"google","rawFindingsCount":6,"verifiedFindingsCount":4,"rejectedFindingsCount":2,"durationMs":3420,"callsUsed":1,"timedOutCalls":0,"reproducedBlockersCount":1}
 ```
 
 ### 8.2 Cache Key and Storage Layout
@@ -1168,3 +1175,17 @@ Codex reviewed commit 1172f8d read-only and found 1 BLOCKER and 10 IMPORTANT. Al
 - Doctor doesn't call the nonexistent `agy --version`.
 - M0 requires `checks`, resolves author aliases, and parses `--author` and `--rules`.
 - Dry-run shows ledger-based or unknown quota, and never drops the floor silently.
+
+### Gemini review of the fixes (2026-10-12)
+
+Gemini 3.1 Pro reviewed eb7345d read-only and returned 3 BLOCKER and 4 IMPORTANT. Claude checked each one. One was false and six were real:
+
+- **False:** it called `--print-timeout` an invented flag. It is listed in `agy --help`. No change, and the deadline rule now says so.
+- **Fixed:** `reproduce.image` and `timeoutSeconds` were missing from `QuorumConfig`.
+- **Fixed:** the container preparation step contradicted itself (only the worktree mounted, but cached in a volume). The volume is now mounted at `/work/node_modules`, and the test step mounts it read-only.
+- **Fixed:** the default image has no pnpm. The preparation step runs `corepack enable`.
+- **Fixed:** the tie-break order contradicted table row 21. Local beats global first, then exact beats fuzzy. Row 20 now says CORRECTED.
+- **Fixed:** `'failed'` vs `'not-reproduced'` in the status union.
+- **Fixed:** `CommandRunner` options now carry `windowsVerbatimArguments`.
+- **Fixed:** the deadline rule is a general rule for every call, and the ledger has `timedOutCalls`.
+- **New, from its analysis:** an `introduced` BLOCKER in brand-new code can't pass at base, because the symbol doesn't exist there. The base check is skipped for files that are new at base, and PLAN.md says so.

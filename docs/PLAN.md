@@ -123,13 +123,13 @@ A BLOCKER keeps its severity only if a test proves it. No provider writes anythi
 1. The confirming reviewer returns the proposed test as JSON: `{ "path": "src/x.test.ts", "content": "...", "expect": "assertion text" }`.
 2. Quorum checks the path. It must be a new file that matches the repo's test globs (default `**/*.test.*` and `**/*.spec.*`), inside the repo. Anything else is rejected.
 3. Quorum creates a disposable `git worktree` at the head SHA and writes the file. Then it runs the configured test command for that one file, with a machine-readable reporter (vitest or jest JSON), **under isolation** (see below).
-4. **Reproduced** means three things: the new test fails at head; the failure is an **assertion failure** in that test, not a compile error, an import error or a missing dependency; and the message matches `expect`. For an `introduced` finding, the same test must also pass in a worktree at the base SHA.
+4. **Reproduced** means three things: the new test fails at head; the failure is an **assertion failure** in that test, not a compile error, an import error or a missing dependency; and the message matches `expect`. For an `introduced` finding, the same test must also pass in a worktree at the base SHA, unless the finding's file doesn't exist at base (new code), in which case there is nothing to compare and the report says so.
 5. Otherwise the finding is downgraded to IMPORTANT, with the reason. Either way the worktree is deleted, and the test goes into the report, never into the user's checkout.
 
 **The proposed test is untrusted code.** A worktree limits where the file is saved, not what the file does when it runs: `src/x.test.ts` can write anywhere with `node:fs` before its first assertion. So:
 
 - **Reproduction is opt-in** (`--reproduce`), never part of a plain `quorum review`.
-- **Default isolation is a container.** The test runs with Docker or Podman, with only the worktree mounted, `--network none`, a non-root user, the repo's own lockfile already installed in the image, and a time limit. The user's checkout and home are never mounted.
+- **Default isolation is a container.** The test runs with Docker or Podman, with only the worktree mounted (plus a read-only volume with the dependencies, installed by a separate preparation step from the repo's own lockfile), `--network none`, a non-root user, and a time limit. The user's checkout and home are never mounted.
 - **No container available:** Quorum does not run the test. It shows the test, and runs it only after the user confirms interactively for that one test. In CI with no container, reproduction is skipped and the finding is labelled "unproven", not downgraded.
 - Node's permission model (`--permission`, `--allow-fs-write`) may become an extra layer later. It is not a boundary the plan relies on, because test runners spawn workers and child processes.
 - **M6 includes an escape test:** a synthetic proposed test that tries to write outside the worktree, and to reach the network. It must fail inside the sandbox, and the run must be reported as rejected.
