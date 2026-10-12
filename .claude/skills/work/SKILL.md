@@ -18,8 +18,8 @@ ask what the code or docs already answer.
 
 Size it. **S** (one file): do it in this session, skip to step 3.
 **M/L**: launch the `planner` agent with the request and the repo path. If it
-returns `## Blocking questions`, ask Isaac and resume it with SendMessage. For
-**L**, show Isaac the plan and wait for his yes.
+returns `## Blocking questions`, ask the user and resume it with SendMessage. For
+**L**, show the user the plan and wait for their approval.
 
 ## 2. Do
 
@@ -28,9 +28,9 @@ one file. Add `designer` first for a visible change and `writer` for docs or
 notes. Pass `model` explicitly on every Agent call: `haiku` for searches and
 mechanical edits, `sonnet` for implementation and docs; `opus` only when a
 money or security judgement truly cannot be covered by another provider.
-**Never `fable` without asking Isaac first.** Delegate in the order of the
-model-selection playbook (Codex, then Antigravity, Jules, local Qwen, and Claude
-subagents last). Mechanical, verifiable chunks may go to the local model with
+**Never `fable` without asking the owner first.** Delegate in the order of the
+model-selection playbook (local Qwen, Jules, Gemini, Antigravity's Claude, Codex,
+and Claude subagents last; `relaykit providers` shows the owner's own order). Mechanical, verifiable chunks may go to the local model with
 `relaykit qwen --optional --task …` when the repo has the kit installed;
 SKIPPED means do it yourself.
 
@@ -41,7 +41,7 @@ failing checks.
 
 ## 4. Independent review
 
-Branch, commit (English, with the attribution lines the session gives you),
+Branch, commit (in the language specified by AGENTS.md, with the attribution lines the session gives you),
 push and open a **draft** PR. Then have a DIFFERENT provider review it
 read-only with `.ai/prompts/review.md`, following the `cross-review` skill:
 probe the sandbox, list every path, verify every cited line. Fix confirmed
@@ -49,6 +49,6 @@ findings and review again.
 
 ## 5. Close
 
-Merge only when Isaac has authorized it. Report what changed, the commands you
+Merge only when the owner has authorized it. Report what changed, the commands you
 ran with results, what was not verified, and the PR link. If the work touched
-the AI setup, add the entry to «Registro de trabajo IA» in the `IA local` folder of Isaac's notes.
+the AI setup, record it in the project's setup docs or work log.

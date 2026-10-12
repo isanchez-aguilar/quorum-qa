@@ -8,15 +8,17 @@ argument-hint: <PR, branch or diff to review>
 
 Review target: `$ARGUMENTS`. Say in one line how you will do it («Reviso con
 Codex en sólo lectura»). The full reasoning is the cross-provider-review
-playbook in the relaykit repo; this is the procedure.
+[playbook](https://github.com/isanchez-aguilar/relaykit/blob/main/docs/playbooks/cross-provider-review.md) in the Relaykit repo; this is the procedure.
 
 ## 1. Choose the reviewer
 
-Never the provider that implemented. Codex for money, permissions, data
+Never the same model family that implemented (Anthropic, Google, OpenAI,
+local): Antigravity running a Claude model is still Claude, so it does not
+review Claude Code and Claude Code does not review it. Codex for money, permissions, data
 isolation and concurrency, **once per module**, scoped to the risky diff.
 Gemini through Antigravity for UI and visual work, once per lane. Claude when
-Codex or Antigravity implemented. Spend providers in the order of the
-model-selection playbook, and never use Fable without Isaac's yes.
+Codex, or Antigravity on a Gemini model, implemented. Spend providers in the order of the
+model-selection playbook, and never use Fable without the owner's yes.
 
 ## 2. Probe the sandbox first
 
@@ -29,7 +31,7 @@ is broken — fix it before the real review.
   Headless cannot ask permission: it needs `read_file(<checkout>)` allowed in
   its settings (and `deny` for secret files), otherwise it answers SUCCESS with
   an empty response and `denied_actions`. `relaykit init` prints those rules;
-  Isaac applies them. Use file-read tools only and list **every path** the
+  the owner applies them. Use file-read tools only and list **every path** the
   reviewer must read in the prompt. Never `--dangerously-skip-permissions`.
 
 ## 3. Scope the prompt

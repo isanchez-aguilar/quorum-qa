@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "kit": "0.1.0",
+  "files": {
+    ".ai/prompts/review.md": "0cdd7fb17cb85e485158316add56ec9096e3069b861ff733a0780abce6586407",
+    ".claude/agents/designer.md": "663c6ca88e355da48f03e1979a3c2115648b0eb052a8f04445fa9a61f7d5cafd",
+    ".claude/agents/implementer.md": "fdf9081c9c552254f90e9652ec902a8b1a7e22b3636f935cd0c869c34f97a4e9",
+    ".claude/agents/planner.md": "0b27f706f85c01877c8bbad67b88a70b3c62c9b153544d081765e38c94f144fb",
+    ".claude/agents/reviewer.md": "cf53fa7a17a43f556ef71c1ea131381d15aaed98a731c2e2e666688324ea6bbe",
+    ".claude/agents/tester.md": "77c2c69533d7b7de9cf4cb23e06fdb9e265e21cecadecf6aee278bc80d8c02a7",
+    ".claude/agents/writer.md": "fda18bdead09023ee724ffc18141c4ecc9990788137418f3babbeb8bc88ce2ef",
+    ".claude/skills/bugfix/SKILL.md": "df3dc192e99deac21e7ecf4258ab23092209ba2cfb0a48163a3db8dcad6c24a3",
+    ".claude/skills/cross-review/SKILL.md": "c7502af268c1f8187132f6dd884c285e9d57ca3c920292e05727d0a38a869df8",
+    ".claude/skills/work/SKILL.md": "edbd4929dba35450f7d81fe32225355fac3278802c6b329b8cea65fee957e844"
+  }
+}

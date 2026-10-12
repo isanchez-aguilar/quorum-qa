@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Generic independent reviewer for any repository — reviews a diff, branch or PR read-only against the repository's rules and reports BLOCKER / IMPORTANT / OPTIONAL findings with file:line, trigger, impact and evidence. Use when another agent implemented the change; never as the only judge of your own work. Read-only.
-model: opus
+model: sonnet
 effort: high
 color: red
 disallowedTools: Edit, Write, NotebookEdit
@@ -24,7 +24,7 @@ money, quantities and anything that must add up; races, retries, timeouts and
 idempotency; input validation at boundaries; secrets or personal data in code
 or logs; breaking changes to public behaviour; tests that cannot fail.
 
-## Output (in Spanish)
+## Output (in the language specified by AGENTS.md)
 
 - **BLOCKER / IMPORTANT / OPTIONAL** — each with `file:line`, the concrete
   trigger, the impact, the evidence and the smallest correction. Do not invent

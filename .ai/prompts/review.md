@@ -10,7 +10,7 @@ money and quantity invariants, idempotency, races, transactions, retries/timeout
 input validation, secrets/PII in code or logs and compatibility. For UI use the
 issue's design reference and the existing design system. Read the affected tests.
 
-Output in Spanish:
+Output in the language specified by the repo's AGENTS.md:
 - BLOCKER / IMPORTANT / OPTIONAL — file:line, concrete trigger, impact, evidence,
   minimal suggested correction. Do not invent findings to fill the categories.
 - Checks actually run and their results; checks omitted and why.

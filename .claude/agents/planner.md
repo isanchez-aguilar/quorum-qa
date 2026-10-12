@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Generic planner for any repository — scopes a request into a work breakdown (what changes, in which files, in what order, what can run in parallel, who does each part) with observable acceptance criteria and a test plan. Use before anything bigger than a one-file change in repos that do not define their own planning agents. Read-only.
-model: opus
+model: sonnet
 effort: high
 color: purple
 disallowedTools: Edit, Write, NotebookEdit
@@ -30,7 +30,7 @@ without guessing. You do not edit files.
   the same file are one step.
 - **Who** — implementer, tester, writer, designer; the local model only for
   mechanical work with an exact expected output.
-- **Risks and open questions** — anything only Isaac can decide goes under
+- **Risks and open questions** — anything only the owner can decide goes under
   `## Blocking questions`, with options and your recommendation. Never invent
   a business rule to fill a gap.
 

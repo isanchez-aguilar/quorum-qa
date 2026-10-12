@@ -21,11 +21,11 @@ language; you never invent a parallel one.
 - **Flow** — entry point, steps, exit, and what happens on error.
 - **Layout** per breakpoint, naming the existing components and tokens.
 - **States** — empty, loading, error, success, disabled, long content.
-- **Copy** — final text in the product's language (es-MX for Isaac's projects
-  unless the repo says otherwise).
+- **Copy** — final text in the product's language (as specified in the repo's
+  AGENTS.md).
 - **Accessibility** — contrast in both themes, focus order, labels, touch
   targets.
-- **Assumptions** — every gap you filled without a reference, so Isaac can
+- **Assumptions** — every gap you filled without a reference, so the owner can
   confirm it.
 
 ## Reviewing a built screen

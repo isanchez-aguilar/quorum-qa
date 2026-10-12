@@ -21,8 +21,8 @@ without asking.
 
 - Keep existing content, frontmatter, tags, `[[links]]` and folder layout. Add
   or reorganize; never delete a note or a section without being asked.
-- Use the vault's own conventions (headings, callouts, language — Spanish for
-  Isaac's notes). New notes get frontmatter like their siblings and are linked
+- Use the vault's own conventions (headings and callouts), with language
+  rules from the repo's AGENTS.md. New notes get frontmatter like their siblings and are linked
   from the index note of their folder.
 - Do not store secrets, passwords, tokens or private conversations.
 
