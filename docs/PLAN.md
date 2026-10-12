@@ -122,9 +122,17 @@ A BLOCKER keeps its severity only if a test proves it. No provider writes anythi
 
 1. The confirming reviewer returns the proposed test as JSON: `{ "path": "src/x.test.ts", "content": "...", "expect": "assertion text" }`.
 2. Quorum checks the path. It must be a new file that matches the repo's test globs (default `**/*.test.*` and `**/*.spec.*`), inside the repo. Anything else is rejected.
-3. Quorum creates a disposable `git worktree` at the head SHA, writes the file, and runs the configured test command for that one file with a machine-readable reporter (vitest or jest JSON).
+3. Quorum creates a disposable `git worktree` at the head SHA and writes the file. Then it runs the configured test command for that one file, with a machine-readable reporter (vitest or jest JSON), **under isolation** (see below).
 4. **Reproduced** means three things: the new test fails at head; the failure is an **assertion failure** in that test, not a compile error, an import error or a missing dependency; and the message matches `expect`. For an `introduced` finding, the same test must also pass in a worktree at the base SHA.
 5. Otherwise the finding is downgraded to IMPORTANT, with the reason. Either way the worktree is deleted, and the test goes into the report, never into the user's checkout.
+
+**The proposed test is untrusted code.** A worktree limits where the file is saved, not what the file does when it runs: `src/x.test.ts` can write anywhere with `node:fs` before its first assertion. So:
+
+- **Reproduction is opt-in** (`--reproduce`), never part of a plain `quorum review`.
+- **Default isolation is a container.** The test runs with Docker or Podman, with only the worktree mounted, `--network none`, a non-root user, the repo's own lockfile already installed in the image, and a time limit. The user's checkout and home are never mounted.
+- **No container available:** Quorum does not run the test. It shows the test, and runs it only after the user confirms interactively for that one test. In CI with no container, reproduction is skipped and the finding is labelled "unproven", not downgraded.
+- Node's permission model (`--permission`, `--allow-fs-write`) may become an extra layer later. It is not a boundary the plan relies on, because test runners spawn workers and child processes.
+- **M6 includes an escape test:** a synthetic proposed test that tries to write outside the worktree, and to reach the network. It must fail inside the sandbox, and the run must be reported as rejected.
 
 This needs only the reviewer adapters (agy and Codex), so it works in v1 with no extra provider.
 
@@ -160,7 +168,7 @@ Guardrails (lessons from running Jules by hand, and from the review of this plan
   },
   "escalate": { "focus": ["money", "auth", "permissions"], "belowConfidence": 0.7 },
   "budget": { "maxCalls": 12, "maxMinutes": 20, "quotaFloorPercent": 15 },
-  "reproduce": { "testGlobs": ["**/*.test.*", "**/*.spec.*"], "testCommand": ["pnpm", "vitest", "run", "--reporter=json"] },
+  "reproduce": { "isolation": "container", "testGlobs": ["**/*.test.*", "**/*.spec.*"], "testCommand": ["pnpm", "vitest", "run", "--reporter=json"] },
   "jules": { "enabled": false, "repo": "owner/name", "maxSessionsPerRun": 3 },
   "qwen": { "endpoint": "http://127.0.0.1:8080/v1" }
 }
@@ -204,7 +212,7 @@ Each milestone is one PR with its tests. Automated acceptance always uses the fa
 | M3 | Provider interface, a **fake provider** for tests, model catalog, tiers, cascade, budget, `--dry-run` | The whole pipeline runs end to end against the fake provider with zero quota |
 | M4 | Real adapters: **agy** and **codex**, each running in a disposable worktree and checked for writes afterwards; `quorum doctor` (PATH, login, `agy models`, `/usage`, read probe, agy write-deny rule present) | Adapter tests on recorded outputs; `doctor` passes on Isaac's machine with at most 3 approved probe calls |
 | M5 | Modes `feature` and `redesign`, markdown and SARIF reporters, ledger and cache | End to end against the fake provider |
-| M6 | Reproduction lane (Quorum writes the proposed test into a worktree), plus `claude` and `qwen` adapter stubs | Lane tests: an assertion failure is kept, an import or compile failure is downgraded, a non-test path is rejected, `introduced` is checked at the base SHA; then the approved smoke run |
+| M6 | Reproduction lane (opt-in; Quorum writes the proposed test into a worktree and runs it in a container), plus `claude` and `qwen` adapter stubs | Lane tests: an assertion failure is kept, an import or compile failure is downgraded, a non-test path is rejected, `introduced` is checked at the base SHA, and the **escape test** can't write outside the worktree or reach the network; then the approved smoke run |
 
 **v1 is done when** the whole pipeline passes its automated tests against the fake provider, and **one smoke run that Isaac approves** (at most 6 calls) of `quorum review --mode feature --diff <range>` works on a synthetic sample diff with at least one real provider.
 
@@ -224,6 +232,7 @@ Each milestone is one PR with its tests. Automated acceptance always uses the fa
 | Quota shared across models | Budgets are per quota group, read from `/usage` |
 | False independence (same family through two CLIs) | Family is part of the catalog; the planner checks it |
 | A reviewer tries to write or run commands | `agy --sandbox` still **allows writes to the workspace**, and `--mode plan` only changes the instructions, so flags aren't enough. Every reviewer runs in a disposable worktree of head. `doctor` refuses agy unless the user's agy settings deny write and shell tools (it prints the rule and never writes it). A run that leaves its worktree dirty is discarded. Codex uses `-s read-only`. |
+| A proposed test is malicious or careless | Reproduction is opt-in and runs in a container with no network and only the worktree mounted. Without a container, it runs only after a per-test confirmation. M6 has an escape test. |
 | Code leaves the machine | Every provider already sees code under the user's own terms. Jules needs the code pushed to GitHub, so it is opt-in per repo, and `doctor` says so |
 
 ## Open decisions (for Isaac)
