@@ -6,6 +6,8 @@ These come from months of running cross-provider reviews on a real product: new 
 - **Codex:** found real money and permission bugs that the others missed. In one review, Codex found two money blockers in an idempotency change that another model had approved with no findings. Its quota runs out fast, so spend it once per change, scoped to the risky diff, at medium reasoning effort.
 - **Gemini (via Antigravity):** has plenty of quota and reads screenshots, so it suits visual and accessibility review. It **cites wrong line numbers** (lines past 5000 in files 600 lines long) and **sometimes names files that don't exist**. Every finding must be verified against the code.
 - **Claude models inside Antigravity:** they share one quota per model family, and once it ran out the reset was 72 hours away.
+- **Antigravity is one login with several families:** Gemini Flash and Pro, Claude Sonnet and Opus, and GPT-OSS. The model list changes every few weeks, so read it (`agy models`) instead of hardcoding it. Its `/usage` reports quota per model group without spending inference.
+- **Jules:** it runs in the cloud on the pushed branch, so it can run the test suite without touching the local checkout. It is slow, it sometimes stops to ask for approval, and the CLI doesn't show its quota. Pin the repo and branch in config, pull its patch without applying it, and never approve its plan automatically.
 - **Local model:** it was good for mechanical test tables, fixtures and draft copy. Its output was accepted verbatim when it got the first case as a template. It is not for judgment.
 
 ## Failure modes the tool must handle
