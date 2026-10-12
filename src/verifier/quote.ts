@@ -1,4 +1,4 @@
-import { lineDistance, localWindow } from './lines.js';
+import { isCitableLine, lineDistance, localWindow } from './lines.js';
 
 // The single similarity threshold used everywhere, inclusive.
 export const FUZZY = 0.85;
@@ -7,7 +7,9 @@ export const MAX_QUOTE_LINES = 40;
 export const MAX_QUOTE_CHARS = 8 * 1024;
 // A raw quote over this is rejected before it is normalized at all.
 export const MAX_RAW_QUOTE = 64 * 1024;
-// A quote with fewer letters and digits than this (`}`, `});`, `;`) proves nothing.
+// A quote with fewer letters and digits than this (`x++;`, `<div>`) is weak evidence: it counts only
+// when it is found exactly on the cited line (matchAtLine). With none at all (`}`, `});`) it is
+// rejected outright.
 export const MIN_ALNUM = 4;
 // A file line longer than this is skipped by the search: it is a minified bundle or a data dump.
 export const MAX_LINE = 16 * 1024;
@@ -464,5 +466,43 @@ export function findQuote(
   } catch (error) {
     if (error instanceof BudgetExceeded) return { kind: 'budget' };
     throw error;
+  }
+}
+
+// Whether a character can be part of an identifier, so a short quote does not match inside a name.
+const IDENTIFIER_CHAR = /[\p{L}\p{N}_$]/u;
+
+/**
+ * Finds a normalized quote exactly on the cited line and nowhere else: no window, no relocation,
+ * no fuzzy match. For quotes too short to be trusted anywhere but where they were cited. The quote
+ * (of the same number of lines as it has) must appear verbatim in the normalized slice that starts
+ * at `line`, and must not begin or end inside an identifier (`x++;` is not in `max++;`). Returns
+ * null for an unusable line, a slice that runs past the file or crosses an over-long line.
+ */
+export function matchAtLine(
+  fileLines: readonly string[],
+  quote: string,
+  line: number,
+): QuoteMatch | null {
+  if (!isCitableLine(line)) return null;
+  const span = quote.split('\n').length;
+  if (line + span - 1 > fileLines.length) return null;
+  const slice = fileLines.slice(line - 1, line - 1 + span).map(prepareFileLine);
+  if (slice.some((prepared) => prepared.tooLong)) return null;
+  const text = blockLines(slice).join('\n');
+
+  const first = quote.charAt(0);
+  const last = quote.charAt(quote.length - 1);
+  for (let from = 0; ; ) {
+    const at = text.indexOf(quote, from);
+    if (at < 0) return null;
+    const before = at > 0 ? text.charAt(at - 1) : '';
+    const after = text.charAt(at + quote.length);
+    const insideBefore = IDENTIFIER_CHAR.test(first) && before !== '' && IDENTIFIER_CHAR.test(before);
+    const insideAfter = IDENTIFIER_CHAR.test(last) && after !== '' && IDENTIFIER_CHAR.test(after);
+    if (!insideBefore && !insideAfter) {
+      return { line, similarity: 1, exact: true, scope: 'local', text };
+    }
+    from = at + 1;
   }
 }

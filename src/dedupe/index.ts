@@ -7,7 +7,7 @@ import {
   type MergeOptions,
   type TokensOf,
 } from './cluster.js';
-import { findingTokens, type TokenSet } from './similarity.js';
+import { findingTokens, type FindingTokens } from './similarity.js';
 
 export type DedupeOptions = MergeOptions;
 
@@ -19,8 +19,9 @@ function fileKey(file: string): string {
 
 /**
  * Merges findings that report the same defect, and only when that is nearly certain: same file,
- * within 5 lines, and trigger + impact with a token Jaccard of at least MERGE_JACCARD (0.85).
- * Everything weaker stays separate, because a missed merge costs a duplicate and a false merge
+ * within 5 lines, and a token Jaccard of at least MERGE_JACCARD (0.85) on the trigger AND, apart,
+ * on the impact. Everything weaker stays separate, including two findings whose combined text is
+ * near-identical but whose triggers differ, because a missed merge costs a duplicate and a false merge
  * hides a defect. Separate findings within 5 lines whose text overlaps are annotated with
  * `possibly_related` on both; the annotation never changes severity or confidence. Whether a
  * related pair really is one defect is a question for the confirm tier (M3), not for a lexical
@@ -42,7 +43,7 @@ export function dedupeFindings(
     else bucket.push(finding);
   }
 
-  const cache = new Map<Finding, TokenSet>();
+  const cache = new Map<Finding, FindingTokens>();
   const tokensOf: TokensOf = (finding) => {
     let tokens = cache.get(finding);
     if (tokens === undefined) {

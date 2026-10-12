@@ -5,7 +5,7 @@ import {
   RELATED_OVERLAP,
   relatedSimilarity,
   strongSimilarity,
-  type TokenSet,
+  type FindingTokens,
 } from './similarity.js';
 
 // Findings further apart than this (in lines) are never the same defect.
@@ -28,7 +28,7 @@ export interface MergeOptions {
 export type RelatedEntry = NonNullable<Finding['possibly_related']>[number];
 
 // Where the word tokens of a finding come from. dedupeFindings passes a cached one.
-export type TokensOf = (finding: Finding) => TokenSet;
+export type TokensOf = (finding: Finding) => FindingTokens;
 
 function lineOf(finding: Finding): number {
   return Number.isFinite(finding.line) ? finding.line : Number.POSITIVE_INFINITY;
@@ -36,8 +36,9 @@ function lineOf(finding: Finding): number {
 
 /**
  * Groups findings of one file into clusters of the same defect. Findings are visited by ascending
- * line and join a cluster only when they STRONGLY match at least one member (token Jaccard of
- * trigger + impact >= MERGE_JACCARD) and are within PROXIMITY_LINES of EVERY member; the best
+ * line and join a cluster only when they STRONGLY match at least one member (the token Jaccard of
+ * the trigger AND of the impact are each >= MERGE_JACCARD) and are within PROXIMITY_LINES of EVERY
+ * member; the best
  * strong match wins. Checking against every member, not just the nearest, stops a chain of
  * findings 5 lines apart from swallowing lines that are 20 apart. Anything weaker stays separate.
  */

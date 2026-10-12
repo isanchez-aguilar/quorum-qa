@@ -22,7 +22,11 @@ import {
   levenshtein,
   normalizeQuote,
 } from '../../src/verifier/quote.js';
-import { semanticDifference, semanticTokens } from '../../src/verifier/semantic.js';
+import {
+  sameIdentifier,
+  semanticDifference,
+  semanticTokens,
+} from '../../src/verifier/semantic.js';
 
 const FIXTURES = fileURLToPath(new URL('../fixtures/sources', import.meta.url));
 const QUOTE = 'if (!user.token) return false;';
@@ -646,7 +650,7 @@ describe('M1 fix 1: a fuzzy match must not flip the meaning', () => {
     const result = await against("const mode = 'strict';", "const mode = 'script';");
     expect(result.verified).toBe(false);
     expect(result.reason).toContain(
-      'the quote has the string "script" where the code has the string "strict"',
+      "the quote has the string 'script' where the code has the string 'strict'",
     );
   });
 
@@ -709,16 +713,21 @@ describe('M1 fix 1: a fuzzy match must not flip the meaning', () => {
 });
 
 describe('semantic tokens', () => {
-  it('keeps operators, negation, truth words, numbers and strings, and drops identifiers', () => {
+  it('keeps identifiers, operators, negation, truth words, numbers and strings, and no punctuation', () => {
     expect(semanticTokens('if (!user.token) return false;')).toEqual([
       'word:if',
       'operator:!',
+      'ident:user',
+      'ident:token',
       'word:return',
       'word:false',
     ]);
     expect(semanticTokens('a !== b ?? c => 0x1F + 1_000 - 2.5e3')).toEqual([
+      'ident:a',
       'operator:!==',
+      'ident:b',
       'operator:??',
+      'ident:c',
       'operator:=>',
       'number:0x1f',
       'operator:+',
@@ -726,29 +735,38 @@ describe('semantic tokens', () => {
       'operator:-',
       'number:2.5e3',
     ]);
-    expect(semanticTokens('x = "a" + \'b\' + `c`')).toEqual([
+    // The delimiter of a string is part of the token.
+    expect(semanticTokens('x = "a" + \'b\'')).toEqual([
+      'ident:x',
       'operator:=',
-      'string:a',
+      'string:"a"',
       'operator:+',
-      'string:b',
-      'operator:+',
-      'string:c',
+      "string:'b'",
     ]);
   });
 
   it('matches words whole and case-insensitively', () => {
-    expect(semanticTokens('notify(nothing); isNull; returnValue')).toEqual([]);
+    expect(semanticTokens('notify(nothing); isNull; returnValue')).toEqual([
+      'ident:notify',
+      'ident:nothing',
+      'ident:isNull',
+      'ident:returnValue',
+    ]);
     expect(semanticTokens('if x is None: return True')).toEqual([
       'word:if',
+      'ident:x',
+      'ident:is',
       'word:none',
       'word:return',
       'word:true',
     ]);
   });
 
-  it('ignores identifier spelling, quote style and number separators', () => {
+  it('ignores a typo in an identifier and number separators, not the quote style', () => {
     expect(semanticDifference('a = fooBar + 1_000;', 'a = fooBaz + 1000;')).toBeNull();
-    expect(semanticDifference("x = 'same'", 'x = "same"')).toBeNull();
+    expect(semanticDifference("x = 'same'", 'x = "same"')).toBe(
+      'the quote has the string \'same\' where the code has the string "same"',
+    );
   });
 
   it('names the first token that differs', () => {
@@ -1071,5 +1089,351 @@ describe('M1 fix 6: bounded edit distance and a work budget', () => {
     expect(performance.now() - started).toBeLessThan(2000);
     expect(result.verified).toBe(false);
     expect(result.reason).toMatch(/quote not found/);
+  });
+});
+
+describe('M1 final round fix 1: the full token sequence is compared', () => {
+  // The file holds `code`; the model quoted `quoted`. Both are close enough to be located.
+  async function against(code: string, quoted: string) {
+    await put('src/sem.ts', sourceFile(60, { 30: code }));
+    expect(calculateSimilarity(quoted, code)).toBeGreaterThanOrEqual(FUZZY);
+    return verify({ file: 'src/sem.ts', line: 30, evidence_quote: quoted });
+  }
+
+  it('swapped operands are rejected and the reason names the token', async () => {
+    const result = await against('if (a < b) return false;', 'if (b < a) return false;');
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/changes the meaning of the quote/);
+    expect(result.reason).toContain(
+      'the quote has the identifier "b" where the code has the identifier "a"',
+    );
+    expect(result.reason).toContain('found in code: "if (a < b) return false;"');
+    expect(result.correctedFinding).toBeUndefined();
+  });
+
+  it('the same comparison with the operands in place verifies', async () => {
+    const result = await against('if (a < b) return false;', 'if (a < b) return false;');
+    expect(result.verified).toBe(true);
+  });
+
+  it('swapped arguments of a longer call are rejected', async () => {
+    const result = await against(
+      'const moved = copyFile(src, dst, options.overwrite);',
+      'const moved = copyFile(dst, src, options.overwrite);',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain(
+      'the quote has the identifier "dst" where the code has the identifier "src"',
+    );
+  });
+
+  it('short identifiers must match exactly: id is not ip', async () => {
+    const result = await against(
+      'const owner = lookup(user.id, session);',
+      'const owner = lookup(user.ip, session);',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain(
+      'the quote has the identifier "ip" where the code has the identifier "id"',
+    );
+  });
+
+  it('user is not users, and item1 is not item2', async () => {
+    const plural = await against(
+      'if (users.length > limit) notify(owner);',
+      'if (user.length > limit) notify(owner);',
+    );
+    expect(plural.verified).toBe(false);
+    expect(plural.reason).toContain('"user" where the code has the identifier "users"');
+
+    const numbered = await against(
+      'const merged = join(item1, item2, separator);',
+      'const merged = join(item1, item1, separator);',
+    );
+    expect(numbered.verified).toBe(false);
+    expect(numbered.reason).toContain('"item1" where the code has the identifier "item2"');
+  });
+
+  it('a typo in a long identifier still verifies, also when it is two edits long', async () => {
+    const result = await against('total = price * (1 + TAX_RATIO)', 'total = price * (1 + TAX_RATE)');
+    expect(result.verified).toBe(true);
+  });
+
+  it('a different word in place of an identifier is rejected', async () => {
+    const result = await against(
+      'const label = format(order.customer, locale);',
+      'const label = format(order.supplier, locale);',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain(
+      'the quote has the identifier "supplier" where the code has the identifier "customer"',
+    );
+  });
+
+  it('an identifier typo next to a changed operator is still rejected for the operator', async () => {
+    const result = await against(
+      'if (retryCount < limit) retry(job);',
+      'if (retryCnt > limit) retry(job);',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain('the quote has ">" where the code has "<"');
+  });
+
+  describe('sameIdentifier', () => {
+    it.each([
+      ['TAX_RATE', 'TAX_RATIO', true],
+      ['requestCount', 'requestCnt', true],
+      ['total', 'totla', true],
+      ['token', 'token', true],
+      ['token', 'taken', true],
+      ['a', 'b', false],
+      ['id', 'ip', false],
+      ['abc', 'abd', false],
+      ['data', 'date', false],
+      ['user', 'users', false],
+      ['item1', 'item2', false],
+      ['userName', 'userMail', false],
+      ['oldValue', 'newValue', false],
+    ])('%s and %s: %s', (quoted, real, expected) => {
+      expect(sameIdentifier(quoted, real)).toBe(expected);
+      expect(sameIdentifier(real, quoted)).toBe(expected);
+    });
+  });
+});
+
+describe('M1 final round fix 2: strings keep their delimiter, templates are code', () => {
+  const body = 'Hello ${user.name}, welcome back';
+  const DELIMITERS = ['"', "'", '`'] as const;
+  const swaps = DELIMITERS.flatMap((codeDelimiter) =>
+    DELIMITERS.filter((quoteDelimiter) => quoteDelimiter !== codeDelimiter).map(
+      (quoteDelimiter) => [codeDelimiter, quoteDelimiter] as const,
+    ),
+  );
+  const describeString = (delimiter: string): string =>
+    delimiter === '`' ? 'a template literal' : `the string ${delimiter}${body}${delimiter}`;
+
+  async function against(code: string, quoted: string) {
+    await put('src/tpl.ts', sourceFile(60, { 30: code }));
+    expect(calculateSimilarity(quoted, code)).toBeGreaterThanOrEqual(FUZZY);
+    return verify({ file: 'src/tpl.ts', line: 30, evidence_quote: quoted });
+  }
+
+  it('the reviewer case: a double-quoted string is not the template literal', async () => {
+    const result = await against('`Hello ${user.name}`;', '"Hello ${user.name}";');
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/changes the meaning of the quote/);
+    expect(result.reason).toContain(
+      'the quote has the string "Hello ${user.name}" where the code has a template literal',
+    );
+    expect(result.correctedFinding).toBeUndefined();
+  });
+
+  it.each(swaps)(
+    'code delimited by %s and a quote delimited by %s is rejected',
+    async (codeDelimiter, quoteDelimiter) => {
+      const result = await against(
+        `const greeting = ${codeDelimiter}${body}${codeDelimiter};`,
+        `const greeting = ${quoteDelimiter}${body}${quoteDelimiter};`,
+      );
+      expect(result.verified).toBe(false);
+      expect(result.reason).toContain(
+        `the quote has ${describeString(quoteDelimiter)} where the code has ${describeString(codeDelimiter)}`,
+      );
+    },
+  );
+
+  it('the same delimiter verifies, and a typo in a name inside ${...} is tolerated', async () => {
+    const result = await against(
+      'const label = `Hello ${customer.name}, welcome`;',
+      'const label = `Hello ${custmer.name}, welcome`;',
+    );
+    expect(result.verified).toBe(true);
+  });
+
+  it('an operator inside ${...} is compared as code', async () => {
+    const result = await against(
+      'const line = `Total: ${price + tax} EUR`;',
+      'const line = `Total: ${price - tax} EUR`;',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain('the quote has "-" where the code has "+"');
+  });
+
+  it('a name inside ${...} is compared as code', async () => {
+    const result = await against(
+      'const label = `Hello ${user.email}, welcome back`;',
+      'const label = `Hello ${user.name}, welcome back`;',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain(
+      'the quote has the identifier "name" where the code has the identifier "email"',
+    );
+  });
+
+  it('the text of a template is compared as a string', async () => {
+    const result = await against(
+      'const label = `Hello ${user.name}, welcome back`;',
+      'const label = `Hullo ${user.name}, welcome back`;',
+    );
+    expect(result.verified).toBe(false);
+    expect(result.reason).toContain(
+      'the quote has the template text "Hullo " where the code has the template text "Hello "',
+    );
+  });
+
+  it('tokenizes a template as code between its text', () => {
+    expect(semanticTokens('`a${x}b`')).toEqual([
+      'template:open',
+      'string:`a',
+      'template:expression-open',
+      'ident:x',
+      'template:expression-close',
+      'string:`b',
+      'template:close',
+    ]);
+    // Braces inside an expression do not end it, and a template can nest.
+    expect(semanticTokens('`${fn({ a: 1 })} end`')).toEqual([
+      'template:open',
+      'template:expression-open',
+      'ident:fn',
+      'ident:a',
+      'number:1',
+      'template:expression-close',
+      'string:` end',
+      'template:close',
+    ]);
+    expect(semanticTokens('`<li>${items.map((i) => `<${i}>`)}</li>`')).toEqual([
+      'template:open',
+      'string:`<li>',
+      'template:expression-open',
+      'ident:items',
+      'ident:map',
+      'ident:i',
+      'operator:=>',
+      'template:open',
+      'string:`<',
+      'template:expression-open',
+      'ident:i',
+      'template:expression-close',
+      'string:`>',
+      'template:close',
+      'template:expression-close',
+      'string:`</li>',
+      'template:close',
+    ]);
+  });
+
+  it('an unterminated string or template does not hang and keeps what it read', () => {
+    expect(semanticTokens("name = 'unterminated")).toEqual([
+      'ident:name',
+      'operator:=',
+      "string:'unterminated'",
+    ]);
+    expect(semanticTokens('x = `open ${a')).toEqual([
+      'ident:x',
+      'operator:=',
+      'template:open',
+      'string:`open ',
+      'template:expression-open',
+      'ident:a',
+    ]);
+  });
+
+  it('is linear on deeply nested and unterminated templates', () => {
+    const nested = `${'`${'.repeat(5000)}x${'}`'.repeat(5000)}`;
+    const unterminated = `${"'\\".repeat(5000)}${'`\\${'.repeat(2000)}`;
+    const started = performance.now();
+    semanticTokens(nested);
+    semanticTokens(unterminated);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+
+describe('M1 final round fix 4: a short quote counts only on its cited line', () => {
+  const place = async (code: string, line = 30) =>
+    put('src/short.ts', sourceFile(60, { [line]: code }));
+
+  it.each([
+    ['x++;', '  x++;'],
+    ['a=b;', '    a=b;'],
+    ['foo();', 'foo();'],
+    ['<div>', '  <div>'],
+    ['i--', 'while (i--) {'],
+  ])('%j verifies exactly on the cited line', async (quoted, code) => {
+    await place(code);
+    const result = await verify({ file: 'src/short.ts', line: 30, evidence_quote: quoted });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.line).toBe(30);
+    expect(result.correctedFinding?.verified).toBe(true);
+    expect(result.correctedFinding?.verification_note).toBeUndefined();
+  });
+
+  it('a fragment of the cited line verifies', async () => {
+    await place('for (;;) { x++; }');
+    const result = await verify({ file: 'src/short.ts', line: 30, evidence_quote: 'x++;' });
+    expect(result.verified).toBe(true);
+  });
+
+  it.each([29, 31, 25, 40, 5000, 0, -1, Number.NaN, 30.5])(
+    'the same x++; cited at line %s is rejected, not corrected',
+    async (line) => {
+      await place('  x++;');
+      const result = await verify({ file: 'src/short.ts', line, evidence_quote: 'x++;' });
+      expect(result.verified).toBe(false);
+      expect(result.reason).toMatch(/too short/);
+      expect(result.reason).toMatch(/does not appear on line/);
+      expect(result.correctedFinding).toBeUndefined();
+    },
+  );
+
+  it('a closing brace is rejected even on its own line', async () => {
+    await place('  }');
+    for (const quoted of ['}', '  }  ', '});', '];', ')']) {
+      const result = await verify({ file: 'src/short.ts', line: 30, evidence_quote: quoted });
+      expect(result.verified, quoted).toBe(false);
+      expect(result.reason, quoted).toMatch(/too short/);
+    }
+  });
+
+  it('is never fuzzy: x++; is not x += 1;', async () => {
+    await place('  x += 1;');
+    const result = await verify({ file: 'src/short.ts', line: 30, evidence_quote: 'x++;' });
+    expect(result.verified).toBe(false);
+  });
+
+  it('does not match inside an identifier: x++; is not max++;', async () => {
+    await place('  max++;');
+    const result = await verify({ file: 'src/short.ts', line: 30, evidence_quote: 'x++;' });
+    expect(result.verified).toBe(false);
+    await place('  obj.x++;');
+    const member = await verify({ file: 'src/short.ts', line: 30, evidence_quote: 'x++;' });
+    expect(member.verified).toBe(true);
+  });
+
+  it('is not searched globally: the file has the quote once, elsewhere', async () => {
+    await place('  x++;', 55);
+    const result = await verify({ file: 'src/short.ts', line: 10, evidence_quote: 'x++;' });
+    expect(result.verified).toBe(false);
+    expect(result.correctedFinding).toBeUndefined();
+  });
+
+  it('a short multi-line quote must start on the cited line', async () => {
+    await put('src/short.ts', sourceFile(60, { 30: 'a++;', 31: 'b--;' }));
+    const quoted = 'a++;\nb--;';
+    const there = await verify({ file: 'src/short.ts', line: 30, evidence_quote: quoted });
+    expect(there.verified).toBe(true);
+    const next = await verify({ file: 'src/short.ts', line: 31, evidence_quote: quoted });
+    expect(next.verified).toBe(false);
+  });
+
+  it('a long quote is still corrected, so the rule is only for short ones', async () => {
+    await place('  total += price * quantity;');
+    const result = await verify({
+      file: 'src/short.ts',
+      line: 35,
+      evidence_quote: 'total += price * quantity;',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.line).toBe(30);
   });
 });

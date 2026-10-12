@@ -8,6 +8,7 @@ import {
   countAlphanumeric,
   findQuote,
   FUZZY,
+  matchAtLine,
   MAX_QUOTE_CHARS,
   MAX_QUOTE_LINES,
   MAX_RAW_QUOTE,
@@ -64,8 +65,14 @@ async function readBounded(handle: FileHandle, size: number): Promise<string | n
  * and the evidence quote is found at (or near) the cited line. Never mutates the finding.
  *
  * A quote is verified when it appears verbatim, or when a fuzzy match (similarity >= 0.85) has the
- * same semantic tokens: negation, comparison and arithmetic operators, true/false/null and the like,
- * numbers and strings. A fuzzy match that flips one of them is rejected naming the token.
+ * same code tokens in the same order: operators, keywords such as true/false/null, numbers, strings
+ * (with their delimiters; a template literal's `${...}` expressions are code) and identifiers, where
+ * an identifier may carry a typo (see semantic.ts). A fuzzy match that differs in a token is
+ * rejected naming the token.
+ *
+ * A quote with fewer than MIN_ALNUM letters or digits is weak evidence. It is verified only when it
+ * appears exactly on the cited line; it is never relocated, never fuzzy-matched and never searched
+ * for in the rest of the file. A quote with no letter or digit at all is rejected outright.
  *
  * Confinement: normalizePath returns the REAL path, which is opened once; the checks (regular
  * file, size) and the read use that one descriptor. This is meant for a worktree the provider
@@ -114,10 +121,10 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     const quote = normalizeQuote(raw);
     if (quote === '') return reject('empty evidence quote');
     const alphanumeric = countAlphanumeric(quote);
-    if (alphanumeric < MIN_ALNUM) {
+    if (alphanumeric === 0) {
       return reject(
-        `evidence quote too short to verify: it has ${alphanumeric} letters or digits, ` +
-          `at least ${MIN_ALNUM} are needed`,
+        'evidence quote too short to verify: it has no letters or digits, so it says nothing ' +
+          'about the code',
       );
     }
     const quoteLines = quote.split('\n').length;
@@ -139,6 +146,19 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     }
     const lines = splitLines(content);
     if (lines.length === 0) return reject(`"${finding.file}" is empty, so the quote cannot be there`);
+
+    // Weak evidence counts only where it was cited: no window, no correction, no fuzzy match.
+    if (alphanumeric < MIN_ALNUM) {
+      const here = matchAtLine(lines, quote, finding.line);
+      if (here === null) {
+        return reject(
+          `evidence quote too short to verify: it has ${alphanumeric} letters or digits and at ` +
+            `least ${MIN_ALNUM} are needed unless it appears exactly on the cited line, and it ` +
+            `does not appear on line ${String(finding.line)} of "${finding.file}"`,
+        );
+      }
+      return { verified: true, correctedFinding: { ...finding, line: here.line, verified: true } };
+    }
 
     const outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
     if (outcome.kind === 'budget') {

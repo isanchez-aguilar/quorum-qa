@@ -103,12 +103,14 @@ export function findingText(finding: Pick<Finding, 'trigger' | 'impact'>): strin
 
 // Two thresholds, because "same defect" cannot be decided by a lexical metric.
 //
-// MERGE_JACCARD: findings are merged automatically only on a STRONG match, the token Jaccard of
-// trigger + impact at or above this value. Paraphrases of one defect score 0.12 to 0.21 on the
-// ten rows of IMPLEMENTATION.md 5.5, and two different defects ("Missing authorization when
-// deleting users" and "Missing audit when deleting users") share enough words to look alike, so
-// only near-identical wording merges. A missed merge costs a duplicate; a false merge hides a
-// defect, so the threshold errs high.
+// MERGE_JACCARD: findings are merged automatically only on a STRONG match: the token Jaccard of
+// the trigger AND the token Jaccard of the impact are each at or above this value. Paraphrases of
+// one defect score 0.12 to 0.21 on the ten rows of IMPLEMENTATION.md 5.5, and two different
+// defects ("Missing authorization when deleting users" and "Missing audit when deleting users")
+// share enough words to look alike. They are compared field by field because a long impact
+// sentence in common would otherwise drown the three words of the trigger that make them
+// different (combined Jaccard 0.895 for that pair, trigger Jaccard 0.5). A missed merge costs a
+// duplicate; a false merge hides a defect, so the threshold errs high.
 export const MERGE_JACCARD = 0.85;
 // RELATED_OVERLAP: below the merge threshold, findings at the same place whose overlap coefficient
 // reaches this value are not merged but annotated as possibly related, on both findings. The
@@ -121,26 +123,47 @@ export const MIN_SHARED_TOKENS = 2;
 
 export type TokenSet = ReadonlySet<string>;
 
-/** The word tokens two findings are compared on: trigger + impact. */
-export function findingTokens(finding: Pick<Finding, 'trigger' | 'impact'>): TokenSet {
-  return toSet(tokenize(findingText(finding)));
+// The word tokens of a finding: the trigger and the impact apart (the merge compares them one by
+// one), and both together (the related annotation compares the whole text).
+export interface FindingTokens {
+  trigger: TokenSet;
+  impact: TokenSet;
+  all: TokenSet;
 }
 
-/** Jaccard of two token sets, or 0 when they share fewer than MIN_SHARED_TOKENS words. */
-export function strongSimilarity(a: TokenSet, b: TokenSet): number {
+/** The word tokens two findings are compared on: trigger, impact, and both together. */
+export function findingTokens(finding: Pick<Finding, 'trigger' | 'impact'>): FindingTokens {
+  const trigger = toSet(tokenize(finding.trigger));
+  const impact = toSet(tokenize(finding.impact));
+  return { trigger, impact, all: new Set([...trigger, ...impact]) };
+}
+
+// Jaccard of two token sets. Two sets without a single content word say nothing different from
+// each other, so they count as equal; the shared-words rule of the callers still applies.
+function jaccard(a: TokenSet, b: TokenSet): number {
+  if (a.size === 0 && b.size === 0) return 1;
   const shared = intersectionSize(a, b);
-  if (shared < MIN_SHARED_TOKENS) return 0;
   return shared / (a.size + b.size - shared);
 }
 
-/** Overlap coefficient of two token sets, or 0 when they share fewer than MIN_SHARED_TOKENS words. */
-export function relatedSimilarity(a: TokenSet, b: TokenSet): number {
-  const shared = intersectionSize(a, b);
-  if (shared < MIN_SHARED_TOKENS) return 0;
-  return shared / Math.min(a.size, b.size);
+/**
+ * The merge score of two findings: the LOWER of the Jaccard of their triggers and the Jaccard of
+ * their impacts, so both must reach MERGE_JACCARD. It is 0 when the findings share fewer than
+ * MIN_SHARED_TOKENS words in total.
+ */
+export function strongSimilarity(a: FindingTokens, b: FindingTokens): number {
+  if (intersectionSize(a.all, b.all) < MIN_SHARED_TOKENS) return 0;
+  return Math.min(jaccard(a.trigger, b.trigger), jaccard(a.impact, b.impact));
 }
 
-/** Jaccard of two findings on trigger + impact (0 under two shared words). */
+/** Overlap coefficient of the whole text of two findings, or 0 under MIN_SHARED_TOKENS shared words. */
+export function relatedSimilarity(a: FindingTokens, b: FindingTokens): number {
+  const shared = intersectionSize(a.all, b.all);
+  if (shared < MIN_SHARED_TOKENS) return 0;
+  return shared / Math.min(a.all.size, b.all.size);
+}
+
+/** The merge score of two findings (see strongSimilarity). */
 export function findingJaccard(a: Finding, b: Finding): number {
   return strongSimilarity(findingTokens(a), findingTokens(b));
 }
@@ -150,7 +173,7 @@ export function findingOverlap(a: Finding, b: Finding): number {
   return relatedSimilarity(findingTokens(a), findingTokens(b));
 }
 
-/** The text of the two findings is near-identical: the only case that is merged. */
+/** The trigger and the impact are each near-identical: the only case that is merged. */
 export function isStrongMatch(a: Finding, b: Finding): boolean {
   return findingJaccard(a, b) >= MERGE_JACCARD;
 }

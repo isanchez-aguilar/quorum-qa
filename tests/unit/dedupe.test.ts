@@ -608,3 +608,143 @@ describe('purity and edge cases', () => {
     expect(inputs.every((f) => f.possibly_related === undefined)).toBe(true);
   });
 });
+
+describe('M1 final round fix 3: the trigger and the impact must each be near-identical', () => {
+  // The reviewer's pair: a long impact sentence in common drowns the three words of the trigger
+  // that make them different defects.
+  const LONG_IMPACT =
+    'The deletion endpoint accepts requests from remote clients and removes account records ' +
+    'permanently, exposing production customer data to misuse.';
+  const authorization = finding({
+    file: 'src/users.ts',
+    line: 10,
+    severity: 'IMPORTANT',
+    confidence: 0.7,
+    family: 'google',
+    trigger: 'Missing authorization when deleting users',
+    impact: LONG_IMPACT,
+    fix: 'Check that the caller is an administrator before deleting.',
+  });
+  const audit = finding({
+    file: 'src/users.ts',
+    line: 12,
+    severity: 'IMPORTANT',
+    confidence: 0.7,
+    family: 'openai',
+    trigger: 'Missing audit when deleting users',
+    impact: LONG_IMPACT,
+    fix: 'Write an audit record for every deletion.',
+  });
+
+  it('keeps the pair separate at 0.70 and annotates it, although the combined text matches', () => {
+    // What used to merge them: the Jaccard of the combined text.
+    expect(tokenJaccard(findingText(authorization), findingText(audit))).toBeGreaterThanOrEqual(
+      MERGE_JACCARD,
+    );
+    expect(tokenJaccard(authorization.impact, audit.impact)).toBe(1);
+    expect(tokenJaccard(authorization.trigger, audit.trigger)).toBeLessThan(MERGE_JACCARD);
+    expect(isStrongMatch(authorization, audit)).toBe(false);
+    expect(findingJaccard(authorization, audit)).toBeLessThan(MERGE_JACCARD);
+    expect(isRelated(authorization, audit)).toBe(true);
+
+    const output = dedupeFindings([authorization, audit]);
+    expect(output).toHaveLength(2);
+    expect(output.map((f) => f.confidence)).toEqual([0.7, 0.7]);
+    expect(output.map((f) => f.severity)).toEqual(['IMPORTANT', 'IMPORTANT']);
+    expect(output.map((f) => f.line)).toEqual([10, 12]);
+    const [first, second] = output as [Finding, Finding];
+    expect(first.possibly_related).toEqual([
+      { provider: audit.provider, model: audit.model, line: 12, similarity: expect.any(Number) },
+    ]);
+    expect(second.possibly_related).toEqual([
+      {
+        provider: authorization.provider,
+        model: authorization.model,
+        line: 10,
+        similarity: expect.any(Number),
+      },
+    ]);
+    expect(first.verification_note).toBeUndefined();
+    expect(second.verification_note).toBeUndefined();
+  });
+
+  it('is the same in any order and when run twice', () => {
+    const once = dedupeFindings([authorization, audit]);
+    expect(dedupeFindings([audit, authorization])).toEqual(once);
+    expect(dedupeFindings(once)).toEqual(once);
+  });
+
+  it('a long trigger in common does not merge two different impacts either', () => {
+    const trigger =
+      'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november ' +
+      'oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu';
+    const a = finding({
+      file: 'src/users.ts',
+      line: 10,
+      severity: 'IMPORTANT',
+      confidence: 0.7,
+      family: 'google',
+      trigger,
+      impact: 'Audit trail missing',
+      fix: '',
+    });
+    const b = finding({
+      file: 'src/users.ts',
+      line: 11,
+      severity: 'IMPORTANT',
+      confidence: 0.7,
+      family: 'openai',
+      trigger,
+      impact: 'Anyone deletes',
+      fix: '',
+    });
+    expect(tokenJaccard(findingText(a), findingText(b))).toBeGreaterThanOrEqual(MERGE_JACCARD);
+    expect(tokenJaccard(a.impact, b.impact)).toBe(0);
+    expect(isStrongMatch(a, b)).toBe(false);
+    const output = dedupeFindings([a, b]);
+    expect(output).toHaveLength(2);
+    expect(output.map((f) => f.confidence)).toEqual([0.7, 0.7]);
+    expect(output.every((f) => f.possibly_related?.length === 1)).toBe(true);
+  });
+
+  it('still merges when both fields are near-identical, one extra word in each', () => {
+    const a = finding({
+      line: 10,
+      severity: 'IMPORTANT',
+      confidence: 0.7,
+      family: 'google',
+      trigger: SAME_TEXT.trigger,
+      impact: SAME_TEXT.impact,
+      fix: '',
+    });
+    const b = finding({
+      line: 12,
+      severity: 'IMPORTANT',
+      confidence: 0.7,
+      family: 'openai',
+      trigger: `${SAME_TEXT.trigger} Monitoring`,
+      impact: `${SAME_TEXT.impact} Monitoring`,
+      fix: '',
+    });
+    expect(tokenJaccard(a.trigger, b.trigger)).toBeGreaterThanOrEqual(MERGE_JACCARD);
+    expect(tokenJaccard(a.impact, b.impact)).toBeGreaterThanOrEqual(MERGE_JACCARD);
+    expect(isStrongMatch(a, b)).toBe(true);
+    const output = dedupeFindings([a, b]);
+    expect(output).toHaveLength(1);
+    expect(output[0]?.confidence).toBeCloseTo(0.95, 9);
+  });
+
+  it('an empty impact on both sides does not block an identical trigger', () => {
+    const a = finding({
+      line: 10,
+      severity: 'IMPORTANT',
+      confidence: 0.6,
+      family: 'google',
+      trigger: SAME_TEXT.trigger,
+      impact: '',
+      fix: '',
+    });
+    const output = dedupeFindings([a, { ...a, line: 11, family: 'openai', provider: 'codex' }]);
+    expect(output).toHaveLength(1);
+  });
+});
