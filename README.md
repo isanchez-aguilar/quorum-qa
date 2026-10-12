@@ -24,6 +24,20 @@ Quorum runs several AI coding CLIs over a change: Codex, Claude Code, Antigravit
 
 Quorum calls each vendor's own CLI, signed in with your own subscription. It never stores, requests or proxies API keys.
 
+## Development
+
+Node 22 and [pnpm](https://pnpm.io) are required.
+
+```sh
+pnpm install
+pnpm test        # vitest
+pnpm typecheck
+pnpm build       # compiles src/ to dist/; bin/quorum.js runs it
+node bin/quorum.js --help
+```
+
+Tests use synthetic fixtures and never call a provider CLI.
+
 ## License
 
 [Apache-2.0](LICENSE). "Quorum" as a project name is reserved; see [TRADEMARKS.md](TRADEMARKS.md). Contributions are accepted under the DCO; see [CONTRIBUTING.md](CONTRIBUTING.md).
