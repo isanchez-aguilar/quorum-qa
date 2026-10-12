@@ -193,8 +193,8 @@ export interface ReviewContext {
 
 export interface QuorumConfig {
   base: string;
-  checks: string[][];
-  author?: Family;
+  checks: string[][];              // required: no default
+  author?: string;                 // alias ("claude", "codex", "gemini", "qwen") or a Family; resolved by resolveAuthorFamily()
   tiers: Record<Tier, string[]>;
   escalate: {
     focus: string[];
@@ -253,6 +253,19 @@ export interface ReproductionProposal {
   failureReason?: string;
 }
 
+// Parsed from the test runner's JSON reporter (vitest or jest). Quorum never parses human-readable output.
+export interface TestReport {
+  runner: 'vitest' | 'jest';
+  tests: Array<{
+    file: string;                 // path relative to the worktree root
+    name: string;
+    status: 'passed' | 'failed' | 'skipped';
+    failureKind?: 'assertion' | 'error' | 'import' | 'syntax' | 'timeout';
+    message?: string;             // first line of the failure message, compared with `expect`
+  }>;
+  suiteErrors: string[];          // load or compile errors that prevented tests from running
+}
+
 export interface ProviderAdapter {
   readonly name: string;
   readonly defaultFamily: Family;
@@ -283,7 +296,7 @@ export interface ProviderAdapter {
 - **Tasks (Ordered):**
   1. Initialize package structure: ESM `"type": "module"`, pinned dependencies, strict `tsconfig.json`, `vitest.config.ts`.
   2. Implement `src/types/index.ts` defining all domain interfaces.
-  3. Implement `src/cli/args.ts` to parse CLI flags (`--help`, `--version`, `--mode`, `--diff`, `--spec`, `--inventory`, `--images`, `--since`, `--dry-run`, `--reproduce`) without external libraries.
+  3. Implement `src/cli/args.ts` to parse CLI flags (`--help`, `--version`, `--mode`, `--diff`, `--spec`, `--inventory`, `--images`, `--rules`, `--author`, `--since`, `--dry-run`, `--reproduce`) without external libraries.
   4. Implement `src/config/schema.ts` and `src/config/index.ts` loading and validating `quorum.config.json` with fallback defaults.
   5. Implement `bin/quorum.js` and `src/cli/index.ts` binding `--help` and subcommands.
   6. Add unit tests for configuration parsing and argument tokenization.
@@ -292,10 +305,14 @@ export interface ProviderAdapter {
   - `parseArgs(argv: string[]): { command: string; flags: Record<string, any>; positionals: string[] }`
   - `loadConfig(configPath?: string): Promise<QuorumConfig>`
   - `validateConfig(raw: unknown): QuorumConfig`
+  - `resolveAuthorFamily(author: string): Family` (claude→anthropic, codex→openai, gemini→google, qwen→local; a Family passes through; anything else is an error)
 - **Test Cases:**
   - `testArgs_HelpFlag`: Input `["--help"]` -> Expected `{ flags: { help: true }, command: "help" }`.
   - `testArgs_ReviewFlags`: Input `["review", "--mode", "feature", "--diff", "origin/main...HEAD"]` -> Expected `{ command: "review", flags: { mode: "feature", diff: "origin/main...HEAD" } }`.
-  - `testConfig_ValidDefault`: Input `{}` -> Expected full `QuorumConfig` matching PLAN.md defaults.
+  - `testConfig_ChecksRequired`: Input `{}` -> Expected validation error: `checks is required`.
+  - `testConfig_PlanExample`: Input the full example config from PLAN.md -> Expected it loads unchanged, and `author: "claude"` resolves to `anthropic`.
+  - `testConfig_UnknownAuthor`: Input `{ checks: [["npm","test"]], author: "bard" }` -> Expected validation error naming the allowed aliases.
+  - `testArgs_AuthorAndRules`: Input `["review", "--mode", "redesign", "--rules", "r.md", "--author", "claude"]` -> Expected both flags parsed.
   - `testConfig_InvalidChecks`: Input `{ checks: "pnpm lint" }` -> Expected validation error: `checks must be an array of string arrays`.
   - `testConfig_MissingBaseFallback`: Input `{ checks: [["npm", "test"]] }` -> Expected `base` defaults to `"origin/main"`.
 - **Acceptance Criteria:** `quorum --help` exits with code 0 and prints usage; `loadConfig` passes 100% of schema tests.
@@ -335,7 +352,7 @@ export interface ProviderAdapter {
 ### Milestone M2: Context Builder, Git Blame & Windows Resolver
 - **Scope:** Git diff extraction, origin tagging via `git blame`, deterministic checks runner, and spawn-safe Windows command resolver.
 - **Tasks (Ordered):**
-  1. Implement `src/checks/resolver.ts` resolving executables via `PATH`/`PATHEXT`, escaping `.cmd`/`.bat` arguments for `cmd.exe /d /s /c`, and rejecting shell metacharacters (`& | < > ^ % ! \r \n "`).
+  1. Implement `src/checks/resolver.ts` resolving executables via `PATH`/`PATHEXT`, escaping `.cmd`/`.bat` arguments for `cmd.exe /d /s /c`, and rejecting shell metacharacters (`& | < > ^ % ! ; \r \n "`). For `.cmd`/`.bat` the command line passed to `cmd.exe` always starts with the **absolute, quoted path** that PATH resolution returned, never the bare name, so a same-named shim in the working directory can't win. The spawn uses `windowsVerbatimArguments: true` so Node doesn't re-quote it.
   2. Implement `src/checks/index.ts` running deterministic checks via safe `child_process.spawn`.
   3. Implement `src/context/git.ts` extracting unified diffs, changed files, and AST symbol context headers without shells.
   4. Implement `src/context/blame.ts` inspecting commit history at base commit to set `origin: introduced | pre-existing | improvement`.
@@ -349,7 +366,9 @@ export interface ProviderAdapter {
   - `determineOrigin(file: string, line: number, baseCommit: string, cwd: string, runner: CommandRunner): Promise<Origin>`
 - **Test Cases:**
   - `testResolver_PosixDirect`: Input `("git", ["status"])` on POSIX -> Expected `{ file: "/usr/bin/git", args: ["status"] }`.
-  - `testResolver_WindowsCmdShim`: Input `("pnpm", ["lint"])` on Windows -> Expected `{ file: "C:\\Windows\\System32\\cmd.exe", args: ["/d", "/s", "/c", "\"pnpm.cmd\" \"lint\""] }`.
+  - `testResolver_WindowsCmdShim`: Input `("pnpm", ["lint"])` on Windows, with PATH containing `C:\\Program Files\\nodejs` -> Expected `{ file: "<ComSpec, default C:\\Windows\\System32\\cmd.exe>", args: ["/d", "/s", "/c", "\"\"C:\\Program Files\\nodejs\\pnpm.cmd\" \"lint\"\""] }` (the outer quotes are the ones `/s` strips).
+  - `testResolver_ShimInCwdIgnored`: A `pnpm.cmd` in the cwd and another on PATH -> Expected the PATH one's absolute path; the cwd is never searched.
+  - `testResolver_PathWithSpaces`: An executable under a directory with spaces -> Expected it runs with the arguments intact.
   - `testResolver_MetacharacterInjection`: Input `("pnpm", ["lint; rm -rf /"])` -> Expected Error `Disallowed command metacharacter: ;`.
   - `testBlame_IntroducedLine`: Line touched in diff after base -> Expected `origin: "introduced"`.
   - `testBlame_PreexistingLine`: Line unchanged in diff and committed prior to base commit -> Expected `origin: "pre-existing"`.
@@ -453,13 +472,32 @@ export interface ProviderAdapter {
   7. Conduct Isaac-approved smoke test (at most 6 calls on real diff).
 - **Files Touched:** `src/reproduce/worktree.ts`, `src/reproduce/isolation.ts`, `src/reproduce/evaluator.ts`, `src/reproduce/index.ts`, `src/providers/claude.ts`, `src/providers/qwen.ts`, `tests/integration/reproduce.test.ts`.
 - **Public Functions & Signatures:**
-  - `reproduceBlocker(proposal: ReproductionProposal, context: ReviewContext, config: QuorumConfig, runner: CommandRunner): Promise<{ reproduced: boolean; status: string; reason?: string }>`
-  - `createDisposableWorktree(repoPath: string, commit: string): Promise<{ worktreePath: string; cleanup: () => Promise<void> }>`
-  - `runIsolatedTest(worktreePath: string, testCommand: string[], runner: CommandRunner): Promise<{ exitCode: number; stdout: string; stderr: string }>`
+  - `reproduceBlocker(finding: Finding, proposal: ReproductionProposal, context: ReviewContext, config: QuorumConfig, runner: CommandRunner): Promise<{ status: 'reproduced' | 'not-reproduced' | 'rejected' | 'unproven'; reason?: string }>` (receives the finding, so `origin` decides whether the base check runs)
+  - `createDisposableWorktree(repoPath: string, commit: string): Promise<{ worktreePath: string; cleanup: () => Promise<void> }>` (always under `<repo>/.quorum/worktrees/`)
+  - `writeProposedTest(worktreePath: string, relPath: string, content: string, testGlobs: string[]): Promise<string>` (returns the absolute path written)
+  - `runIsolatedTest(worktreePath: string, testFile: string, config: QuorumConfig['reproduce'], runner: CommandRunner): Promise<{ timedOut: boolean; report: TestReport | null; exitCode: number }>` (runs **only** `testFile`)
+  - `evaluateReproduction(report: TestReport, testFile: string, expect: string): 'assertion-failure-matching' | 'assertion-failure-other-message' | 'non-assertion-failure' | 'passed' | 'other-test-failed'`
+- **Writing the proposed test safely (`writeProposedTest`), the same at head and at base:**
+  1. Reject the path if it is absolute, contains `..` segments, NUL or `:` (Windows streams), or doesn't match `testGlobs`.
+  2. Walk the parent directories from the worktree root down. Each one that exists must be a real directory, not a symlink or junction (`lstat`), and its `realpath` must stay inside the worktree's `realpath`. Missing ones are created one at a time with `mkdir` (not recursive), and checked again after creation.
+  3. Create the file with flag `wx` (exclusive), so an existing file is never overwritten. If the file exists, the proposal is **rejected**.
+  4. All of this happens before the container starts. Nothing is written outside `.quorum/worktrees/<id>/`.
+- **Container contract (`isolation: "container"`):**
+  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per lockfile hash: same image, network **on**, only the worktree mounted, and the lockfile's own command (`pnpm install --frozen-lockfile`, `npm ci` or `yarn install --immutable`, picked by which lockfile exists). The result is cached as a volume keyed by the lockfile hash.
+  - **Test step:** network **off** (`--network none`), non-root user (`--user 1000:1000`), `--read-only` root filesystem with a tmpfs `/tmp`, the worktree mounted read-write at `/work`, the dependency volume mounted read-only, `--memory` and `--pids-limit` caps, and a hard timeout (`reproduce.timeoutSeconds`, default 120) enforced by killing the container.
+  - **Missing infrastructure:** no container runtime, or a failed preparation step -> status `unproven` with the reason. The severity is not changed. An infrastructure failure is never read as "not reproduced".
+- **Evaluation:** `reproduced` requires `assertion-failure-matching` at head, **in `testFile` only**. For `origin: introduced`, the same file must also give `passed` at base. For `pre-existing`, the base run is skipped. Any other result -> `not-reproduced`, and the finding is downgraded to IMPORTANT with the reason.
+- **Synthetic infrastructure for tests:** `tests/fixtures/repro-repo/` (a tiny vitest project with a lockfile) and a fake container runner that replays recorded `TestReport` JSON. The real-container tests run only when a runtime is present, and are skipped otherwise (never in CI without one).
 - **Test Cases:**
   - `testReproduction_RealAssertionFailureKeepsBlocker`: Test fails with assertion error on head; passes on base -> Retained as BLOCKER.
   - `testReproduction_SyntaxErrorDowngrades`: Test fails with `SyntaxError: Unexpected token` -> Downgraded to IMPORTANT.
   - `testReproduction_InvalidPathRejected`: Test proposal specifies `../../foo.test.ts` or non-test file -> Rejected.
+  - `testReproduction_SymlinkParentRejected`: `tests/` is a symlink (or junction) to a directory outside the worktree -> Rejected before anything is written.
+  - `testReproduction_ExistingFileNotOverwritten`: The proposed path already exists at head or base -> Rejected; the file is unchanged.
+  - `testReproduction_PreexistingSkipsBase`: An `origin: pre-existing` BLOCKER whose test fails at head (and also at base) -> Reproduced; base is not required to pass.
+  - `testReproduction_WrongMessageDowngrades`: An assertion fails with a message that doesn't match `expect` -> Downgraded.
+  - `testReproduction_OtherTestFailureIgnored`: Only an unrelated test fails -> Not reproduced (the command ran `testFile` only).
+  - `testReproduction_NoRuntimeUnproven`: No container runtime -> `unproven`, severity unchanged.
   - `testReproduction_SandboxEscapeRejected`: Test attempts network socket connection or writing to parent directory -> Fails in sandbox, rejected.
 - **Acceptance Criteria:** Malicious or malformed reproduction tests are safely caught or rejected; approved smoke test runs on real diff and outputs verified findings.
 - **Dependencies:** M4, M5.
@@ -507,12 +545,12 @@ The verifier eliminates AI hallucinations before findings reach deduplication or
                                          │
                         [5. Fuzzy Search in Radius W = ±10 Lines]
                                          │
-                             Similarity >= 0.80?
+                             Similarity >= 0.85?
                                          ├─── YES ──► [VERIFY: Correct Line, Flag Fuzzy]
                                          │
                                          NO
                                          │
-                     [6. Global File Search (Exact & Fuzzy >= 0.80)]
+                     [6. Global File Search (Exact & Fuzzy >= 0.85)]
                                          │
                               Global Match Found?
                                          ├─── YES ──► [VERIFY: Correct Line from Far Drift]
@@ -548,8 +586,9 @@ The verifier eliminates AI hallucinations before findings reach deduplication or
 3. **Local Search:**
    - Attempt exact match of normalized quote against slices of lines within the window.
    - If an exact match is found at line $L_{match}$, set `finding.line = L_{match}` and verify.
-   - If no exact match, compute token Jaccard and normalized Levenshtein similarity against candidate slices of identical line length.
-   - If similarity $\ge 0.80$, set `finding.line = L_{match}`, flag as verified with fuzzy note.
+   - If no exact match, compute **one** similarity against every candidate slice with the same number of lines as the quote: $\text{sim} = 1 - \frac{\text{levenshtein}(q, c)}{\max(|q|, |c|)}$ on the normalized text (characters, not tokens). There is one threshold everywhere: $\text{FUZZY} = 0.85$.
+   - If the best $\text{sim} \ge 0.85$, set `finding.line = L_{match}`, flag as verified with a fuzzy note.
+   - **Tie-breaks, in order:** an exact match beats a fuzzy one; a local match beats a global one; a higher sim wins; then the smallest $|L_{match} - L|$; then the lower line number.
 4. **Global Search (Drift Correction):**
    - If local search fails (e.g. Gemini cites line 5200 in a 600-line file), scan the entire file for the exact normalized quote.
    - If exact match is found at line $L_{global}$, correct `finding.line = L_{global}` and mark verified.
@@ -573,13 +612,17 @@ The verifier eliminates AI hallucinations before findings reach deduplication or
 | 8 | `../secret.env` | 1 | `DB_PASS=secret` | File exists outside root | **REJECTED** | - | Directory traversal attempt rejected. |
 | 9 | `src/%2e%2e/etc/passwd` | 1 | `root:x:0:0` | Literal `%2e%2e` directory, which doesn't exist | **REJECTED** | - | Paths are never URL-decoded, so this is just a missing file. |
 | 10 | `C:\Windows\System32\cmd.exe` | 1 | `binary` | Absolute Windows system path | **REJECTED** | - | Path escapes repository confinement. |
-| 11 | `src/pay.ts` | 15 | `total = price * (1 + TAX_RATE)` | Line 15: `total = price * (1 + TAX_RATIO)` | **VERIFIED** | 15 | Minor typo in quote (similarity 0.89 $\ge 0.80$). |
+| 11 | `src/pay.ts` | 15 | `total = price * (1 + TAX_RATE)` | Line 15: `total = price * (1 + TAX_RATIO)` | **VERIFIED** | 15 | Minor typo in quote (character sim ≈ 0.94 $\ge 0.85$). |
 | 12 | `src/pay.ts` | 15 | `chargeCreditCard(customer, amount)` | Line 15: `let total = price * quantity;` | **REJECTED** | - | Hallucinated code (similarity $< 0.30$). |
 | 13 | `src/pay.ts` | 15 | `   ` | Line 15: `let total = 0;` | **REJECTED** | - | Empty or whitespace-only quote rejected. |
 | 14 | `src/ui.tsx` | 20 | `<div>\n  <span>Hello</span>\n</div>` | Line 20: `<div>\n    <span>Hello</span>\n  </div>` | **VERIFIED** | 20 | Multiline block with indentation drift normalized. |
 | 15 | `src/dup.ts` | 10 | `return null;` | Lines 5, 12, 85: `return null;` | **CORRECTED** | 12 | Ambiguous quote; closest line within radius selected. |
 | 16 | `src/empty.ts` | 1 | `const x = 1;` | Empty file (0 lines) | **REJECTED** | - | Cited line exceeds file bounds, quote not present. |
 | 17 | `src\win\path.ts` | 5 | `export const WIN = true;` | Line 5: `export const WIN = true;` | **VERIFIED** | 5 | Windows backslash path converted to forward slash. |
+| 18 | `src/t.ts` | 10 | a quote whose best match has sim 0.849 | — | **REJECTED** | - | Just below the single 0.85 threshold. |
+| 19 | `src/t.ts` | 10 | a quote whose best match has sim exactly 0.85 | — | **VERIFIED** | match line | Threshold is inclusive. |
+| 20 | `src/dup.ts` | 10 | `return null;` | Lines 8 and 12: `return null;` | **VERIFIED** | 8 | Equal distance; the lower line number wins. |
+| 21 | `src/t.ts` | 10 | `foo();` | Line 30 exact, line 12 fuzzy 0.9 | **CORRECTED** | 12 | Local beats global, even when global is exact. |
 
 ---
 
@@ -648,7 +691,7 @@ Deduplication groups findings reporting the same defect across independent model
 
 ### 5.5 Dedupe Test Cases Table
 
-> **Correction:** the Similarity column is illustrative. It is **not** what token Jaccard gives. Rows 2 and 6 are paraphrases with almost no shared words ("Payment captured twice on retry" vs "Idempotency key missing, double charge" scores close to 0). Lexical similarity alone can't merge them. **M1 must calibrate the metric** against this table, comparing (a) token Jaccard on trigger + impact, (b) character-trigram similarity, and (c) location-first merging: the same verified line ± 2 with a low lexical floor. Pick the one that passes. If none does, paraphrase pairs stay separate, and the report groups them as "possibly related" rather than inflating confidence.
+> **Correction:** the Similarity column is illustrative. It is **not** what token Jaccard gives. Rows 2 and 6 are paraphrases with almost no shared words ("Payment captured twice on retry" vs "Idempotency key missing, double charge" scores close to 0). Lexical similarity alone can't merge them. **M1 must calibrate the metric** against this table, comparing (a) token Jaccard on trigger + impact, (b) character-trigram similarity, and (c) location-first merging: the same verified line ± 2 with a low lexical floor. Pick the one that passes. If none does, paraphrase pairs stay separate, and the report groups them as "possibly related" rather than inflating confidence. **The confidence column is not illustrative:** it is exact arithmetic from 5.3, and M1 tests it separately from the similarity calibration.
 
 | # | Finding A | Finding B | Similarity | Result | Final Sev | Final Conf | Rationale |
 |---|---|---|---|---|---|---|---|
@@ -660,7 +703,7 @@ Deduplication groups findings reporting the same defect across independent model
 | 6 | L80, `anthropic`, Sev: `BLOCKER`, Conf: 0.75, "Payment captured twice on retry" | L81, `google`, Sev: `BLOCKER`, Conf: 0.80, "Idempotency key missing, double charge" (Plus L82, `openai`, Sev: `BLOCKER`, Conf: 0.85) | 0.74, 0.77 | **MERGED** | `BLOCKER` | 1.00 | Three distinct families agree. Maximum consensus achieves confidence 1.00. |
 | 7 | `src/a.ts` L10, `google`, "Unused variable `x`" | `src/b.ts` L10, `google`, "Unused variable `x`" | 1.00 | **SEPARATE** | - | - | Different files are partitioned into separate clusters. |
 | 8 | L60, `openai`, Sev: `OPTIONAL`, Conf: 0.50, "Missing JSDoc comment on public method" | L63, `google`, Sev: `OPTIONAL`, Conf: 0.50, "Public export lacks documentation comments" | 0.71 | **MERGED** | `OPTIONAL` | 0.75 | Line $\Delta = 3 \le 5$, similarity $\ge 0.70$. Merged and boosted to 0.75. |
-| 9 | L90, `google`, Sev: `IMPORTANT`, Conf: 0.70, Origin: `introduced` | L92, `anthropic`, Sev: `IMPORTANT`, Conf: 0.75, Origin: `pre-existing` | 0.85 | **MERGED** | `IMPORTANT` | 0.95 | Line within diff hunk; origin resolves to `introduced` based on git blame confirmation. |
+| 9 | L90, `google`, Sev: `IMPORTANT`, Conf: 0.70, Origin: `introduced` | L92, `anthropic`, Sev: `IMPORTANT`, Conf: 0.75, Origin: `pre-existing` | 0.85 | **MERGED** | `IMPORTANT` | 1.00 | Line within diff hunk; origin resolves to `introduced` based on git blame confirmation. |
 | 10 | L15, `google`, Sev: `IMPORTANT`, Conf: 0.80, "Unclosed database client leak" | L17, `openai`, Sev: `IMPORTANT`, Conf: 0.80, "Memory leak in query cache buffer" | 0.42 | **SEPARATE** | - | - | Proximity matches ($\Delta = 2$), but text similarity (0.42) is below threshold 0.70. |
 
 ---
@@ -676,6 +719,7 @@ Deduplication groups findings reporting the same defect across independent model
    - **Rule 1 (Focus Keyword):** The finding `file`, `trigger`, or `impact` contains any keyword in `config.escalate.focus` (default: `["money", "auth", "permissions", "crypto", "billing"]`).
    - **Rule 2 (Uncertainty):** The triage model confidence score is strictly below `config.escalate.belowConfidence` (default: `0.70`).
    - **Rule 3 (Severe Finding):** The triage model classifies the finding as `BLOCKER`.
+   - **Rule 3b (Local-only):** Every finding whose only sources are `local` (Qwen) escalates to the `review` tier, whatever its confidence. If no non-local reviewer is available, it is reported under "Unconfirmed (local model only)", never as a verified IMPORTANT or BLOCKER. Test: `testCascade_QwenOnlyNeverFinal` — Qwen returns IMPORTANT at 0.90 with no focus word -> it escalates; with the review tier unavailable, it is listed as unconfirmed.
    - **Rule 4 (Syntax/Parse Failure):** The triage model returns unparseable JSON or times out; the affected hunk escalates to the `review` tier.
 3. **Confirm Evaluation:**
    - The confirm model reviews the specific hunk and escalated finding.
@@ -700,12 +744,13 @@ Deduplication groups findings reporting the same defect across independent model
 - `budget.maxMinutes` (default: 20 minutes elapsed runtime).
 - If either ceiling is reached:
   1. Abort any unstarted escalation calls.
-  2. Complete in-flight requests.
+  2. Every call gets a deadline equal to the run's remaining time (retries share it). The runner kills the process tree at the deadline, and agy also gets `--print-timeout <remaining>s`. A cancelled call yields no findings and is logged as `timeout` in the ledger.
+     Test: `testBudget_DeadlineKillsInFlight` — fake clock and a fake runner that never returns -> it is killed at `maxMinutes`, and the run reports what it has.
   3. Run verifier and dedupe on all gathered findings.
   4. Emit report with warning: `"Run terminated early: review budget ceiling reached."`
 
 ### 6.4 What `--dry-run` Prints
-`quorum review ... --dry-run` spends zero quota, initiates no child processes other than local git inspection, and outputs the following execution plan:
+`quorum review ... --dry-run` spends zero quota and starts no child process other than local git. Quota comes only from the last reading saved in the ledger, with its time, or shows `unknown`. Unknown quota never silently drops the floor: the provider stays eligible, but the plan and the report say "floor unchecked", and a 429 during the run marks its group unavailable. Its output looks like this:
 
 ```
 === Quorum Review Plan (Dry Run) ===
@@ -725,10 +770,10 @@ Deterministic Pre-flight Checks (Phase 1):
   [3] pnpm test
 
 Provider Quota Status:
-  agy (google group):      84% remaining [ELIGIBLE]
-  agy (anthropic group):   45% remaining [ELIGIBLE]
-  codex (openai group):    62% remaining [ELIGIBLE]
-  qwen (local):            Online (http://127.0.0.1:8080/v1) [ELIGIBLE]
+  agy (google group):      84% at 2026-10-12 09:40 from the ledger (stale after 15 min) [ELIGIBLE]
+  agy (anthropic group):   unknown (no reading in the ledger) [ELIGIBLE, floor unchecked]
+  codex (openai group):    unknown [ELIGIBLE, floor unchecked]
+  qwen (local):            not checked in dry-run
 
 Execution Cascade:
   [Phase 2: Triage]
@@ -1026,10 +1071,10 @@ Deterministic Checks: ✅ `pnpm lint` passed · ✅ `pnpm typecheck` passed · �
 |---|---|---|
 | 1. Git Installed & Working Copy | `git rev-parse --is-inside-work-tree` | `[FAIL] Git repository not detected. Run quorum from the root of a valid git workspace.` |
 | 2. Deterministic Checks Available | Resolved binaries from `config.checks` (e.g. `pnpm --version`) | `[FAIL] Configured check executable '%CMD%' not found on PATH. Install it or update quorum.config.json.` |
-| 3. agy CLI on PATH | `agy --version` | `[FAIL] Antigravity CLI (agy) is not installed on PATH. Visit https://antigravity.google/cli to install.` |
+| 3. agy CLI on PATH | Resolve `agy` through PATH/PATHEXT, then `agy --help` (agy's help lists no `--version`; the version is reported as unknown, which is not a failure) | `[FAIL] Antigravity CLI (agy) is not on PATH.` |
 | 4. agy Models List Accessible | `agy models` | `[FAIL] 'agy models' failed. Open agy interactively once and sign in with your Google account.` (agy has no `auth` subcommand.) |
 | 5. agy Configured Models Validated | Inspect output of `agy models` against configured model IDs | `[FAIL] Configured model '%MODEL%' is not in 'agy models'. Update quorum.config.json to an available model id.` |
-| 6. agy Quota Read Accessible [ASSUMPTION 3] | The `/usage` slash command, spawned without a shell (so no MSYS path conversion applies) | `[WARN] Could not read agy quota. Quorum will run without a quota floor for agy.` |
+| 6. agy Quota Read Accessible [ASSUMPTION 3] | The `/usage` slash command, spawned without a shell (so no MSYS path conversion applies) | `[WARN] Could not read agy quota. agy stays eligible, marked "floor unchecked"; a 429 will take its group out of the run.` |
 | 7. agy Read Probe (1 call, counts against the M4 probe budget) | `agy --model <triage id> --sandbox --output-format json --print="Using only file-read tools, return the first line of README.md"`, run in a disposable worktree | `[FAIL] agy could not read the worktree. Add read_file(<worktree parent>) to permissions.allow in ~/.gemini/antigravity-cli/settings.json.` |
 | 8. agy Permissions Present [ASSUMPTION 1] | Read `~/.gemini/antigravity-cli/settings.json` (`permissions.allow` / `permissions.deny`, entries like `read_file(<path>)`). Never write it. | `[FAIL] agy permissions don't allow reading <worktree parent> or don't deny write and shell tools. Add these entries yourself: <printed rules>` |
 | 9. codex CLI on PATH | `codex --version` | `[FAIL] Codex CLI not found on PATH. Install codex or remove it from quorum.config.json tiers.` |
@@ -1107,3 +1152,19 @@ Claude checked Gemini's draft on 2026-10-12. Each item below changed the draft:
 6. **Dedupe table.** The similarity numbers don't follow the stated Jaccard metric, so M1 calibrates the metric (see 5.5).
 7. **Probe budget.** The doctor probes that call a model (checks 7 and 10) count against M4's limit of 3 approved calls.
 8. Small fixes: the SARIF `informationUri`, rule names by severity, relative links in the markdown report, and the missing test files in the layout.
+
+### Codex review of this document (2026-10-12)
+
+Codex reviewed commit 1172f8d read-only and found 1 BLOCKER and 10 IMPORTANT. All of them were fixed in the sections above:
+
+- **BLOCKER:** no safe algorithm for writing a *new* test file. Added `writeProposedTest`: parent walk with `lstat` and `realpath`, exclusive create, no symlinks or junctions.
+- The resolver keeps the absolute path that PATH resolution returned.
+- The reproduction lane receives the finding (so `origin` decides the base check) and runs only the test file.
+- A container contract: preparation step, test step, and `unproven` when the infrastructure is missing.
+- The verifier has one similarity, one threshold (0.85) and explicit tie-breaks.
+- The arithmetic of dedupe row 9 is fixed.
+- Qwen-only findings are never final.
+- Deadlines kill in-flight calls.
+- Doctor doesn't call the nonexistent `agy --version`.
+- M0 requires `checks`, resolves author aliases, and parses `--author` and `--rules`.
+- Dry-run shows ledger-based or unknown quota, and never drops the floor silently.
