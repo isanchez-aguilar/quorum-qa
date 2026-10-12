@@ -1143,14 +1143,16 @@ Each assumption listed below represents an unverified CLI behavior or interface 
 
 ---
 
-## 12. Questions for Isaac
+## 12. Decisions (Isaac, 2026-10-12)
 
-1. **CLI / Package Naming:** [docs/NAMING.md](docs/NAMING.md) notes candidate names (`Quorum`, `Tribunal`, `Crosscheck`, `Veredicto`). Should we commit to package name `quorum-qa` and binary name `quorum` for the M0 `package.json` setup?
-2. **Jules Exception Timing:** Jules writes to its cloud VM and cannot pin commits reliably from the installed CLI. Does Isaac agree to keep Jules completely disabled throughout v1 (as specified in M6), deferring the cloud VM AGENTS.md exception to v1.x?
-3. **Default Triage Model Selection:** When local `qwen` is offline and `agy:gemini-3.8-flash-medium` is present, should Quorum default to Gemini Flash without prompting the user?
-4. **CI Behavior When Container Isolation is Missing:** In non-interactive CI environments where neither Docker nor Podman is installed, PLAN.md states reproduction is skipped and labeled "unproven". Should Quorum exit with code 0 in that case, or emit an exit code 1 if unproven BLOCKERs remain?
-5. **Storage Location for `.quorum`:** The plan places `.quorum/ledger.jsonl` and `.quorum/cache/` at the workspace repository root. Should `.quorum` be added to `.gitignore` automatically during M0?
-6. **Settings Verification vs Auto-Config:** If `quorum doctor` finds that `agy` write-deny rules are not set, should it provide copy-paste instructions only (as stated in PLAN.md), or provide an interactive opt-in prompt to apply them?
+Gemini's six questions were settled with the recommendations below. Isaac said "hazlo todo" after they were listed, so they stand until he changes them. Renaming is cheap before the first publish.
+
+1. **Name:** keep the package `quorum-qa` and the binary `quorum`. Nothing is published, and [NAMING.md](NAMING.md) still has to be settled before the first npm publish.
+2. **Jules:** disabled for all of v1 (`jules.enabled: false`). The AGENTS.md exception comes in v1.x, after commit pinning is solved.
+3. **Default triage:** `agy:gemini-3.8-flash-medium`, with Qwen as the first fallback when it is running. No prompt to the user.
+4. **CI exit codes:** `0` when no BLOCKER remains. `1` when any BLOCKER remains, **including unproven ones**, because an unproven BLOCKER keeps its severity. `2` for a tool or configuration error. A `--allow-unproven` flag makes unproven BLOCKERs not fail the run.
+5. **`.quorum/`:** M0 adds it to `.gitignore`, and Quorum never commits it.
+6. **`doctor` and agy settings:** it only prints the rules to add. It never writes the user's settings, and it has no interactive "apply" prompt.
 
 ---
 
