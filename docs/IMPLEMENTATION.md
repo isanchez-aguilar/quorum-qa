@@ -300,11 +300,11 @@ export interface ProviderAdapter {
 - **Tasks (Ordered):**
   1. Initialize package structure: ESM `"type": "module"`, pinned dependencies, strict `tsconfig.json`, `vitest.config.ts`.
   2. Implement `src/types/index.ts` defining all domain interfaces.
-  3. Implement `src/cli/args.ts` to parse CLI flags (`--help`, `--version`, `--mode`, `--diff`, `--spec`, `--inventory`, `--images`, `--rules`, `--author`, `--since`, `--dry-run`, `--reproduce`) without external libraries.
+  3. Implement `src/cli/args.ts` to parse CLI flags (`--help`, `--version`, `--mode`, `--diff`, `--spec`, `--inventory`, `--images`, `--rules`, `--author`, `--since`, `--dry-run`, `--reproduce`, `--allow-unproven`) without external libraries. Unknown flags and a value flag followed by another flag are usage errors (exit 2).
   4. Implement `src/config/schema.ts` and `src/config/index.ts` loading and validating `quorum.config.json` with fallback defaults.
   5. Implement `bin/quorum.js` and `src/cli/index.ts` binding `--help` and subcommands.
   6. Add unit tests for configuration parsing and argument tokenization.
-- **Files Touched:** `package.json`, `tsconfig.json`, `vitest.config.ts`, `bin/quorum.js`, `src/types/index.ts`, `src/cli/args.ts`, `src/cli/index.ts`, `src/config/index.ts`, `src/config/schema.ts`, `tests/unit/config.test.ts`.
+- **Files Touched:** `package.json`, `tsconfig.json`, `vitest.config.ts`, `bin/quorum.js`, `src/types/index.ts`, `src/cli/args.ts`, `src/cli/index.ts`, `src/config/index.ts`, `src/config/schema.ts`, `tsconfig.build.json` (`pnpm build` emits only `src/` into `dist/`), `tests/unit/config.test.ts`, `tests/unit/args.test.ts`, `tests/integration/cli.test.ts`. The library barrel `src/index.ts` is created in M3, when there is a public API to export.
 - **Public Functions & Signatures:**
   - `parseArgs(argv: string[]): { command: string; flags: Record<string, any>; positionals: string[] }`
   - `loadConfig(configPath?: string): Promise<QuorumConfig>`
@@ -726,7 +726,7 @@ Deduplication groups findings reporting the same defect across independent model
    - If the author family is known (e.g. `--author claude`), Quorum selects an independent triage model (`google` or `local`).
 2. **Escalation Triggers (Escalate to Confirm Tier):**
    A finding escalates to the `confirm` tier (default: `codex` or `agy:claude-opus-5-5-high`) if:
-   - **Rule 1 (Focus Keyword):** The finding `file`, `trigger`, or `impact` contains any keyword in `config.escalate.focus` (default: `["money", "auth", "permissions", "crypto", "billing"]`).
+   - **Rule 1 (Focus Keyword):** The finding `file`, `trigger`, or `impact` contains any keyword in `config.escalate.focus` (default: `["money", "auth", "permissions"]`, as in PLAN.md).
    - **Rule 2 (Uncertainty):** The triage model confidence score is strictly below `config.escalate.belowConfidence` (default: `0.70`).
    - **Rule 3 (Severe Finding):** The triage model classifies the finding as `BLOCKER`.
    - **Rule 3b (Local-only):** Every finding whose only sources are `local` (Qwen) escalates to the `review` tier, whatever its confidence. If no non-local reviewer is available, it is reported under "Unconfirmed (local model only)", never as a verified IMPORTANT or BLOCKER. Test: `testCascade_QwenOnlyNeverFinal` — Qwen returns IMPORTANT at 0.90 with no focus word -> it escalates; with the review tier unavailable, it is listed as unconfirmed.
@@ -1101,7 +1101,7 @@ Deterministic Checks: ✅ `pnpm lint` passed · ✅ `pnpm typecheck` passed · �
 Minimal pinned dependency list. Strict adherence to exact versions, favoring Node 22 standard libraries (`node:fs/promises`, `node:child_process`, `node:crypto`, `node:path`, `node:os`).
 
 ### Production Dependencies
-- **`zod`** (pinned at M0): Minimal, robust TypeScript-first runtime schema validator for `quorum.config.json` parsing and LLM JSON-schema validation.
+- **None.** M0 hand-writes the config validator (about 250 lines, with an issue list per key), which keeps the runtime dependency list at zero as AGENTS.md asks. Revisit a schema library at M4 only if validating provider JSON by hand gets worse than the dependency.
 
 ### Development Dependencies
 - **`typescript`** (pinned at M0): Strict TypeScript compiler targeting modern ES2024 / Node 22 ESM.
@@ -1206,3 +1206,10 @@ Codex reviewed c7f9a00 read-only. It confirmed 6 of 8 corrections and found 1 BL
 - **BLOCKER (introduced by my own fix):** skipping the base check for new code let a trivial test (`expect(1).toBe(2)`) become a "reproduced" BLOCKER. New code is now `unproven`, never `reproduced`.
 - **IMPORTANT:** `corepack enable` in the preparation container didn't carry over to the test container, which has no network. The manager is installed in a derived image instead.
 - **IMPORTANT:** a read-only `node_modules` breaks runners that write caches. Caches go to `/tmp`, and `EROFS`/`EACCES` count as infrastructure (`unproven`).
+
+### M0 as built (2026-10-12)
+
+- Config loader: an empty `checks: []` is accepted. It is the explicit way to say "this repo has no deterministic checks". `checks` omitted is still an error. Inherited (non-plain-object) configs are rejected.
+- Any unexpected error exits with 2, never 1: exit 1 means "BLOCKERs found" (decision 4).
+- `pnpm test` builds first, and the built-CLI tests fail instead of skipping when `dist/` is missing.
+- Gemini reviewed the code read-only. Of 8 findings, 4 were fixed, 1 was a documented decision (empty checks), 1 was wrong (it asked for `zod`, which this plan dropped), and 2 were optional (empty tiers, budget upper bounds) and left for M3 where the cascade uses them.
