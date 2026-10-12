@@ -5,3 +5,7 @@ coverage/
 .env.*
 *.log
 .quorum/
+
+# Local relay state and Qwen tasks (Relaykit)
+.ai/runs/
+.ai/qwen-tasks/

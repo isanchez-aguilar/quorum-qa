@@ -1,0 +1,8 @@
+{
+  "name": "Quorum",
+  "profile": "generic",
+  "rules": [
+    "AGENTS.md"
+  ],
+  "checks": []
+}

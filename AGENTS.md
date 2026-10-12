@@ -11,3 +11,24 @@ The contract for any coding agent working in this repository.
 - **Ask before spending quota.** Ask Isaac before any run that spends provider quota beyond a couple of probe calls, before publishing to npm, and before making the repo public.
 - **Git:** one branch per change, never commit straight to `main`, and add a DCO `Signed-off-by` to every commit.
 - **Licensing:** Apache-2.0 for code. A new source file needs no header; the LICENSE and NOTICE files cover it.
+
+## Delegation
+
+Try providers in this order, cheapest sufficient first (the playbook is `model-selection` in the Relaykit repo):
+
+1. Codex: implementation, reviews and tests.
+2. Antigravity's Claude models: edit-only tasks with every path listed; a headless run dies on the first denied command.
+3. Gemini through Antigravity: reviews, visual checks and drafts; Flash for mechanical work.
+4. Jules: bounded cloud tasks on their own branch.
+5. Local Qwen (optional): mechanical work with an exact expected output.
+6. Claude Code subagents last, on `sonnet` or `haiku` by default.
+
+Opus only when a money or security judgement truly cannot be covered by another provider. Never Fable without Isaac's yes for that specific use. Whoever implements is never the only reviewer. This is the tool that reviews other people's code, so its own changes get a second provider's read-only review too.
+
+## Before delivery
+
+Run the typecheck and the tests of what you touched (`pnpm test` once the scaffold exists) and report each result; a check you did not run did not pass. Have a different provider review the change read-only with `.ai/prompts/review.md` (the `cross-review` skill has the procedure). Merge only when Isaac says so.
+
+## Relaykit files
+
+`.ai/project.json`, `.ai/prompts/review.md`, `GEMINI.md`, `.claude/agents/` and `.claude/skills/` came from `relaykit init --profile generic`. They are plain copies you may edit. The `generic` profile fits this project because it is a Node CLI with no UI; `opencode.json` (Qwen guardrails) was left out on purpose, and `relaykit init --dry-run` shows what a rerun would add.
