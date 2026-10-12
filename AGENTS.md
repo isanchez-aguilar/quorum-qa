@@ -12,6 +12,18 @@ The contract for any coding agent working in this repository.
 - **Git:** one branch per change, never commit straight to `main`, and add a DCO `Signed-off-by` to every commit.
 - **Licensing:** Apache-2.0 for code. A new source file needs no header; the LICENSE and NOTICE files cover it.
 
+## Project in one sentence
+
+Quorum runs several AI coding CLIs over a change and reports only the findings it has verified against the code. Status: planning, nothing is implemented yet (see [README.md](README.md)).
+
+## Commands
+
+There is no scaffold yet, so no command to run. Once it exists, `pnpm test` runs the suite (see *Before delivery*), and this section lists every command that matters then. Until then `git diff --check` is the check for a change: it catches whitespace errors and leftover conflict markers.
+
+## Conventions
+
+The rules at the top of this file are the conventions: strict TypeScript, ESM, vitest, exact-pinned dependencies, English in code, comments, docs and commits, and synthetic fixtures only. Test layout and style rules go here once the scaffold exists.
+
 ## Delegation
 
 Try providers in this order, cheapest sufficient first (the playbook is `model-selection` in the Relaykit repo):

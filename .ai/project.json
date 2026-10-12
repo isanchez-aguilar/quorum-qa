@@ -4,5 +4,8 @@
   "rules": [
     "AGENTS.md"
   ],
-  "checks": []
+  "checks": [
+    "git diff --check"
+  ],
+  "claudeModel": "sonnet"
 }
