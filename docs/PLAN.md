@@ -37,7 +37,7 @@ quorum review ... --dry-run          # print the plan (checks, providers, models
 3. **Cheap model triages, expensive model confirms.** A flash-tier model (Gemini Flash, or Qwen when it runs locally) goes first. Only uncertain findings, or ones in money or auth code, escalate to a confirm-tier model (Codex, Claude Opus, Gemini Pro).
 4. **Surgical context.** Send the diff, the touched symbols and their callers, never whole files.
 5. **The user's own logins.** Every provider runs the vendor's own CLI with the user's subscription. Quorum never stores, asks for or proxies API keys.
-6. **Read-only reviewers.** Reviewers never edit the user's checkout. Writing a reproduction test happens in a disposable place (a temporary git worktree, or Jules's cloud VM), and Quorum never applies a patch on its own.
+6. **Read-only providers.** No provider ever writes. A reviewer only returns JSON, and that includes the reproduction test, which comes back as text. Quorum itself writes that test into a disposable worktree and runs it. Each reviewer works in a disposable worktree of the head commit, never in the user's checkout. If that worktree is dirty after the call, the run is flagged and its findings are discarded. Jules is the one provider that writes (in its own cloud VM), so it stays off until Isaac amends AGENTS.md with an explicit exception (see Open decisions).
 7. **Independence is by model family, not by CLI.** Claude Opus through Antigravity is still Claude. If Claude wrote the change, a quorum of "Claude Code + agy Claude Opus" is not independent. Families: `anthropic`, `google`, `openai`, `local`.
 8. **Measure the reviewers.** Every run appends to a ledger (findings, verified, rejected, time, cost), so you know which provider and which model earns its place.
 9. **Never spend by surprise.** `--dry-run` shows the plan. A per-run budget (calls, minutes) caps it. A provider whose quota is low is skipped before it is called, not after it fails.
@@ -116,17 +116,29 @@ Other providers in the catalog: Codex (openai, confirm), Claude Code (anthropic,
 
 **Fable is never picked automatically.** If a Fable model appears in any catalog, Quorum lists it but does not route to it unless the config names it explicitly.
 
+### Reproduction lane (v1)
+
+A BLOCKER keeps its severity only if a test proves it. No provider writes anything:
+
+1. The confirming reviewer returns the proposed test as JSON: `{ "path": "src/x.test.ts", "content": "...", "expect": "assertion text" }`.
+2. Quorum checks the path. It must be a new file that matches the repo's test globs (default `**/*.test.*` and `**/*.spec.*`), inside the repo. Anything else is rejected.
+3. Quorum creates a disposable `git worktree` at the head SHA, writes the file, and runs the configured test command for that one file with a machine-readable reporter (vitest or jest JSON).
+4. **Reproduced** means three things: the new test fails at head; the failure is an **assertion failure** in that test, not a compile error, an import error or a missing dependency; and the message matches `expect`. For an `introduced` finding, the same test must also pass in a worktree at the base SHA.
+5. Otherwise the finding is downgraded to IMPORTANT, with the reason. Either way the worktree is deleted, and the test goes into the report, never into the user's checkout.
+
+This needs only the reviewer adapters (agy and Codex), so it works in v1 with no extra provider.
+
 ### Jules: the async cloud lane
 
 Jules is a coding agent that works on a copy of a GitHub repo in its own VM. It is not read-only, so it is never part of the reviewer quorum. It has two jobs that nothing else does well:
 
-1. **Reproduce BLOCKERs (v1.x).** For each verified BLOCKER, Quorum opens one Jules session: "write a test that fails because of this finding; do not fix the code; run it and report the output". Quorum pulls the patch and the log with `jules remote pull` (never `--apply`), and checks the log for a failing test that names the finding. Reproduced: the BLOCKER stays, with the test attached as evidence. Not reproduced or timed out: it is downgraded to IMPORTANT with a note. The local alternative (v1) does the same in a temporary `git worktree` with a write-capable provider, then deletes the worktree.
+1. **Reproduce BLOCKERs (v1.x, only after the AGENTS.md exception).** For each verified BLOCKER, Quorum would open one Jules session: "write a test that fails because of this finding; do not fix the code; run it". It would pull the patch with `jules remote pull` (never `--apply`) and **re-run the test locally** through the v1 lane. The Jules log alone is never evidence. v1 does not need Jules (see [Reproduction lane](#reproduction-lane-v1)).
 2. **Review a pushed PR without a local machine (v3).** In the GitHub Action, Jules can be a reviewer for repos that are connected to it, with its output passing through the same verifier.
 
-Guardrails (lessons from running Jules by hand):
+Guardrails (lessons from running Jules by hand, and from the review of this plan):
 
-- The repo and branch come from `quorum.config.json` (`jules.repo`, `jules.branch`). A task can't point Jules at another repo.
-- Jules only sees **pushed** commits. Before opening a session, Quorum checks that the head SHA is on the remote, and refuses otherwise. It never pushes for the user.
+- The repo comes from `quorum.config.json` (`jules.repo`). A task can't point Jules at another repo.
+- **Pinning the exact commit is unsolved.** `jules new` takes `--repo`, but the installed CLI has no branch or SHA flag. A head SHA that exists on the remote doesn't prove the session used it. Before the Jules lane is built, the adapter must find a supported way to select the revision, and must verify it in the pulled patch (its base commit). If it can't, the Jules lane is refused, not trusted. Quorum never pushes for the user.
 - Sessions that stop for approval or ask a question are reported as "needs attention" with their URL. Quorum never auto-approves a Jules plan.
 - Each session is logged in the ledger with its id, so a re-run resumes polling instead of opening a duplicate.
 - Jules's quota is not readable from the CLI. The config holds `jules.maxSessionsPerRun` (default 3), and preflight counts today's sessions from the ledger.
@@ -138,7 +150,7 @@ Guardrails (lessons from running Jules by hand):
 ```json
 {
   "base": "origin/main",
-  "checks": ["pnpm lint", "pnpm typecheck", "pnpm test"],
+  "checks": [["pnpm", "lint"], ["pnpm", "typecheck"], ["pnpm", "test"]],
   "author": "claude",
   "tiers": {
     "triage":  ["agy:gemini-3.8-flash-medium", "qwen", "agy:gpt-oss-120b-medium"],
@@ -148,13 +160,13 @@ Guardrails (lessons from running Jules by hand):
   },
   "escalate": { "focus": ["money", "auth", "permissions"], "belowConfidence": 0.7 },
   "budget": { "maxCalls": 12, "maxMinutes": 20, "quotaFloorPercent": 15 },
-  "reproduce": { "lane": "worktree", "provider": "claude:sonnet" },
-  "jules": { "repo": "owner/name", "branch": "main", "maxSessionsPerRun": 3 },
+  "reproduce": { "testGlobs": ["**/*.test.*", "**/*.spec.*"], "testCommand": ["pnpm", "vitest", "run", "--reporter=json"] },
+  "jules": { "enabled": false, "repo": "owner/name", "maxSessionsPerRun": 3 },
   "qwen": { "endpoint": "http://127.0.0.1:8080/v1" }
 }
 ```
 
-Each check is one simple command, with no `&&`, `|`, `;` or redirections. Quorum runs it with `spawn` and no shell, so a config can't chain commands.
+Each check is an argv array, not a string, so a config can't chain commands. Quorum runs it with `spawn` and no shell. **Windows:** tools like `pnpm` are `.cmd` shims, and Node can't spawn those without a shell. The runner resolves the program through `PATH` and `PATHEXT`. For a `.cmd` or `.bat` it runs `cmd.exe /d /s /c` with every argument quoted. It refuses any argument that contains cmd metacharacters (`& | < > ^ % !`, quotes or newlines). M2 tests this resolver.
 
 ## Review modes
 
@@ -182,19 +194,19 @@ Each check is one simple command, with no `&&`, `|`, `;` or redirections. Quorum
 
 ## v1 milestones
 
-Each milestone is one PR with its tests. No milestone needs provider quota except M4's probes.
+Each milestone is one PR with its tests. Automated acceptance always uses the fake provider. Real calls happen in only two places, and each needs Isaac's OK beforehand, with a call limit: M4's probes (at most 3 calls) and the v1 smoke run in M6 (at most 6 calls).
 
 | # | Milestone | Done when |
 |---|---|---|
 | M0 | Skeleton: Node 22 + TS strict + vitest + ESM, `quorum` bin, config loader with schema validation | `quorum --help` runs; config tests pass |
 | M1 | **Verifier** (file, line, quote with fuzzy nearby match) and **dedupe** | Table tests over synthetic fixtures, including the wrong-line-but-real-quote case and the non-existent-file case |
-| M2 | Context builder from `git diff`, `origin` via `git blame`, deterministic checks runner | Tests on a temporary git repo built in the test |
+| M2 | Context builder from `git diff`, `origin` via `git blame`, deterministic checks runner with the Windows command resolver | Tests on a temporary git repo built in the test; resolver tests for `.cmd` shims and rejected metacharacters |
 | M3 | Provider interface, a **fake provider** for tests, model catalog, tiers, cascade, budget, `--dry-run` | The whole pipeline runs end to end against the fake provider with zero quota |
-| M4 | Real adapters: **agy** and **codex** working; `quorum doctor` (PATH, login, `agy models`, `/usage`, read probe) | `doctor` passes on Isaac's machine; at most a couple of probe calls, with Isaac's OK |
-| M5 | Modes `feature` and `redesign`, markdown and SARIF reporters, ledger and cache | The "done" check below |
-| M6 | Reproduction lane (local worktree), plus `claude`, `qwen` and `jules` adapter stubs behind the same interface | Lane tests against the fake provider; stubs report "not implemented" in `doctor` |
+| M4 | Real adapters: **agy** and **codex**, each running in a disposable worktree and checked for writes afterwards; `quorum doctor` (PATH, login, `agy models`, `/usage`, read probe, agy write-deny rule present) | Adapter tests on recorded outputs; `doctor` passes on Isaac's machine with at most 3 approved probe calls |
+| M5 | Modes `feature` and `redesign`, markdown and SARIF reporters, ledger and cache | End to end against the fake provider |
+| M6 | Reproduction lane (Quorum writes the proposed test into a worktree), plus `claude` and `qwen` adapter stubs | Lane tests: an assertion failure is kept, an import or compile failure is downgraded, a non-test path is rejected, `introduced` is checked at the base SHA; then the approved smoke run |
 
-**v1 is done when** `quorum review --mode feature --diff <range>` runs on a sample diff in this repo with at least one real provider, and the verifier and dedupe tests pass.
+**v1 is done when** the whole pipeline passes its automated tests against the fake provider, and **one smoke run that Isaac approves** (at most 6 calls) of `quorum review --mode feature --diff <range>` works on a synthetic sample diff with at least one real provider.
 
 ## Testing strategy
 
@@ -211,13 +223,13 @@ Each milestone is one PR with its tests. No milestone needs provider quota excep
 | Model ids change (agy lists new flash versions every few weeks) | Config ids are validated against `agy models` at preflight; a tier lists fallbacks |
 | Quota shared across models | Budgets are per quota group, read from `/usage` |
 | False independence (same family through two CLIs) | Family is part of the catalog; the planner checks it |
-| A reviewer tries to write or run commands | Read-only flags per CLI, `--sandbox --mode plan` for agy, and a prompt that lists the allowed paths |
+| A reviewer tries to write or run commands | `agy --sandbox` still **allows writes to the workspace**, and `--mode plan` only changes the instructions, so flags aren't enough. Every reviewer runs in a disposable worktree of head. `doctor` refuses agy unless the user's agy settings deny write and shell tools (it prints the rule and never writes it). A run that leaves its worktree dirty is discarded. Codex uses `-s read-only`. |
 | Code leaves the machine | Every provider already sees code under the user's own terms. Jules needs the code pushed to GitHub, so it is opt-in per repo, and `doctor` says so |
 
 ## Open decisions (for Isaac)
 
 1. **Name** before the first npm publish (see [NAMING.md](NAMING.md)).
-2. **Jules in v1 or v1.x.** This plan puts the reproduction lane in v1 as a local worktree, and Jules in v1.x. The reason: v1 must work without pushing code anywhere.
+2. **Jules exception.** Jules writes in its own VM, and AGENTS.md says providers are read-only. Jules stays off until Isaac adds an explicit, scoped exception to AGENTS.md (cloud VM only, never applied, re-run locally) and commit pinning is solved. v1 does not depend on it.
 3. **Default triage model:** Gemini Flash through agy (plenty of quota) or Qwen (free, but it must be running). The plan defaults to agy flash, with Qwen as the first fallback.
 4. **Package manager:** pnpm (as CONTRIBUTING says) is assumed.
 

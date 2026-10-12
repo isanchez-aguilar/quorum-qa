@@ -16,7 +16,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 
 ## v1.x: more reviewers, less spend
 - Working claude and qwen adapters.
-- **Jules as the cloud reproduction lane:** one session per BLOCKER writes and runs a failing test on the pushed branch. Quorum pulls the result and never applies it.
+- **Jules as a cloud reproduction lane**, only once AGENTS.md has an explicit exception for it and the exact commit can be pinned. Its test is pulled without applying it, and re-run locally before it counts as evidence.
 - The cascade policy, configurable per focus (money, auth, a11y, copy).
 - Incremental re-review (`--since`) and the cache, both on by default.
 - A pluggable context provider: a code-graph index such as CodeGraph instead of the plain diff.

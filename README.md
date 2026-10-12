@@ -4,12 +4,12 @@
 
 > Status: planning. Nothing is implemented yet. Start with [docs/PLAN.md](docs/PLAN.md).
 
-Quorum runs several AI coding CLIs over a change: Codex, Claude Code, Antigravity (with its Gemini, Claude and GPT-OSS models), Jules for reproducing blockers in the cloud, and a local model. Each one is used for what it is best at, under your own logins.
+Quorum runs several AI coding CLIs over a change: Codex, Claude Code, Antigravity (with its Gemini, Claude and GPT-OSS models), a local model, and (later, opt-in) Jules for reproducing blockers in the cloud. Each one is used for what it is best at, under your own logins.
 
 - **Deterministic checks first.** Lint, typecheck and a11y run before any model, and cost nothing.
 - **Cheap models triage first.** Expensive models only confirm what needs it.
 - **Independent means a different model family.** Claude through two CLIs still counts as one opinion.
-- **Every finding is verified against the code.** A finding whose file, line or quote isn't in the code is dropped. A blocker comes with a failing test that proves it.
+- **Every finding is verified against the code.** A finding whose file, line or quote isn't in the code is dropped. A blocker comes with a failing test that proves it: the reviewer proposes the test, and Quorum runs it in a throwaway worktree.
 - **Each finding is labelled** as **introduced**, **pre-existing** or **improvement**.
 - **Review modes:** new features, redesigns (feature parity and visual review), refactors, bug hunts, contracts and runtime.
 
