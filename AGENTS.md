@@ -26,14 +26,16 @@ The rules at the top of this file are the conventions: strict TypeScript, ESM, v
 
 ## Delegation
 
-Try providers in this order, cheapest sufficient first (the playbook is `model-selection` in the Relaykit repo):
+Try providers in this order, top to bottom (the playbook is `model-selection` in the Relaykit repo):
 
-1. Codex: implementation, reviews and tests.
-2. Antigravity's Claude models: edit-only tasks with every path listed; a headless run dies on the first denied command.
+1. Local Qwen (optional): mechanical work with an exact expected output.
+2. Jules: bounded cloud tasks on their own branch.
 3. Gemini through Antigravity: reviews, visual checks and drafts; Flash for mechanical work.
-4. Jules: bounded cloud tasks on their own branch.
-5. Local Qwen (optional): mechanical work with an exact expected output.
-6. Claude Code subagents last, on `sonnet` or `haiku` by default.
+4. Claude models through Antigravity: edit-only tasks with every path listed; a headless run dies on the first denied command.
+5. Codex: implementation, reviews and tests.
+6. Claude Code subagents last, on the cheapest model that solves the task (`haiku`, then `sonnet`).
+
+Use the first provider on the list that CAN do the task. If it cannot, or its result fails verification (tests, typecheck, a reviewer), move to the next, until it is done: always the cheapest that works. Go down the list once per task; when no eligible provider is left, or the attempt or time budget Isaac set is spent, stop and report what blocked it instead of retrying. Money, permissions and architecture never go below Codex or Claude.
 
 Opus only when a money or security judgement truly cannot be covered by another provider. Never Fable without Isaac's yes for that specific use. Whoever implements is never the only reviewer. This is the tool that reviews other people's code, so its own changes get a second provider's read-only review too.
 
