@@ -488,10 +488,11 @@ export interface ProviderAdapter {
   3. Create the file with flag `wx` (exclusive), so an existing file is never overwritten. If the file exists, the proposal is **rejected**.
   4. All of this happens before the container starts. Nothing is written outside `.quorum/worktrees/<id>/`.
 - **Container contract (`isolation: "container"`):**
-  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per lockfile hash: same image, network **on**, the worktree mounted at `/work` read-only except for a named volume `quorum-deps-<lockfile hash>` mounted at `/work/node_modules`, and the lockfile's own command picked by which lockfile exists. For pnpm and yarn it first runs `corepack enable`, which uses the `packageManager` field of `package.json` (the image has corepack, not pnpm). The commands are `pnpm install --frozen-lockfile`, `npm ci` or `yarn install --immutable`. pnpm keeps its virtual store inside `node_modules`, so the volume is self-contained. The test step mounts the same volume **read-only** at `/work/node_modules`, so nothing the test does can change it.
+  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per lockfile hash: same image, network **on**, the worktree mounted at `/work` read-only except for a named volume `quorum-deps-<lockfile hash>` mounted at `/work/node_modules`, and the lockfile's own command picked by which lockfile exists. The preparation first **builds a derived image** `quorum-prep:<lockfile hash>` from the base image, with network on, which installs the package manager the repo pins (the `packageManager` field of `package.json`, version included) with `npm install -g <manager>@<version>` into `/usr/local`, so it is available to any user and works offline. Then it runs the lockfile's own command in that image: `pnpm install --frozen-lockfile`, `npm ci` or `yarn install --immutable`. pnpm keeps its virtual store inside `node_modules`, so the volume is self-contained. The test step runs from the **derived image** and mounts the volume **read-only** at `/work/node_modules`, so nothing the test does can change it.
   - **Test step:** network **off** (`--network none`), non-root user (`--user 1000:1000`), `--read-only` root filesystem with a tmpfs `/tmp`, the worktree mounted read-write at `/work`, the dependency volume mounted read-only, `--memory` and `--pids-limit` caps, and a hard timeout (`reproduce.timeoutSeconds`, default 120) enforced by killing the container.
-  - **Missing infrastructure:** no container runtime, or a failed preparation step -> status `unproven` with the reason. The severity is not changed. An infrastructure failure is never read as "not reproduced".
-- **Evaluation:** `reproduced` requires `assertion-failure-matching` at head, **in `testFile` only**. For `origin: introduced`, the same file must also give `passed` at base, with one exception: if the finding's file does not exist at the base SHA (new code), the test can't import it at base, so the base run is skipped and the report says "new code: no base to compare". For `pre-existing`, the base run is skipped. The base run is judged only by `passedAtBase(report, testFile)`: `expect` plays no part there. Any other result -> `not-reproduced`, and the finding is downgraded to IMPORTANT with the reason.
+  - **Caches:** the test step sets `XDG_CACHE_HOME`, `npm_config_cache` and `TMPDIR` to the tmpfs `/tmp`. A runner that insists on writing inside the read-only `node_modules` (for example a `.vite` or `.cache` directory) fails with `EROFS` or `EACCES`. That is classified as infrastructure, not as a test result. The cache directory flag for the repo's runner is an ASSUMPTION to settle with the synthetic repo in M6.
+  - **Missing or failing infrastructure:** no container runtime, a failed preparation step, `EROFS`/`EACCES` writing a cache, a missing manager, or a timeout of the container itself -> status `unproven` with the reason. The severity is not changed. An infrastructure failure is never read as "not reproduced".
+- **Evaluation:** `reproduced` requires `assertion-failure-matching` at head, **in `testFile` only**. For `origin: introduced`, the same file must also give `passed` at base, with one exception: if the finding's file does not exist at the base SHA (new code), the test can't import it at base and there is no valid comparison. The status is then `unproven` ("new code: nothing to compare against"), the severity is **not** changed, and the report lists the proposed test for a human to run. It is never `reproduced`, because a test like `expect(1).toBe(2)` would fail by assertion with the right message without running the cited code. For `pre-existing`, the base run is skipped. The base run is judged only by `passedAtBase(report, testFile)`: `expect` plays no part there. Any other result -> `not-reproduced`, and the finding is downgraded to IMPORTANT with the reason.
 - **Synthetic infrastructure for tests:** `tests/fixtures/repro-repo/` (a tiny vitest project with a lockfile) and a fake container runner that replays recorded `TestReport` JSON. The real-container tests run only when a runtime is present, and are skipped otherwise (never in CI without one).
 - **Test Cases:**
   - `testReproduction_RealAssertionFailureKeepsBlocker`: Test fails with assertion error on head; passes on base -> Retained as BLOCKER.
@@ -500,10 +501,13 @@ export interface ProviderAdapter {
   - `testReproduction_SymlinkParentRejected`: `tests/` is a symlink (or junction) to a directory outside the worktree -> Rejected before anything is written.
   - `testReproduction_ExistingFileNotOverwritten`: The proposed path already exists at head or base -> Rejected; the file is unchanged.
   - `testReproduction_PreexistingSkipsBase`: An `origin: pre-existing` BLOCKER whose test fails at head (and also at base) -> Reproduced; base is not required to pass.
-  - `testReproduction_NewCodeSkipsBase`: An `introduced` BLOCKER in a file that doesn't exist at base; the test fails by assertion at head -> Reproduced, with the "no base to compare" note.
+  - `testReproduction_NewCodeIsUnproven`: An `introduced` BLOCKER in a file that doesn't exist at base; the test fails by assertion at head -> `unproven`, severity unchanged, test listed.
+  - `testReproduction_TrivialAssertionNotReproduced`: The test is `expect(1).toBe(2)` with a matching `expect` message, for a finding in a file that exists at base -> it fails at base too, so `not-reproduced`.
   - `testReproduction_WrongMessageDowngrades`: An assertion fails with a message that doesn't match `expect` -> Downgraded.
   - `testReproduction_OtherTestFailureIgnored`: Only an unrelated test fails -> Not reproduced (the command ran `testFile` only).
   - `testReproduction_NoRuntimeUnproven`: No container runtime -> `unproven`, severity unchanged.
+  - `testReproduction_CacheWriteIsInfra`: A fake runner whose output is an `EROFS` error writing `node_modules/.vite` -> `unproven`, not `not-reproduced`.
+  - `testReproduction_ManagerOffline`: The derived image already contains the manager; the test step has no network and still runs -> no `command not found`.
   - `testReproduction_SandboxEscapeRejected`: Test attempts network socket connection or writing to parent directory -> Fails in sandbox, rejected.
 - **Acceptance Criteria:** Malicious or malformed reproduction tests are safely caught or rejected; approved smoke test runs on real diff and outputs verified findings.
 - **Dependencies:** M4, M5.
@@ -1129,6 +1133,9 @@ Each assumption listed below represents an unverified CLI behavior or interface 
    - *Known:* headless agy reads only folders allowed in its settings, and Quorum's worktrees get new paths on every run.
    - *Plan:* put every worktree under one fixed parent, `<repo>/.quorum/worktrees/` (gitignored), so one `read_file` rule covers them all. `doctor` check 8 verifies it.
    - *Cheapest Probe:* doctor check 7, inside the M4 probe budget.
+8. **`[ASSUMPTION 8]` test-runner cache directory under a read-only `node_modules`:**
+   - *Assumption:* the repo's runner (vitest, jest) can be told to write its cache to `/tmp`, through an environment variable or a flag in `reproduce.testCommand`.
+   - *Cheapest probe:* run the synthetic `repro-repo` in M6 against a real container runtime, with no model calls.
 7. **`[ASSUMPTION 7]` agy `--json-schema` and `--output-format json` shape:** record one real output during the M4 probes, and save it (scrubbed) as the golden fixture.
 5. **`[ASSUMPTION 5]` Windows CMD Shim Argument Escaping:**
    - *Assumption:* Spawning `cmd.exe /d /s /c` with individual quoted arguments completely suppresses command injection when characters `& | < > ^ % !` are rejected upfront.
@@ -1188,4 +1195,12 @@ Gemini 3.1 Pro reviewed eb7345d read-only and returned 3 BLOCKER and 4 IMPORTANT
 - **Fixed:** `'failed'` vs `'not-reproduced'` in the status union.
 - **Fixed:** `CommandRunner` options now carry `windowsVerbatimArguments`.
 - **Fixed:** the deadline rule is a general rule for every call, and the ledger has `timedOutCalls`.
-- **New, from its analysis:** an `introduced` BLOCKER in brand-new code can't pass at base, because the symbol doesn't exist there. The base check is skipped for files that are new at base, and PLAN.md says so.
+- **New, from its analysis:** an `introduced` BLOCKER in brand-new code can't pass at base, because the symbol doesn't exist there. The base check can't run for files that are new at base. Codex then showed that treating that case as "reproduced" is gameable, so it became `unproven` (see the next section).
+
+### Codex re-review of the Gemini fixes (2026-10-12)
+
+Codex reviewed c7f9a00 read-only. It confirmed 6 of 8 corrections and found 1 BLOCKER and 2 IMPORTANT, all real, fixed in the commit after it:
+
+- **BLOCKER (introduced by my own fix):** skipping the base check for new code let a trivial test (`expect(1).toBe(2)`) become a "reproduced" BLOCKER. New code is now `unproven`, never `reproduced`.
+- **IMPORTANT:** `corepack enable` in the preparation container didn't carry over to the test container, which has no network. The manager is installed in a derived image instead.
+- **IMPORTANT:** a read-only `node_modules` breaks runners that write caches. Caches go to `/tmp`, and `EROFS`/`EACCES` count as infrastructure (`unproven`).
