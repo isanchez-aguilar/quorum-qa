@@ -1213,3 +1213,43 @@ Codex reviewed c7f9a00 read-only. It confirmed 6 of 8 corrections and found 1 BL
 - Any unexpected error exits with 2, never 1: exit 1 means "BLOCKERs found" (decision 4).
 - `pnpm test` builds first, and the built-CLI tests fail instead of skipping when `dist/` is missing.
 - Gemini reviewed the code read-only. Of 8 findings, 4 were fixed, 1 was a documented decision (empty checks), 1 was wrong (it asked for `zod`, which this plan dropped), and 2 were optional (empty tiers, budget upper bounds) and left for M3 where the cascade uses them.
+
+### M1 as built (2026-10-12)
+
+**Verifier** (`src/verifier/`). Implemented as in 4.1 to 4.4. Choices where the text left room:
+
+- `normalizePath` is synchronous and rejects every `:` in a path (drive letters, URL schemes, alternate data streams). A POSIX file with a colon in its name is therefore never verified. A segment made only of dots and spaces other than `.` and `..` is rejected too, because Windows drops trailing dots and spaces. A `..` that stays inside the root is allowed. A missing file is confined through the real path of its deepest existing parent, so a symlinked directory cannot be used to name a file that does not exist yet.
+- `normalizeQuote` also drops leading and trailing blank lines. Row 2 needs it (a trailing `\r\n` must not add a second line to the quote).
+- "Exact" means the normalized quote appears verbatim inside the normalized slice of lines, so a quote that is a fragment of a line (`!user.token`) is exact. The table has no such row and 4.3 says "exact match against slices of lines"; a whole-line comparison would reject many real quotes. Fuzzy compares the whole slice (same number of lines as the quote) with the quote. Very short quotes (`}`, `;`) are therefore weak evidence, and a minimum quote length is a possible follow-up.
+- The +-10 window bounds the **start line** of a slice. An unusable cited line (NaN, 0, negative, fractional, infinite) has no window, so the search goes straight to the whole file, and ties then resolve to the lowest line.
+- Limits: quote at most 40 lines and 8192 characters after normalization, file at most 2 MiB. Both are rejected with a reason, never truncated. A 1.9 MB file with a 30-line absent quote takes about 0.5 s.
+- `verifyFinding` returns `correctedFinding` for every verified finding (`verified: true`); `verification_note` is set only when the line moved or the match was fuzzy.
+
+**Dedupe** (`src/dedupe/`). The Jaccard threshold of 0.70 in 5.2 does not reproduce table 5.5, as the correction in 5.5 predicted. The chosen metric is the **token overlap coefficient** `|A n B| / min(|A|, |B|)` over lowercase, stemmed word tokens without stop words, compared on trigger + impact, with a threshold of **0.15** and a rule that fewer than two shared tokens never merges. The stop list includes absence words (missing, never, without, no, not, omitted, lacks): without them row 10 rises to 0.17 and the gap to the rows that must merge (0.20) nearly closes.
+
+Similarity per linked pair of 5.5 (fixture texts in `tests/fixtures/dedupe/rows.ts`, written for this repo):
+
+| Pair | Must | Token Jaccard | Trigram Dice | Overlap (chosen) | Levenshtein |
+|---|---|---|---|---|---|
+| row 1 | merge | 0.182 | 0.387 | 0.333 | 0.300 |
+| row 2 | merge | 0.125 | 0.224 | 0.231 | 0.340 |
+| row 4 | apart | 0.000 | 0.072 | 0.000 | 0.234 |
+| row 5 | merge | 0.211 | 0.364 | 0.364 | 0.321 |
+| row 6, A-B | merge | 0.167 | 0.300 | 0.300 | 0.248 |
+| row 6, B-C | merge | 0.130 | 0.261 | 0.300 | 0.260 |
+| row 8 | merge | 0.176 | 0.394 | 0.300 | 0.221 |
+| row 9 | merge | 0.190 | 0.324 | 0.364 | 0.293 |
+| row 10 | apart | 0.045 | 0.104 | 0.091 | 0.167 |
+
+Rows 3 (line distance 12) and 7 (different files) are kept apart by the line and file rules; their text is identical. Windows (largest score of a pair that must stay apart, smallest of a pair that must merge): Jaccard 0.045 to 0.125, Dice 0.104 to 0.224, overlap 0.091 to 0.231. Levenshtein over words has no window (row 4 scores 0.234, above row 8 at 0.221), so it cannot satisfy the table. All ten rows pass with the chosen metric. The absolute numbers are low because the texts are long and paraphrased: the Similarity column of 5.5 is not reproduced and should not be used as a target.
+
+Caveats: the paraphrase wording is synthetic and was written before the metrics were run, but it is still one author's idea of how reviewers write. Twelve extra control pairs (`CONTROLS` in the fixture) show no false merge, and two real paraphrases with no shared words (hardcoded key vs committed secret; file handle vs stream left open) stay separate. Re-calibrate on recorded provider output after M4.
+
+Other decisions:
+
+- Clustering visits findings by ascending line and joins a finding to a cluster when it is within 5 lines of **every** member and similar to **at least one**; the best-scoring cluster wins. A pairwise-only rule would let findings 5 lines apart chain across 20 lines.
+- 5.2 lists `fix` among the compared text; 5.5 says trigger + impact. Fix is not compared (different fixes for one defect are common).
+- `Finding` has no tier, so `dedupeFindings(findings, { tierOf })` takes an optional callback. Without it, or when it returns undefined, the fix of the most confident finding is used. `visual` ranks with `review`.
+- Origin: dedupe has no git blame. It takes the origin tags as given and resolves introduced > pre-existing > improvement. M3 must run `determineOrigin` before dedupe (or on the merged line afterwards), because a model's `introduced` tag alone flips the merged origin.
+- Consensus is appended to `verification_note` (`also reported by codex:gpt-5 (openai)`); the text, line, provider and model stay those of the most confident finding.
+- The "possibly related" grouping of 5.5 was not built: it would need a new field on `Finding`.
