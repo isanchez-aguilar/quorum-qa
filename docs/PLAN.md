@@ -91,7 +91,7 @@ CLI ─► Planner ─► Deterministic checks (repo's own lint/tsc/axe via conf
 | Provider | How it runs (user's own login) | Notes from real use |
 |---|---|---|
 | Codex | `codex exec -C <dir> -s read-only -o <out> -` (prompt on stdin) | Finds real money and permission bugs. Quota runs out fast, so save it for escalation. Its sandbox sometimes can't read a freshly created folder on the first try: probe first, retry once. |
-| Antigravity (`agy`) | `agy -p "<prompt>" --sandbox --mode plan --model <id> --output-format json`, optionally `--json-schema <finding schema>` and `--effort` | One CLI, three model families (see the catalog below). Plenty of Gemini quota, and it reads images (good for visual review). **Gemini often cites wrong line numbers and non-existent files**, which is why the verifier exists. Headless runs end on the first denied command, so the prompt must say "use ONLY file-read tools", and the user's agy settings must allow `read_file` for the repo (Quorum prints the rule; it never writes it). |
+| Antigravity (`agy`) | `agy --model <id> --sandbox --output-format json --print=<prompt>`, optionally `--json-schema <finding schema>` and `--effort`. Not `--mode plan`, which makes it ask what to plan. Not a bare `-p`, which takes the next flag as the prompt. The prompt is an argument, so stay under Windows' ~32K command-line limit. | One CLI, three model families (see the catalog below). Plenty of Gemini quota, and it reads images (good for visual review). **Gemini often cites wrong line numbers and non-existent files**, which is why the verifier exists. Headless runs end on the first denied command, so the prompt must say "use ONLY file-read tools", and the user's agy settings must allow `read_file` for the repo (Quorum prints the rule; it never writes it). |
 | Claude Code | `claude -p --model <id>` with read-only tools only | Strong general reviewer. Use it as the triage-plus-fix partner, or as a reviewer when the change came from another family. |
 | Local model (Qwen etc.) | OpenAI-compatible endpoint (e.g. llama.cpp at `127.0.0.1:8080`) | Free, but slow and with limited context. Use it for triage, mechanical checks and drafting test tables, never for final judgment. Optional: if it is not running, Quorum skips it. |
 | Jules (async, cloud) | `jules new --repo <owner/name> "<prompt>"` → poll `jules remote list --session` → `jules remote pull --session <id>` (**never** `--apply`) | Runs in Google's cloud VM against the **pushed** branch, so it can actually run the test suite without touching the local checkout. It is slow (minutes) and has a daily task limit, so it is a lane, not a reviewer in the main loop. See [Jules](#jules-the-async-cloud-lane). |
@@ -202,6 +202,8 @@ Each check is an argv array, not a string, so a config can't chain commands. Quo
 
 ## v1 milestones
 
+The build-ready breakdown (types, algorithms, test tables, doctor checks) is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+
 Each milestone is one PR with its tests. Automated acceptance always uses the fake provider. Real calls happen in only two places, and each needs Isaac's OK beforehand, with a call limit: M4's probes (at most 3 calls) and the v1 smoke run in M6 (at most 6 calls).
 
 | # | Milestone | Done when |
@@ -231,7 +233,7 @@ Each milestone is one PR with its tests. Automated acceptance always uses the fa
 | Model ids change (agy lists new flash versions every few weeks) | Config ids are validated against `agy models` at preflight; a tier lists fallbacks |
 | Quota shared across models | Budgets are per quota group, read from `/usage` |
 | False independence (same family through two CLIs) | Family is part of the catalog; the planner checks it |
-| A reviewer tries to write or run commands | `agy --sandbox` still **allows writes to the workspace**, and `--mode plan` only changes the instructions, so flags aren't enough. Every reviewer runs in a disposable worktree of head. `doctor` refuses agy unless the user's agy settings deny write and shell tools (it prints the rule and never writes it). A run that leaves its worktree dirty is discarded. Codex uses `-s read-only`. |
+| A reviewer tries to write or run commands | `agy --sandbox` still **allows writes to the workspace**, and `--mode plan` only changes the instructions, so flags aren't enough. Every reviewer runs in a disposable worktree of head. `doctor` refuses agy unless the user's agy settings (`~/.gemini/antigravity-cli/settings.json`) allow `read_file` on `.quorum/worktrees/` and deny write and shell tools. It prints the rules and never writes them. A run that leaves its worktree dirty is discarded. Codex uses `-s read-only`. |
 | A proposed test is malicious or careless | Reproduction is opt-in and runs in a container with no network and only the worktree mounted. Without a container, it runs only after a per-test confirmation. M6 has an escape test. |
 | Code leaves the machine | Every provider already sees code under the user's own terms. Jules needs the code pushed to GitHub, so it is opt-in per repo, and `doctor` says so |
 
