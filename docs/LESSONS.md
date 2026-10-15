@@ -21,6 +21,10 @@ These come from months of running cross-provider reviews on a real product: new 
 - **A background CLI waits on stdin.** A headless run hung until stdin was redirected from /dev/null; another reported success having edited nothing. Verify with the diff.
 - **A shipped build can point at the wrong environment.** A bundler cache inlined the development URL into a production build. Grep the artifact.
 
+- **Hiding in the UI is not redaction.** The cheapest proof is to fetch the endpoints as the restricted role and scan the responses and exports for the field: one small script, and it found nothing the UI tests would have.
+- **A model that cannot run commands writes tests that do not run.** Expect a fix pass; verify with the suite, not with its report.
+- **A single test file may not exit** (open handles) and look hung; run it with the runner's force-exit flag.
+
 See [UI-DETAIL-CHECKS.md](UI-DETAIL-CHECKS.md) for the catalogue these became.
 
 ## Process that worked

@@ -194,6 +194,26 @@ rule**: add it here.
   requests that would answer 403; no error toast for a card the role was never
   meant to have.
 
+### UI-21b An optimistic permission default is a leak for data
+- **Symptom:** a client assumes «allowed» while the role is still loading (so a
+  button does not blink), and for one beat draws a cost, or requests an endpoint
+  that exists only for people who may see costs.
+- **Detect:** T1: hold the role request open (stub it pending) and screenshot /
+  list the requests fired. T0: a permission helper with an «unknown → allow»
+  branch that is also used for data, not just for controls.
+- **Pass:** controls may be optimistic; data-gating permissions are denied until
+  the role is known, and no restricted request fires while pending.
+
+### UI-21c A permission that resolves late must not erase what it hides
+- **Symptom:** a form is seeded while a field is hidden (empty); the permission
+  arrives and the field appears, still empty; the next save sends «null» and
+  erases the stored value the person never saw.
+- **Detect:** T1: mount the form with the permission denied, flip it to granted,
+  save an unrelated field, assert the payload does not carry the field (or
+  carries the stored value). Also granted → denied.
+- **Pass:** a hidden field is never sent; when it appears it is reseeded from
+  the stored value; absent is never serialised as null.
+
 ### UI-22 Stale state after a role, permission or account change
 - **Detect:** T1: change the permission, refresh, check caches, drafts and
   persisted forms do not keep the old data.
@@ -255,6 +275,32 @@ exist. Each should become a gate.
 - **Gap:** screens approved from component tests and generated mocks.
 - **Check:** T2: a device or emulator with seed data, native density, both
   themes, phone and tablet, the edges cropped at 2x.
+
+### V-07 Mirrored files and script guards when CI is off
+- **Gap:** an agent file was edited and its mirror for another tool was not; a
+  script guard (which CI would have run) failed only at the local gate, after a
+  PR had already merged.
+- **Check:** T0/T1: run the repository's script guards on every PR locally when
+  hosted CI is unavailable, and make the mirror a generated file or a test.
+
+### V-08 Tests written blind
+- **Gap:** a model that could not run commands added tests for its own change:
+  14 mobile tests and 10 type errors failed on first run (wrong copy, a mock
+  factory referencing an out-of-scope import, a fixture missing a required
+  field, an assertion on text the component does not render).
+- **Check:** never accept «tests added» from a run that could not execute them;
+  run the touched suites and the type check, and budget a fix pass. Failures of
+  this kind are the tests, not the feature: read each before changing code.
+
+### V-09 Green is not reviewed
+- **Gap:** about 8,000 web tests and 2,800 mobile tests were green when an
+  independent model of another family read the UI diff and found six real
+  defects (an unknown-role window, a late permission erasing a value, a draft
+  keeping a figure, a stale export choice, a retry carrying revoked data, an
+  undo after revocation). No test modelled those transitions.
+- **Check:** for a permission change, ask the reviewer for TRANSITIONS
+  (unknown→known, denied→granted, granted→revoked) and for what persists
+  (drafts, caches, in-flight confirmations), not just for the steady state.
 
 ### V-06 Headless agent runs
 - **Gap:** a coding CLI run in the background hung waiting on standard input; a
