@@ -16,6 +16,13 @@ These come from months of running cross-provider reviews on a real product: new 
 - An AI finding can still be real when its line number is wrong. **Verify the quote, not just the line.**
 - "Approved, no findings" from one provider means little. Agreement across independent providers means more.
 
+- **A token assertion pins a visual bug.** A test saying "the bar uses the glass colour" passed for weeks while the bar painted a ghost shadow, and would have failed the fix. Probe pixels, not tokens.
+- **A full-frame screenshot hides small defects.** A 2 px height change and a 12 px band were invisible at full frame and obvious in a 2x crop of the bar. Review crops.
+- **A background CLI waits on stdin.** A headless run hung until stdin was redirected from /dev/null; another reported success having edited nothing. Verify with the diff.
+- **A shipped build can point at the wrong environment.** A bundler cache inlined the development URL into a production build. Grep the artifact.
+
+See [UI-DETAIL-CHECKS.md](UI-DETAIL-CHECKS.md) for the catalogue these became.
+
 ## Process that worked
 1. Inventory every existing feature **before** a redesign, then prove each one survives. This caught gaps.
 2. Render screenshots, get the owner's approval, and **only then** write tests.
