@@ -138,6 +138,12 @@ rule**: add it here.
 - **Detect:** T1: fire the action twice within 100 ms against a slow stub and
   count requests.
 - **Pass:** exactly one request; the control exposes a busy state.
+- **Seen in the wild:** a creation sheet that stays open until the server
+  answers had no in-flight guard; one tap on «Save» left two records and a
+  balance higher by the amount twice. Unit tests of the sheet never tapped
+  twice; a functional pass (create, then count what exists) found it at once.
+  The guard must be a **ref**, not state: two taps inside one frame both read
+  the state as «not submitting».
 
 ### UI-13 Accessible names and states
 - **Detect:** T0: an icon-only pressable without an accessible label; a badge
@@ -301,6 +307,15 @@ exist. Each should become a gate.
 - **Check:** for a permission change, ask the reviewer for TRANSITIONS
   (unknown→known, denied→granted, granted→revoked) and for what persists
   (drafts, caches, in-flight confirmations), not just for the steady state.
+
+### V-10 A functional pass after the visual one
+- **Gap:** screens approved from screenshots and component tests; the first
+  real create-then-count on a device found a double creation.
+- **Check:** for each money or record flow, drive it on the real build with
+  seed data and **count the result** (records, balances), not just look at it:
+  create once and expect one; pay once and expect one payment; receive stock
+  and expect the cost and margin to move; open the shared link and expect a
+  page. Clean the test records afterwards.
 
 ### V-06 Headless agent runs
 - **Gap:** a coding CLI run in the background hung waiting on standard input; a
