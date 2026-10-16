@@ -18,6 +18,7 @@ Quorum runs several AI coding CLIs over a change: Codex, Claude Code, Antigravit
 - [Plan](docs/PLAN.md): the problem, architecture, modes, token strategy and v1 scope
 - [Roadmap](docs/ROADMAP.md)
 - [Lessons from real use](docs/LESSONS.md)
+- [UI detail checks](docs/UI-DETAIL-CHECKS.md): small visual and interaction defects tests miss, as checks with a pass criterion
 - [Naming](docs/NAMING.md)
 
 ## Your logins, not ours

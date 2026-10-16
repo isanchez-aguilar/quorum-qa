@@ -19,6 +19,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 - **Jules as a cloud reproduction lane**, only once AGENTS.md has an explicit exception for it and the exact commit can be pinned. Its test is pulled without applying it, and re-run locally before it counts as evidence.
 - The cascade policy, configurable per focus (money, auth, a11y, copy).
 - Incremental re-review (`--since`) and the cache, both on by default.
+- A `ui-detail` check pack for the redesign mode: deterministic probes (pixel rows, bounding-box deltas, touch targets, contrast, payload and artifact greps) before a vision model reviews crops. See [UI-DETAIL-CHECKS.md](UI-DETAIL-CHECKS.md).
 - A pluggable context provider: a code-graph index such as CodeGraph instead of the plain diff.
 
 ## v2: more modes
