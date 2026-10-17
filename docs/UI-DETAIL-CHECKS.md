@@ -144,6 +144,15 @@ rule**: add it here.
   twice; a functional pass (create, then count what exists) found it at once.
   The guard must be a **ref**, not state: two taps inside one frame both read
   the state as «not submitting».
+- **Seen again, in sheets that DID have a `saving` state:** three quick taps on
+  «Register» made three cash withdrawals; three taps on «Yes, cancel» sent three
+  cancel requests and the second answered «already cancelled» as an error dialog
+  AFTER the first had succeeded. Fixing one sheet is not the fix: grep every
+  confirm/submit handler for `if (saving) return` as its only guard, and add a
+  press lock on the shared button as belt and braces (ignore a second press
+  inside ~600 ms; make it zero in tests so suites stay deterministic).
+- **Test:** drive it on the real build with `input tap X Y; input tap X Y; input
+  tap X Y` in ONE adb call (separate calls are too slow to race), then count.
 
 ### UI-13 Accessible names and states
 - **Detect:** T0: an icon-only pressable without an accessible label; a badge
@@ -243,6 +252,19 @@ rule**: add it here.
 - **Detect:** T1: the system back gesture from every screen and sheet; status bar
   style matches the theme (light icons on dark, dark on light).
 
+### UI-26 A sheet footer is a row: wrappers collapse
+- **Symptom:** the action buttons of a bottom sheet render as empty squares or a
+  sliver; the sheet "works" in unit tests because nothing measures width.
+- **Cause:** the footer slot is a **row** container. A feature that wraps its
+  buttons in its own View with no `flex: 1` (or full width) makes that View only
+  as wide as its content, so the buttons, which are `flex: 1`, collapse. It
+  shipped in three sheets before anyone looked.
+- **Detect:** T0: a source guard. For every sheet footer whose first child is a
+  styled wrapper, the style must contain `flex: 1`, `width: "100%"` or
+  `alignSelf: "stretch"`; assert the scan found more than a handful of footers
+  so a regex that matches nothing cannot pass; include a fixture that fails.
+  T1: open every sheet at tablet width and look at the footer.
+
 ---
 
 ## J. Verification gaps (not visual, found the same week)
@@ -316,6 +338,16 @@ exist. Each should become a gate.
   create once and expect one; pay once and expect one payment; receive stock
   and expect the cost and margin to move; open the shared link and expect a
   page. Clean the test records afterwards.
+
+### V-11 A client newer than the API it talks to
+- **Gap:** a permission shipped client and API together, but the dev API had not
+  been redeployed. The newer client read the capability list from the old API,
+  found the new capability missing, and hid cost-gated screens from the OWNER.
+  Nothing failed; the cards were just absent, which looks like "no data".
+- **Check:** deploy the API before (or with) any client that gates on a new
+  capability; when a gated card is missing in a test environment, look at the
+  capability list the server actually sends before suspecting the UI. Consider
+  treating "capability absent from an older server" as the role default.
 
 ### V-06 Headless agent runs
 - **Gap:** a coding CLI run in the background hung waiting on standard input; a
