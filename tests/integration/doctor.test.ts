@@ -41,6 +41,13 @@ describe('doctor with synthetic executables and injected runner', () => {
   });
   afterEach(async () => { vi.unstubAllGlobals(); await rm(root, { recursive: true, force: true }); });
   const status = (checks: Awaited<ReturnType<typeof runDoctor>>, id: string) => checks.find(check => check.id === id)?.status;
+  it('checks models and required providers configured only in confirmation routes', async () => {
+    const cfg = config();
+    Object.assign(cfg.escalate, { routes: { money: ['claude:opus'], a11y: ['agy:gemini-4-argon-high'] } });
+    const result = await runDoctor(cfg, { runner, env: { PATH: '' }, homedir: home, repoRoot: root });
+    expect(status(result, 'claude.path')).toBe('FAIL');
+    expect(status(result, 'agy.model.gemini-4-argon-high')).toBe('FAIL');
+  });
   it('passes available checks, warns on unverified deny rules and never probes implicitly', async () => {
     const before = await readFile(settings, 'utf8');
     const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root });

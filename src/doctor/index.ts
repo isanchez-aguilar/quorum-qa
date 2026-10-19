@@ -31,7 +31,8 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const models = await run('agy', ['models']);
   const listed = new Set(models?.exitCode === 0 ? models.stdout.split(/\r?\n/).filter(line => line.includes('\t')).map(line => line.split('\t')[0]!.trim()) : []);
   results.push({ id: 'agy.models', status: models?.exitCode === 0 && listed.size > 0 ? 'PASS' : 'FAIL', message: listed.size ? 'agy models are readable.' : 'agy models failed; open agy interactively and sign in.' });
-  const configured = [...new Set(Object.values(config?.tiers ?? {}).flat().filter((ref: string) => ref.startsWith('agy:')).map((ref: string) => ref.slice(4)))];
+  const names = [...Object.values(config?.tiers ?? {}).flat(), ...Object.values(config?.escalate.routes ?? {}).flat()];
+  const configured = [...new Set(names.filter((ref: string) => ref.startsWith('agy:')).map((ref: string) => ref.slice(4)))];
   for (const model of configured) results.push({ id: `agy.model.${model}`, status: listed.has(model) ? 'PASS' : 'FAIL', message: listed.has(model) ? `${model} is available.` : `Configured model ${model} is not in agy models.`, ...(!listed.has(model) ? { fix: 'Update quorum.config.json to an available model id.' } : {}) });
   const usage = await run('agy', ['--output-format', 'json', '--print-timeout', '30s', '--print=/usage']);
   const quotaModels = configured.length ? configured : ['gemini-3.8-flash-medium'];
@@ -44,7 +45,6 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const podman = docker?.exitCode === 0 ? undefined : await run('podman', ['--version']);
   const container = docker?.exitCode === 0 || podman?.exitCode === 0;
   results.push({ id: 'container', status: container ? 'PASS' : 'WARN', message: container ? 'Container runtime is available.' : 'Neither Docker nor Podman is available; reproduction requires explicit interactive confirmation.' });
-  const names = Object.values(config?.tiers ?? {}).flat();
   const required = (provider: string) => names.some(ref => ref === provider || ref.startsWith(`${provider}:`));
   const claude = await run('claude', ['--version']);
   results.push({ id: 'claude.path', status: claude?.exitCode === 0 ? 'PASS' : required('claude') ? 'FAIL' : 'WARN',
@@ -59,7 +59,7 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
     if (required('claude')) {
       const ref = names.find(ref => ref === 'claude' || ref.startsWith('claude:'))!;
       results.push(await readProbe('claude', ref.split(':')[1] ?? 'sonnet', context));
-    } else results.push({ id: 'claude.probe', status: 'WARN', message: 'Claude probe skipped: provider is not configured in tiers.' });
+    } else results.push({ id: 'claude.probe', status: 'WARN', message: 'Claude probe skipped: provider is not configured in tiers or routes.' });
     if (required('qwen') && local?.model) {
       try {
         const answer = await qwen.complete(local.model, 'Reply with OK', { deadlineMs: 30_000 }, 'You are a local connectivity probe. Reply with OK.');

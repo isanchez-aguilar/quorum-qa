@@ -210,8 +210,8 @@ export function validateConfig(raw: unknown): QuorumConfig {
     }
   }
 
-  const escalateRaw = r.object(top.escalate, 'escalate', ['focus', 'belowConfidence']) ?? {};
-  const escalate = {
+  const escalateRaw = r.object(top.escalate, 'escalate', ['focus', 'belowConfidence', 'routes']) ?? {};
+  const escalate: QuorumConfig['escalate'] = {
     focus: r.stringArray(escalateRaw.focus, 'escalate.focus', defaults.escalate.focus, true),
     belowConfidence: r.number(
       escalateRaw.belowConfidence,
@@ -220,6 +220,16 @@ export function validateConfig(raw: unknown): QuorumConfig {
       { min: 0, max: 1 },
     ),
   };
+
+  if (escalateRaw.routes !== undefined) {
+    if (!isObject(escalateRaw.routes)) r.issues.push('escalate.routes must be an object');
+    else {
+      escalate.routes = Object.fromEntries(Object.entries(escalateRaw.routes).map(([keyword, refs]) => {
+        if (!isNonEmptyString(keyword)) r.issues.push('escalate.routes keys must be a non-empty keyword');
+        return [keyword, r.stringArray(refs, `escalate.routes.${keyword}`, [], false)];
+      }));
+    }
+  }
 
   const budgetRaw =
     r.object(top.budget, 'budget', ['maxCalls', 'maxMinutes', 'quotaFloorPercent']) ?? {};

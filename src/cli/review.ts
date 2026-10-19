@@ -122,7 +122,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider({ ...config.qwen, fetch: dependencies.fetch })]]);
   const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
   const groups = new Set<string>();
-  for (const ref of Object.values(config.tiers).flat()) {
+  for (const ref of [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()]) {
     const model = parseModelRef(ref, catalog);
     const entry = catalog.find(item => item.provider === model.provider && item.id === model.model)!;
     if (groups.has(entry.quotaGroup)) continue;

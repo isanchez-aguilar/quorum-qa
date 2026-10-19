@@ -79,9 +79,11 @@ describe('M6 main() reproduction with fake containers', () => {
     await writeFile(path.join(root, 'quorum.config.json'), JSON.stringify(settings));
     await git('add', '.'); await git('commit', '-m', 'synthetic independent local source');
     const local = new FakeProvider('qwen', 'local', gitRunner, { qwen: [JSON.stringify([finding({ severity: 'BLOCKER', confidence: 0.95 })])] });
-    const other = new FakeProvider('agy', 'google', gitRunner, { pro: [JSON.stringify({ decision: 'confirm', confidence: 0.6, evidence_quote: finding().evidence_quote })] });
+    const other = new FakeProvider('agy', 'google', gitRunner, { pro: ['[]', JSON.stringify({ decision: 'confirm', confidence: 0.6, evidence_quote: finding().evidence_quote })] });
     const result = await review(container(), ['--allow-unproven', '--trust-head-config', ...(reproduce ? ['--reproduce'] : [])], { providers: new Map([['qwen', local], ['agy', other]]) });
     expect(result.result.unconfirmed[0]).toMatchObject({ family: 'local', confirmationFamilies: ['local', 'google'] });
+    expect(result.result.coverage.complete).toBe(true);
+    expect(result.result.calls.map(call => call.purpose)).toEqual(['review', 'review', 'confirm']);
     expect(result.code).toBe(1);
   });
   it('reports explicit install-script opt-in', async () => {

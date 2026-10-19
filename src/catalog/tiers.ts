@@ -9,10 +9,12 @@ export function resolveTier(tier: Tier, config: QuorumConfig, catalog: readonly 
   authorFamily?: Family;
   excludeLocal?: boolean;
   nowMs?: number;
+  refs?: readonly string[];
+  label?: string;
 } = {}): { models: CatalogEntry[]; warnings: string[] } {
   const warnings: string[] = [];
   const models: CatalogEntry[] = [];
-  for (const ref of config.tiers[tier]) {
+  for (const ref of options.refs ?? config.tiers[tier]) {
     const parsed = parseModelRef(ref, catalog);
     const entry = catalog.find(item => item.provider === parsed.provider && item.id === parsed.model)!;
     if (models.includes(entry) || options.unavailableGroups?.has(entry.quotaGroup)
@@ -24,7 +26,7 @@ export function resolveTier(tier: Tier, config: QuorumConfig, catalog: readonly 
   if (author && models.length) {
     const independent = models.filter(entry => entry.family !== author);
     if (independent.length) return { models: independent, warnings };
-    warnings.push(`Independence rule cannot be met in ${tier}: only ${author} models are available.`);
+    warnings.push(`Independence rule cannot be met in ${options.label ?? tier}: only ${author} models are available.`);
   }
   return { models, warnings };
 }

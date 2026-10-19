@@ -137,7 +137,7 @@ it.each([false, true])('uses Qwen first and quarantines findings until review co
   const qwen = new QwenProvider({ fetch });
   const agy = new FakeProvider('agy', 'google', originRunner(root), {
     'gemini-3.8-flash-medium': ['[]'],
-    ...(confirmed ? { 'gemini-4-argon-high': [JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote })] } : {}),
+    ...(confirmed ? { 'gemini-4-argon-high': ['[]', JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote })] } : {}),
   });
   const result = await runCascade(context(root), config(), new Map<string, ProviderAdapter>([['qwen', qwen], ['agy', agy]]), { gitRunner: originRunner(root) });
   expect(result.calls[0]).toMatchObject({ provider: 'qwen', model: 'qwen3-coder-next' });
