@@ -41,7 +41,7 @@ async function review(raw = '[]', confirmations: string[] = [], args: string[] =
   const agy = new FakeProvider('agy', 'google', runner, { flash: [raw] });
   const codex = new FakeProvider('codex', 'openai', runner, { codex: confirmations });
   let out = ''; let err = '';
-  const code = await main(['review', '--mode', 'bughunt', '--diff', 'base...HEAD', '--no-checks', '--out', '.quorum/report.md', '--json', ...args],
+  const code = await main(['review', '--mode', 'bughunt', ...(args.includes('--diff') ? [] : ['--diff', 'base...HEAD']), '--no-checks', '--out', '.quorum/report.md', '--json', ...args],
     { out: text => { out += text; }, err: text => { err += text; } }, { repoRoot: root, gitRunner: runner, catalog, providers: new Map([['agy', agy], ['codex', codex]]) });
   return { code, out, err, agy, codex, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
@@ -54,7 +54,7 @@ it('reports a planted pre-existing blocker through main, Markdown and SARIF', as
   expect(run.result?.pointsAtChange).toMatchObject([{ origin: 'introduced', line: 15 }]);
   const markdown = await readFile(path.join(root, '.quorum/report.md'), 'utf8');
   expect(markdown).toContain('Points at the change (use feature mode)');
-  expect(markdown).toContain('sample.ts:1-11');
+  expect(markdown).toContain('sample.ts:1-14');
   expect(markdown).toContain('1 Blockers Found');
   const sarif = JSON.parse(await readFile(path.join(root, '.quorum/report.sarif'), 'utf8'));
   expect(sarif.runs[0].results).toHaveLength(1);
@@ -64,16 +64,16 @@ it('only points at the change exits zero and spends no confirmation calls', asyn
   const run = await review(JSON.stringify([changed()]));
   expect(run.code, run.err).toBe(0); expect(run.result?.findings).toEqual([]); expect(run.codex.calls).toHaveLength(0);
 });
-it('unconfirmed pre-existing blockers do not fail a complete bughunt', async () => {
+it('unconfirmed pre-existing blockers fail without a waiver', async () => {
   const run = await review(JSON.stringify([bug()]));
-  expect(run.code, run.err).toBe(0); expect(run.result?.unconfirmed).toHaveLength(1);
+  expect(run.code, run.err).toBe(1); expect(run.result?.unconfirmed).toHaveLength(1);
 });
 it('confirmation moved onto the change cannot confirm a bughunt blocker', async () => {
   const item = bug(); item.line = 11; item.evidence_quote = lines[10]!;
-  const run = await review(JSON.stringify([item]), [confirm(15, changed().evidence_quote)]);
+  const run = await review(JSON.stringify([item]), [confirm(15, changed().evidence_quote)], ['--allow-unproven']);
   expect(run.code, run.err).toBe(0);
   expect(run.result?.findings).toEqual([]);
-  expect(run.result?.pointsAtChange).toMatchObject([{ line: 15, origin: 'introduced' }]);
+  expect(run.result?.unconfirmed).toMatchObject([{ line: 11, origin: 'pre-existing' }]);
 });
 it('blames OPTIONAL model improvements in bughunt', async () => {
   const run = await review(JSON.stringify([{ ...bug(), severity: 'OPTIONAL', origin: 'improvement' }]));
@@ -98,10 +98,10 @@ it('rejects pre-existing findings outside the selected radius after verification
   expect(run.codex.calls).toEqual([]);
 });
 it('rejects a confirmation moved outside the selected windows', async () => {
-  const run = await review(JSON.stringify([{ ...bug(), line: 11, evidence_quote: lines[10] }]), [confirm(5, lines[4]!)], ['--radius', '1']);
+  const run = await review(JSON.stringify([{ ...bug(), line: 14, evidence_quote: lines[13] }]), [confirm(5, lines[4]!)], ['--radius', '1', '--allow-unproven']);
   expect(run.code, run.err).toBe(0);
   expect(run.result?.findings).toEqual([]);
-  expect(run.result?.unconfirmed).toMatchObject([{ line: 11, confirmationFamilies: ['google'] }]);
+  expect(run.result?.unconfirmed).toMatchObject([{ line: 14, confirmationFamilies: ['google'] }]);
 });
 it('does not merge nearby pre-existing and changed findings with identical descriptions', async () => {
   const old = { ...bug(), line: 11, evidence_quote: lines[10]!, severity: 'IMPORTANT' as const };
@@ -111,13 +111,13 @@ it('does not merge nearby pre-existing and changed findings with identical descr
   expect(run.result?.findings).toMatchObject([{ line: 11, origin: 'pre-existing' }]);
   expect(run.result?.pointsAtChange).toMatchObject([{ line: 15, origin: 'introduced' }]);
 });
-it('dry-run uses committed HEAD windows, and radius zero has empty complete coverage', async () => {
+it('dry-run uses committed HEAD windows, and radius zero reviews radius one', async () => {
   await writeFile(path.join(root, 'sample.ts'), 'DIRTY CHECKOUT ONLY\n');
   const dry = await review('[]', [], ['--dry-run']);
-  expect(dry.code, dry.err).toBe(0); expect(dry.out).toContain('Windows: 2 (18 total lines)'); expect(dry.out).toContain('Review chunks: 1');
+  expect(dry.code, dry.err).toBe(0); expect(dry.out).toContain('Windows: 2 (24 total lines)'); expect(dry.out).toContain('Review chunks: 1');
   expect(dry.agy.calls).toEqual([]);
   const zero = await review('[]', [], ['--radius', '0']);
-  expect(zero.code, zero.err).toBe(0); expect(zero.agy.calls).toEqual([]);
+  expect(zero.code, zero.err).toBe(0); expect(zero.agy.calls).toHaveLength(1);
 });
 it.each(['--spec', '--inventory'])('rejects %s in bughunt', async flag => {
   const run = await review('[]', [], [flag, 'spec.md']);
@@ -133,4 +133,63 @@ it('isolates cache by mode and radius even when windows are identical', async ()
   const cached = await review('[]', [], ['--radius', '40']);
   expect(first.agy.calls).toHaveLength(1); expect(second.agy.calls).toHaveLength(1); expect(cached.agy.calls).toHaveLength(0);
   expect(cached.result?.cacheHits).toBe(1);
+});
+
+it('verifies a context line two lines after an edit',async()=>{
+ const run=await review(JSON.stringify([{...bug(),line:17,evidence_quote:lines[16]}]),[confirm(17,lines[16]!)],['--radius','2']);
+ expect(run.code,run.err).toBe(1); expect(run.result?.findings).toMatchObject([{line:17,verified:true}]);
+});
+it('preserves the original when confirmation moves to changed code',async()=>{
+ const run=await review(JSON.stringify([{...bug(),line:11,evidence_quote:lines[10]}]),[confirm(15,changed().evidence_quote)],['--allow-unproven']);
+ expect(run.result?.unconfirmed).toMatchObject([{line:11,origin:'pre-existing'}]);
+ expect(run.result?.ledgerDraft.at(-1)).toMatchObject({verifiedFindingsCount:0,rejectedFindingsCount:1});
+});
+it.each([false,true])('unconfirmed blocker allow-unproven=%s',async allow=>{
+ const run=await review(JSON.stringify([bug()]),[],allow?['--allow-unproven']:[]);
+ expect(run.code,run.err).toBe(allow?0:1);
+});
+it('rejects no windows before calling providers',async()=>{
+ await git('tag','before-new'); await writeFile(path.join(root,'new.ts'),'export const fresh = true;\n'); await git('add','.'); await git('commit','-m','new');
+ const run=await review('[]',[],['--diff','before-new...HEAD']);
+ expect(run.code).toBe(2); expect(run.err).toContain('nothing to review in bughunt mode (no unchanged lines near the change)'); expect(run.agy.calls).toEqual([]);
+});
+it('verifies numbered review and confirm evidence',async()=>{
+ const run=await review(JSON.stringify([{...bug(),evidence_quote:'0005: '+lines[4]}]),[confirm(5,'0005: '+lines[4])]);
+ expect(run.code,run.err).toBe(1); expect(run.result?.findings).toMatchObject([{evidence_quote:lines[4],verified:true}]);
+ expect(run.codex.calls[0]?.prompt).toContain('without the number prefix');
+});
+
+it('confirmed blockers still fail with allow-unproven', async () => {
+  const run = await review(JSON.stringify([bug()]), [confirm(5, lines[4]!)], ['--allow-unproven']);
+  expect(run.code, run.err).toBe(1);
+});
+it.each([false, true])('local-only blockers do not exit one with waiver=%s', async allow => {
+  const config = JSON.parse(await readFile(path.join(root, 'quorum.config.json'), 'utf8'));
+  config.tiers = { triage: ['qwen'], review: ['agy:pro'], confirm: [], visual: [] };
+  await writeFile(path.join(root, 'quorum.config.json'), JSON.stringify(config));
+  await git('add', '.'); await git('commit', '-m', 'local config');
+  const fake = new FakeProvider('qwen', 'local', runner, { qwen: [JSON.stringify([bug()])] });
+  let out = '';
+  const code = await main(['review', '--mode', 'bughunt', '--diff', 'base...HEAD', '--trust-head-config', '--no-checks', '--json', '--out', '.quorum/report.md', ...(allow ? ['--allow-unproven'] : [])],
+    { out: text => { out += text; }, err: () => {} }, { repoRoot: root, gitRunner: runner, catalog, providers: new Map([['qwen', fake]]) });
+  expect(code).toBe(2);
+  expect(JSON.parse(out).unconfirmed).toMatchObject([{ family: 'local', severity: 'BLOCKER' }]);
+});
+it('preserves evidence that literally starts with digits and a colon', async () => {
+  const original = [...lines]; original[4] = '1234: consume(values[index]);';
+  await writeFile(path.join(root, 'sample.ts'), original.join('\n') + '\n');
+  await git('add', '.'); await git('commit', '-m', 'numeric source'); await git('tag', 'numeric-base');
+  original[14] = 'export const value15 = 150;';
+  await writeFile(path.join(root, 'sample.ts'), original.join('\n') + '\n');
+  await git('add', '.'); await git('commit', '-m', 'edit');
+  const run = await review(JSON.stringify([{ ...bug(), evidence_quote: original[4] }]), [confirm(5, original[4]!)], ['--diff', 'numeric-base...HEAD']);
+  expect(run.code, run.err).toBe(1);
+  expect(run.result?.findings[0]?.evidence_quote).toBe(original[4]);
+});
+it('renames yield delete/add notes without making other windows incomplete', async () => {
+  await git('mv', 'spec.md', 'renamed.md'); await git('commit', '-m', 'rename');
+  const run = await review();
+  expect(run.code, run.err).toBe(0);
+  expect(run.result?.coverage.complete).toBe(true);
+  expect(run.result?.warnings.join(' ')).toContain('deleted at head: nothing to hunt');
 });

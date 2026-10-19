@@ -17,18 +17,32 @@ export interface BughuntContext {
 }
 
 function hunks(diff: string, totalLines: number) {
-  return [...diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@[^\n]*(?:\n(?!@@ |diff --git )[^\n]*)*/gm)].map(match => {
-    const count = Number(match[2] ?? 1);
-    // A zero-length range is the boundary AFTER its line; an out-of-bounds hunk is at EOF.
-    const start = Math.min(totalLines + 1, Math.max(1, Number(match[1]) + (count === 0 ? 1 : 0)));
-    const end = Math.min(totalLines, start + count - 1);
-    return { start, end, text: match[0] };
-  });
+  const ranges: Array<WindowRange & { text: string }> = [];
+  for (const match of diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@[^\n]*(?:\n(?!@@ |diff --git )[^\n]*)*/gm)) {
+    let cursor = Math.min(totalLines + 1, Math.max(1, Number(match[1]) + (Number(match[2] ?? 1) === 0 ? 1 : 0)));
+    let start: number | undefined;
+    const flush = () => {
+      if (start !== undefined) ranges.push({ start, end: Math.min(totalLines, cursor - 1), text: match[0] });
+      start = undefined;
+    };
+    for (const line of match[0].split('\n').slice(1)) {
+      if (line.startsWith('\\')) continue;
+      if (line.startsWith('+') || line.startsWith('-')) {
+        start ??= cursor;
+        if (line.startsWith('+')) cursor++;
+      } else {
+        flush();
+        if (line.startsWith(' ')) cursor++;
+      }
+    }
+    flush();
+  }
+  return ranges;
 }
 
-/** Select flanks of HEAD hunk ranges, excluding every hunk (including unified context). */
+/** Select flanks of HEAD hunk ranges, excluding only added HEAD lines. */
 export function selectWindows(diff: string, totalLines: number, radius: number): WindowRange[] {
-  radius = Math.max(0, Math.min(200, Math.trunc(radius)));
+  radius = Math.max(1, Math.min(200, Math.trunc(radius)));
   if (!radius || !totalLines) return [];
   const changes = hunks(diff, totalLines);
   const candidates = changes.flatMap(({ start, end }) => [
@@ -58,6 +72,12 @@ export async function buildBughuntContext(context: ReviewContext, headRoot: stri
   const radius = context.radius ?? 40;
   for (const file of context.touchedFiles) {
     const section = sections.find(item => diffSectionPath(item) === file);
+    if (/^deleted file mode |^\+\+\+ \/dev\/null$/m.test(section ?? '')) {
+      result.notes.push(`${file}: deleted at head: nothing to hunt`); continue;
+    }
+    if (/^new file mode |^--- \/dev\/null$/m.test(section ?? '')) {
+      result.notes.push(`${file}: new at head: nothing to hunt (no unchanged lines)`); continue;
+    }
     if (section && /^Binary files .* differ\r?$/m.test(section)) {
       result.binaryFiles.push(file);
       result.notes.push(`${file}: binary file skipped (no text windows).`);
@@ -78,7 +98,7 @@ export async function buildBughuntContext(context: ReviewContext, headRoot: stri
         // NNNN: is a minimum-four-digit, one-based HEAD line number, followed by the exact line.
         const numbered = lines.slice(range.start - 1, range.end).map((line, index) => `${String(range.start + index).padStart(4, '0')}: ${line}`).join('\n');
         const orientation = changes.filter(change => range.start <= change.end + radius && range.end >= change.start - radius)
-          .map(change => change.text).join('\n');
+          .map(change => change.text).filter((text, index, all) => all.indexOf(text) === index).join('\n');
         result.windows.push({ file, ...range, content: numbered, orientation });
       }
     } catch (error) {

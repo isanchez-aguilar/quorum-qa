@@ -118,7 +118,7 @@ node bin/quorum.js review --mode redesign --diff origin/main...HEAD --inventory 
 | Command | Flag | Description |
 |---|---|---|
 | `review` | `--mode <feature\|redesign\|bughunt>` | Review mode |
-| `review` | `--radius <n>` | Bughunt lines before/after each hunk; default 40, clamped to 0-200 |
+| `review` | `--radius <n>` | Bughunt lines before/after each hunk; default 40, clamped to 1-200 |
 | `review` | `--diff <range>` | Git range to review, e.g. origin/main...HEAD |
 | `review` | `--spec <file>` | Spec with the acceptance criteria (feature) |
 | `review` | `--inventory <file>` | Inventory of the old features (redesign) |

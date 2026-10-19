@@ -11,13 +11,13 @@ import { validateConfig } from '../../src/config/schema.js';
 import { FakeProvider } from '../../src/providers/fake.js';
 import { catalog, context, originRunner } from '../fixtures/cascade.js';
 
-const hunk = (start: number, count = 1) => `@@ -${start},${count} +${start},${count} @@\n-old\n+new\n`;
+const hunk = (start: number, count = 1) => `@@ -${start},${count} +${start},${count} @@\n${Array.from({ length: count }, () => "-old\n+new\n").join("") || "-old\n"}`;
 const diff = (...hunks: string[]) => 'diff --git a/sample.ts b/sample.ts\n--- a/sample.ts\n+++ b/sample.ts\n' + hunks.join('');
 let root: string | undefined;
 afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); });
 
 describe('bughunt flags', () => {
-  it.each([[undefined, 40], ['0', 0], ['-7', 0], ['201', 200], ['12', 12]])('clamps radius %s to %s', (value, expected) => {
+  it.each([[undefined, 40], ['0', 1], ['-7', 1], ['201', 200], ['12', 12]])('clamps radius %s to %s', (value, expected) => {
     const args = ['review', '--mode', 'bughunt', ...(value === undefined ? [] : ['--radius', value])];
     expect(parseArgs(args).flags).toMatchObject({ mode: 'bughunt', radius: expected });
   });
@@ -39,7 +39,7 @@ describe('unchanged HEAD windows', () => {
   it('caps hunks at the start and end', () => {
     expect(selectWindows(diff(hunk(1), hunk(20)), 20, 3)).toEqual([{ start: 2, end: 4 }, { start: 17, end: 19 }]);
   });
-  it('selects nothing at radius zero', () => { expect(selectWindows(diff(hunk(10)), 20, 0)).toEqual([]); });
+  it('clamps selector radius zero to one', () => { expect(selectWindows(diff(hunk(10)), 20, 0)).toEqual([{ start: 9, end: 9 }, { start: 11, end: 11 }]); });
   it('clamps a hunk beyond HEAD to the file end', () => {
     expect(selectWindows(diff(hunk(50)), 20, 3)).toEqual([{ start: 18, end: 20 }]);
   });
@@ -90,7 +90,7 @@ describe('unchanged HEAD windows', () => {
     expect(enriched.chunks).toEqual(plain.chunks);
     expect(enriched.notes.join()).toContain('provider context dropped');
   });
-  it('skips an oversized atomic window whole without splitting lines', async () => {
+  it('skips an oversized single line without splitting it', async () => {
     root = await mkdtemp(path.join(tmpdir(), 'quorum-bughunt-'));
     await writeFile(path.join(root, 'sample.ts'), `${'x'.repeat(25_000)}\nchanged\nlast\n`);
     const ctx = { ...context(root), mode: 'bughunt' as const, radius: 1, diff: diff(hunk(2)) };
@@ -98,7 +98,7 @@ describe('unchanged HEAD windows', () => {
     const payload = reviewChunks(ctx);
     expect(payload.skippedFiles).toEqual(['sample.ts']);
     expect(payload.chunks.flatMap(chunk => chunk.windows ?? [])).toEqual([{ file: 'sample.ts', start: 3, end: 3 }]);
-    expect(payload.notes.join()).toContain('whole window skipped');
+    expect(payload.notes.join()).toContain('single line skipped');
     expect(payload.chunks[0]?.prompt).not.toContain('x'.repeat(100));
   });
   it('keeps inline diff truncation visible even without a context flag', async () => {
@@ -122,4 +122,50 @@ describe('unchanged HEAD windows', () => {
     expect(result.coverage.reviewedWindows).toEqual(chunks[0]?.windows);
     expect(result.coverage.skippedWindows).toEqual(chunks[1]?.windows);
   });
+});
+
+it('retains unified context between nearby edits', () => {
+ expect(selectWindows(diff('@@ -1,7 +1,7 @@\n before\n-old\n+new\n one\n two\n three\n-old2\n+new2\n after\n'), 7, 3)).toEqual([{start:1,end:1},{start:3,end:5},{start:7,end:7}]);
+});
+it('anchors pure deletions within unified context', () => {
+ expect(selectWindows(diff('@@ -1,5 +1,4 @@\n first\n second\n-deleted\n third\n fourth\n'),4,1)).toEqual([{start:2,end:3}]);
+});
+it('splits 401 whole lines after truncating orientation', () => {
+ const ctx = {...context('unused'), mode:'bughunt' as const, bughunt:{windows:[{file:'sample.ts',start:1,end:401,content:Array.from({length:401},(_,i)=>String(i+1).padStart(4,'0')+': '+'x'.repeat(100)).join('\n'),orientation:'change'.repeat(10000)}],skippedFiles:[],binaryFiles:[],notes:[]}};
+ const result=reviewChunks(ctx);
+ expect(result.chunks.length).toBeGreaterThan(1);
+ expect(result.chunks.every(c=>c.prompt.length<=MAX_PROMPT_CHARACTERS)).toBe(true);
+ expect(result.chunks.flatMap(c=>c.windows??[]).flatMap(w=>Array.from({length:w.end-w.start+1},(_,i)=>w.start+i))).toEqual(Array.from({length:401},(_,i)=>i+1));
+ expect(result.chunks.map(c=>c.prompt).join('')).toContain('[... truncated ...]');
+ expect(result.truncatedHunks).toEqual([]); expect(result.skippedFiles).toEqual([]);
+});
+it('records a single oversized line', () => {
+ const ctx={...context('unused'),mode:'bughunt' as const,bughunt:{windows:[{file:'sample.ts',start:7,end:7,content:'x'.repeat(25000),orientation:''}],skippedFiles:[],binaryFiles:[],notes:[]}};
+ expect(reviewChunks(ctx).truncatedHunks).toEqual([{file:'sample.ts',hunk:7}]);
+});
+it('does not count deleted files as missing coverage', async () => {
+ root=await mkdtemp(path.join(tmpdir(),'quorum-bughunt-'));
+ const ctx={...context(root),mode:'bughunt' as const,diff:'diff --git a/sample.ts b/sample.ts\ndeleted file mode 100644\n--- a/sample.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n'};
+ const result=await buildBughuntContext(ctx,root);
+ expect(result.skippedFiles).toEqual([]); expect(result.notes.join()).toContain('deleted at head: nothing to hunt');
+});
+
+it('counts all sub-windows as complete after successful remote review', async () => {
+  root = await mkdtemp(path.join(tmpdir(), 'quorum-bughunt-'));
+  const ctx = { ...context(root), mode: 'bughunt' as const, bughunt: { windows: [{ file: 'sample.ts', start: 1, end: 401,
+    content: Array.from({ length: 401 }, () => 'x'.repeat(100)).join('\n'), orientation: 'change'.repeat(10000) }], skippedFiles: [], binaryFiles: [], notes: [] } };
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: Array(10).fill('[]') });
+  const config = validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: [], visual: [] } });
+  const result = await runCascade(ctx, config, new Map([['agy', fake]]), { catalog, gitRunner: originRunner(root) });
+  expect(result.coverage.complete).toBe(true); expect(result.coverage.skippedWindows).toEqual([]);
+});
+it('verifies multiline numbered evidence in the review tier', async () => {
+  root = await mkdtemp(path.join(tmpdir(), 'quorum-bughunt-'));
+  await writeFile(path.join(root, 'sample.ts'), 'const first = read(input);\nconst second = consume(first);\n');
+  const ctx = { ...context(root), mode: 'bughunt' as const, bughunt: { windows: [{ file: 'sample.ts', start: 1, end: 2, content: '0001: const first = read(input);\n0002: const second = consume(first);', orientation: '' }], skippedFiles: [], binaryFiles: [], notes: [] } };
+  const raw = JSON.stringify([{ severity: 'IMPORTANT', origin: 'pre-existing', file: 'sample.ts', line: 1, trigger: 'Invalid input', impact: 'Bad output', fix: 'Validate input', confidence: 0.9, evidence_quote: ctx.bughunt.windows[0]!.content }]);
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { pro: [raw] });
+  const config = validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: [], visual: [] }, escalate: { focus: [], belowConfidence: 0.6 } });
+  const result = await runCascade(ctx, config, new Map([['agy', fake]]), { catalog, gitRunner: originRunner(root) });
+  expect(result.findings).toMatchObject([{ verified: true, evidence_quote: 'const first = read(input);\nconst second = consume(first);' }]);
 });

@@ -33,7 +33,7 @@ Commands:
 
 Options for review:
   --mode <feature|redesign|bughunt>  Review mode
-  --radius <n>              Unchanged lines around hunks (bughunt; default 40, clamped 0-200)
+  --radius <n>              Unchanged lines around hunks (bughunt; default 40, clamped 1-200)
   --diff <range>             Git range to review, e.g. origin/main...HEAD
   --spec <file>              Spec with the acceptance criteria (feature)
   --inventory <file>         Inventory of the old features (redesign)

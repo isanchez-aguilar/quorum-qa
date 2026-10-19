@@ -131,7 +131,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         flags.mode = value as (typeof REVIEW_MODES)[number];
       } else if (key === 'radius') {
         if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new UsageError('--radius must be an integer.');
-        flags.radius = Math.min(200, Math.max(0, Number(value)));
+        flags.radius = Math.min(200, Math.max(1, Number(value)));
       } else {
         flags[key] = value;
       }

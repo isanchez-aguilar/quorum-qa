@@ -197,14 +197,44 @@ function bughuntChunks(context: ReviewContext) {
     chunks.push({ prompt, files, windows: pending.map(({ file, start, end }) => ({ file, start, end })) });
     pending = [];
   };
-  for (const window of selection?.windows ?? []) {
-    if (render([window]).length > MAX_PROMPT_CHARACTERS) {
-      skippedFiles.add(window.file);
-      notes.push(`${window.file}:${window.start}-${window.end}: whole window skipped; it exceeds the 24,000-character prompt cap.`);
-      continue;
-    }
+  const pack = (window: BughuntWindow) => {
     if (render([...pending, window]).length > MAX_PROMPT_CHARACTERS) flush();
     pending.push(window);
+  };
+  for (const original of selection?.windows ?? []) {
+    let window = original;
+    if (render([window]).length > MAX_PROMPT_CHARACTERS) {
+      window = { ...window, orientation: TRUNCATION_MARKER };
+      if (render([window]).length <= MAX_PROMPT_CHARACTERS) {
+        let low = 0;
+        let high = original.orientation.length;
+        while (low < high) {
+          const middle = Math.ceil((low + high) / 2);
+          const candidate = { ...window, orientation: original.orientation.slice(0, middle) + TRUNCATION_MARKER };
+          if (render([candidate]).length <= MAX_PROMPT_CHARACTERS) low = middle;
+          else high = middle - 1;
+        }
+        window.orientation = original.orientation.slice(0, low) + TRUNCATION_MARKER;
+      }
+      notes.push(`${window.file}:${window.start}-${window.end}: orientation truncated to preserve unchanged lines.`);
+    }
+    if (render([window]).length <= MAX_PROMPT_CHARACTERS) { pack(window); continue; }
+    let part: BughuntWindow | undefined;
+    for (const [index, content] of window.content.split('\n').entries()) {
+      const line = window.start + index;
+      const single = { ...window, start: line, end: line, content };
+      if (render([single]).length > MAX_PROMPT_CHARACTERS) {
+        if (part) { pack(part); part = undefined; }
+        skippedFiles.add(window.file);
+        truncatedHunks.push({ file: window.file, hunk: line });
+        notes.push(`${window.file}:${line}: single line skipped; it exceeds the 24,000-character prompt cap.`);
+        continue;
+      }
+      const combined = part ? { ...part, end: line, content: part.content + '\n' + content } : single;
+      if (render([combined]).length <= MAX_PROMPT_CHARACTERS) part = combined;
+      else { pack(part!); part = single; }
+    }
+    if (part) pack(part);
   }
   flush();
   return { chunks, notes, skippedFiles: [...skippedFiles], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [] };
