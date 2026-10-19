@@ -105,9 +105,9 @@ The models that agy offers change often, so Quorum never hardcodes them: `quorum
 | Model ids | Family | Default tier in Quorum | Notes |
 |---|---|---|---|
 | `gemini-3.8-flash-{low,medium,high}` (also 3.7 and 3.6 flash) | google | **triage** | Cheapest and fastest. The first pass on every diff. Use the newest flash version that is listed. |
-| `gemini-3.1-pro-{low,high}` | google | **review**, **visual** | The main Google reviewer and the image reviewer for `redesign`. |
+| `gemini-4-argon-{low,medium,high}` | google | **review**, **visual** | The main Google reviewer and the image reviewer for `redesign`. **Its own quota group** ("Gemini 4 Argon"), separate from Flash. It replaced `gemini-3.1-pro-*`, which agy stopped listing in mid-October 2026; `quorum doctor` caught the change. |
 | `claude-sonnet-5-5-{low,medium,high}` | anthropic | review | A second Anthropic seat when Claude Code's own quota is low. It does **not** add independence next to Claude Code. |
-| `claude-opus-5-5-{low,medium,high}` | anthropic | confirm | Confirms escalated findings. Shares one quota with Sonnet inside agy, and a reset can be days away. |
+| `claude-opus-5-5-{low,medium,high}` | anthropic | confirm | Confirms escalated findings. Shares **one quota group with Sonnet and GPT-OSS** inside agy ("Claude and GPT models", per `/usage`), and a reset can be days away. |
 | `gpt-oss-120b-medium` | openai | triage, second opinion | A third family available through the same login. It is useful as the tie-breaker when the Google and Anthropic reviewers disagree. |
 
 Other providers in the catalog: Codex (openai, confirm), Claude Code (anthropic, review and confirm, with model chosen by `--model`) and Qwen (local, triage).
@@ -162,9 +162,9 @@ Guardrails (lessons from running Jules by hand, and from the review of this plan
   "author": "claude",
   "tiers": {
     "triage":  ["agy:gemini-3.8-flash-medium", "qwen", "agy:gpt-oss-120b-medium"],
-    "review":  ["agy:gemini-3.1-pro-high", "claude:sonnet"],
+    "review":  ["agy:gemini-4-argon-high", "claude:sonnet"],
     "confirm": ["codex", "agy:claude-opus-5-5-high", "claude:opus"],
-    "visual":  ["agy:gemini-3.1-pro-high"]
+    "visual":  ["agy:gemini-4-argon-high"]
   },
   "escalate": { "focus": ["money", "auth", "permissions"], "belowConfidence": 0.7 },
   "budget": { "maxCalls": 12, "maxMinutes": 20, "quotaFloorPercent": 15 },

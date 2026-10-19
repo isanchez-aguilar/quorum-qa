@@ -8,6 +8,8 @@ function entry(provider: string, id: string, family: Family, defaultTier: Tier, 
 export const DEFAULT_CATALOG: readonly CatalogEntry[] = [
   ...['3.8', '3.7', '3.6'].flatMap(version => ['low', 'medium', 'high'].map(effort =>
     entry('agy', `gemini-${version}-flash-${effort}`, 'google', 'triage', 'agy:google', true))),
+  ...['low', 'medium', 'high'].map(effort => entry('agy', `gemini-4-argon-${effort}`, 'google', 'review', 'agy:argon', true)),
+  // Listed by agy until mid-October 2026; kept so older configs still resolve, and doctor flags them when agy drops them.
   ...['low', 'high'].map(effort => entry('agy', `gemini-3.1-pro-${effort}`, 'google', 'review', 'agy:google', true)),
   ...['low', 'medium', 'high'].flatMap(effort => [
     entry('agy', `claude-sonnet-5-5-${effort}`, 'anthropic', 'review', 'agy:anthropic', true),

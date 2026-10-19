@@ -52,6 +52,11 @@ describe('doctor with synthetic executables and injected runner', () => {
     expect(await readFile(settings, 'utf8')).toBe(before);
     expect(runner.mock.calls.every(([, , options]) => !options?.env?.MSYS_NO_PATHCONV)).toBe(true);
   });
+  it('reads agy settings written with a UTF-8 BOM', async () => {
+    await writeFile(settings, '﻿' + JSON.stringify({ permissions: { allow: [`read_file(${permissionPath(root)})`] } }));
+    const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root });
+    expect(status(result, 'agy.permissions.read')).toBe('PASS');
+  });
   it('reports missing executables, checks, models, git and unknown quota without throwing', async () => {
     const result = await runDoctor(config(), { runner, env: { PATH: '' }, homedir: home, repoRoot: root });
     for (const id of ['git.repo', 'check.0', 'agy.path', 'agy.models', `agy.model.${model}`, 'codex.path']) expect(status(result, id)).toBe('FAIL');

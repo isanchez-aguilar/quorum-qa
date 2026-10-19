@@ -30,7 +30,9 @@ export async function checkPermissions(homedir: string, repoRoot: string): Promi
   const rule = `read_file(${parent})`;
   let allowed = false;
   try {
-    const settings: unknown = JSON.parse(await readFile(path.join(homedir, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8'));
+    // PowerShell writes a UTF-8 BOM, which agy accepts and JSON.parse does not.
+    const text = (await readFile(path.join(homedir, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')).replace(/^﻿/, '');
+    const settings: unknown = JSON.parse(text);
     const allow = (settings as { permissions?: { allow?: unknown } } | null)?.permissions?.allow;
     const deny = (settings as { permissions?: { deny?: unknown } } | null)?.permissions?.deny;
     const covers = (entry: unknown): boolean => {
