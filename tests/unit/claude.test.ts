@@ -137,6 +137,6 @@ it.each(["You've hit your usage limit", 'API Error: 429 rate_limit_error'])('exh
 });
 
 it('does not scan error result beyond the first 300 characters', async () => {
-  answer.mockResolvedValue({ stdout: JSON.stringify({ subtype: 'success', is_error: true, result: 'x'.repeat(300) + '429' }), stderr: '', exitCode: 1 });
+  answer.mockResolvedValue({ stdout: JSON.stringify({ subtype: 'success', is_error: true, result: 'x'.repeat(300) + ' 429' }), stderr: '', exitCode: 1 });
   await expect(review()).rejects.toMatchObject({ kind: 'unavailable' });
 });
