@@ -1,5 +1,6 @@
 import type { ReviewContext } from '../types/index.js';
 import type { ReadableStreamDefaultReader } from 'node:stream/web';
+import { AGY_SCHEMAS } from './schemas.js';
 import { isRecord } from '../cascade/parse.js';
 import { REVIEW_INSTRUCTIONS } from '../cascade/prompts.js';
 import { ProviderCommands, quotaLanguage, remaining, type AdapterOptions } from './commands.js';
@@ -9,6 +10,10 @@ import { ProviderError, type ProviderAdapter, type Quota, type RawProviderResult
 export const QWEN_REVIEW_PREFIX = REVIEW_INSTRUCTIONS + 'You have no file access or tools. The prompt diff is all the code you have; do not claim to inspect other files.\n';
 export const MAX_QWEN_BYTES = 1024 * 1024;
 export interface QwenOptions extends AdapterOptions { endpoint?: string; model?: string; fetch?: typeof globalThis.fetch }
+
+class UnsupportedResponseFormat extends ProviderError {
+  constructor() { super('unavailable', 'qwen server does not support response_format'); }
+}
 
 export class QwenProvider extends ProviderCommands implements ProviderAdapter {
   readonly name = 'qwen';
@@ -48,6 +53,7 @@ export class QwenProvider extends ProviderCommands implements ProviderAdapter {
         chunks.push(chunk.value);
       }
       const text = Buffer.concat(chunks).toString('utf8');
+      if (response.status === 400 && /response_format|json_schema/i.test(text)) throw new UnsupportedResponseFormat();
       if (!response.ok) throw new ProviderError(quotaLanguage(text) ? 'quota' : 'unavailable', `Qwen HTTP error (${response.status})`);
       remaining(options, started, this.now);
       try { return JSON.parse(text) as unknown; }
@@ -83,9 +89,22 @@ export class QwenProvider extends ProviderCommands implements ProviderAdapter {
   }
   async getQuota(_modelId: string): Promise<Quota> { return 'unknown'; }
   async complete(model: string, prompt: string, options: ReviewOptions, system = QWEN_REVIEW_PREFIX): Promise<string | undefined> {
-    const envelope = await this.request('chat/completions', options, { model,
+    const started = this.now();
+    const purpose = options.purpose ?? 'review';
+    const body = { model,
       messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-      temperature: 0, max_tokens: 4096, stream: false });
+      temperature: 0, max_tokens: 4096, stream: false };
+    let envelope: unknown;
+    try {
+      envelope = await this.request('chat/completions', options, { ...body,
+        response_format: { type: 'json_schema', json_schema: { name: purpose, strict: true, schema: AGY_SCHEMAS[purpose] } } });
+    } catch (error) {
+      if (!(error instanceof UnsupportedResponseFormat)) throw error;
+      (options.warn ?? console.warn)(error.message);
+      const deadlineMs = remaining(options, started, this.now);
+      if (options.reserveRetry && !options.reserveRetry()) throw new ProviderError('unavailable', 'Qwen retry denied: review budget ceiling reached');
+      envelope = await this.request('chat/completions', { ...options, deadlineMs }, body);
+    }
     if (!isRecord(envelope) || !Array.isArray(envelope.choices)) return undefined;
     const first: unknown = envelope.choices[0];
     return isRecord(first) && isRecord(first.message) && typeof first.message.content === 'string' ? first.message.content : undefined;

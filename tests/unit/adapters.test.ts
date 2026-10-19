@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AgyProvider, parseAgyQuota } from '../../src/providers/agy.js';
+import { AgyProvider, parseAgyQuota, AGY_NO_TOOLS } from '../../src/providers/agy.js';
 import { CodexProvider } from '../../src/providers/codex.js';
 import { DEFAULT_CATALOG } from '../../src/catalog/index.js';
 import { agyQuotaGroup } from '../../src/catalog/agy-groups.js';
@@ -43,6 +43,7 @@ describe('structured agy answers', () => {
     const result = await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000, purpose });
     expect(JSON.parse(result.rawOutput)).toEqual(structured);
     const args = providerCalls()[0]!.args;
+    expect(args).toContain('--print=Do not call any tools: no file reads and no commands. Everything you need is in this prompt; answer only with the JSON.\np');
     expect(args).toContain('--json-schema');
     const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]!);
     expect(schema).toEqual(AGY_SCHEMAS[purpose]);
@@ -94,7 +95,7 @@ describe('structured agy answers', () => {
     const warnings: string[] = []; const prompt = 'x'.repeat(29400 - extra);
     await new AgyProvider({ ...settings(), platform: 'win32', env: { PATH: 'C:\\' + 'a'.repeat(extra), PATHEXT: '.EXE' } })
       .executeReview(context, 'model', prompt, { deadlineMs: 5000, warn: message => warnings.push(message) });
-    expect(providerCalls()[0]!.args).toContain('--print=' + prompt);
+    expect(providerCalls()[0]!.args).toContain('--print=' + AGY_NO_TOOLS + '\n' + prompt);
     expect(providerCalls()[0]!.args).not.toContain('--json-schema');
     expect(warnings.join()).toMatch(/schema.*Windows/);
   });
@@ -105,7 +106,7 @@ describe('agy adapter', () => {
     const result = await new AgyProvider({ ...settings(), now: () => 100 }).executeReview(context, 'gemini-3.8-flash-medium', 'read only', { deadlineMs: 4200 });
     expect(result).toMatchObject({ rawOutput: '[]\n', worktreeClean: true, tokensUsed: { prompt: 12774, completion: 1 } });
     const call = providerCalls()[0]!;
-    expect(call.args).toEqual(['--model', 'gemini-3.8-flash-medium', '--sandbox', '--output-format', 'json', '--print-timeout', '4s', '--print=read only', '--json-schema', expect.any(String)]);
+    expect(call.args).toEqual(['--model', 'gemini-3.8-flash-medium', '--sandbox', '--output-format', 'json', '--print-timeout', '4s', '--print=' + AGY_NO_TOOLS + '\nread only', '--json-schema', expect.any(String)]);
     expect(call.options?.cwd).toContain(path.join('.quorum', 'worktrees'));
     expect(call.options?.stdin).toBeUndefined();
     expect(call.options?.timeoutMs).toBe(4200);
@@ -313,4 +314,11 @@ describe('M4 regressions', () => {
   it('matches argon before generic Gemini', () => {
     expect(agyQuotaGroup('gemini-3.8-pro-argon-high')).toBe('agy:argon');
   });
+});
+
+it.each(['required the "command" permission', 'auto-denied'])('detects empty headless agy answers: %s', async diagnostic => {
+  answer = async () => success(JSON.stringify({ status: 'SUCCESS', response: '' }), 0,
+    'no output produced — a tool ' + diagnostic + ' that headless mode cannot prompt for');
+  await expect(new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 }))
+    .rejects.toMatchObject({ kind: 'unavailable', message: 'agy tried to run a command in headless mode and returned nothing' });
 });

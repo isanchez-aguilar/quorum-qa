@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ReadableStream } from 'node:stream/web';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { QwenProvider, QWEN_REVIEW_PREFIX, MAX_QWEN_BYTES } from '../../src/providers/qwen.js';
+import { AGY_SCHEMAS } from '../../src/providers/schemas.js';
 import { checkQwen } from '../../src/doctor/checks.js';
 import { DEFAULT_CATALOG, parseModelRef, withQwenModel } from '../../src/catalog/index.js';
 import { validateConfig } from '../../src/config/schema.js';
@@ -41,7 +42,7 @@ it('sends the stable system prefix and diff-only warning, discovers once and nev
   expect(fetch.mock.calls.filter(([, init]) => init?.method === 'GET')).toHaveLength(1);
   expect(JSON.parse(fetch.mock.calls[1]![1]!.body as string)).toEqual({ model: 'qwen3-coder-next', messages: [
     { role: 'system', content: QWEN_REVIEW_PREFIX }, { role: 'user', content: 'synthetic diff' },
-  ], temperature: 0, max_tokens: 4096, stream: false });
+  ], temperature: 0, max_tokens: 4096, stream: false, response_format: { type: 'json_schema', json_schema: { name: 'review', strict: true, schema: AGY_SCHEMAS.review } } });
   expect(QWEN_REVIEW_PREFIX).toContain('diff is all the code you have'); expect(QWEN_REVIEW_PREFIX).toContain('no file access');
   expect(runner).not.toHaveBeenCalled();
 });
@@ -167,4 +168,26 @@ it('uses the resolved model in cache keys and invalidates cache when discovery c
     expect(cache.stage.mock.calls.at(-1)?.[2]).toBe(`qwen:${model}`);
   }
   expect(keys).toHaveLength(2); expect(keys[0]).not.toBe(keys[1]);
+});
+
+it.each(['review', 'confirm', 'adjudicate', 'reproduce'] as const)('sends a strict purpose schema for %s', async purpose => {
+  const fetch = fetcher();
+  await new QwenProvider({ model: 'local', fetch }).complete('local', 'p', { ...deadline, purpose });
+  expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string).response_format).toEqual({ type: 'json_schema', json_schema: { name: purpose, strict: true, schema: AGY_SCHEMAS[purpose] } });
+});
+it.each(['response_format', 'json_schema'])('retries unsupported %s once without a schema', async field => {
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(new Response('unsupported ' + field, { status: 400 })).mockResolvedValueOnce(completion());
+  const warn = vi.fn(); const reserveRetry = vi.fn(() => true);
+  expect(await new QwenProvider({ model: 'local', fetch }).complete('local', 'p', { ...deadline, warn, reserveRetry })).toBe('[]');
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(fetch.mock.calls[1]![1]!.body as string)).not.toHaveProperty('response_format');
+  expect(warn).toHaveBeenCalledExactlyOnceWith('qwen server does not support response_format');
+  expect(reserveRetry).toHaveBeenCalledOnce();
+});
+it.each(['denied', 'expired', 'second failure', 'unrelated'])('bounds schema fallback: %s', async mode => {
+  let now = 0;
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => { if (mode === 'expired') now = 1001; return new Response(mode === 'unrelated' ? 'bad model' : 'unsupported json_schema', { status: 400 }); });
+  const provider = new QwenProvider({ model: 'local', fetch, now: () => now });
+  await expect(provider.complete('local', 'p', { ...deadline, warn: () => {}, reserveRetry: () => mode !== 'denied' })).rejects.toMatchObject({ kind: mode === 'expired' ? 'timeout' : 'unavailable' });
+  expect(fetch).toHaveBeenCalledTimes(mode === 'second failure' ? 2 : 1);
 });

@@ -50,5 +50,5 @@ it('shows setup, call cap and one Argon quota warning across tiers', () => {
   expect(formatDryRun(plan)).toContain('Max Call Time: 300 seconds');
 });
 it('adds short prompt guidance', () => {
-  expect(REVIEW_INSTRUCTIONS).toContain('Everything you need is in this prompt. Read other files only to check a line you cite. Answer as soon as you can.');
+  expect(REVIEW_INSTRUCTIONS).toContain('Everything you need is in this prompt. If you can read files, read only what you need to check a line you cite. Answer as soon as you can.');
 });

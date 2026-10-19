@@ -1,3 +1,4 @@
+import { AGY_COMMAND_DENIED } from '../providers/agy.js';
 import { cacheKey, type ReviewCache } from '../storage/index.js';
 import { cleanDiff, diffSectionPath } from '../context/diff.js';
 import { checkoutSnapshot, checkoutDifference, type CheckoutSnapshot } from '../worktree/checkout.js';
@@ -239,7 +240,7 @@ export async function runCascade(
         if (error instanceof ProviderError) error.warnings.forEach(warn);
         if (errors.length) { call.status = 'error'; warn(message); return null; }
         call.status = error instanceof ProviderError ? error.kind : /429|quota/i.test(message) ? 'quota' : 'unavailable';
-        warn(`${ref}: ${message}`);
+        warn(message === AGY_COMMAND_DENIED ? message : `${ref}: ${message}`);
         if (call.status === 'quota') budget.unavailableGroups.add(entry.quotaGroup);
         else unavailable.add(ref);
         if (call.status === 'timeout') {

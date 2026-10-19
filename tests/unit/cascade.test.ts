@@ -1,3 +1,4 @@
+import { ProviderError } from '../../src/providers/types.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,6 +33,31 @@ describe('fake provider cascade', () => {
     const result = await runCascade(context(root), cfg, pool, { catalog, gitRunner: originRunner(root), clock: new FakeClock() });
     expect(pool.get('agy')!.calls.map(call => call.model)).toEqual(['flash']);
     expect(result.warnings.filter(message => message === 'agy:google: quota exhausted earlier in this run, skipped')).toHaveLength(1);
+  });
+  it('warns once across denied agy models, keeps their group available, and resets per run', async () => {
+    for (let run = 0; run < 2; run++) {
+      const pool = providers({ agy: { flash: [], pro: [] }, codex: { codex: ['[]'] } });
+      const called: string[] = [];
+      pool.get('agy')!.executeReview = async (_context, model) => {
+        called.push(model);
+        throw new ProviderError('unavailable', 'agy tried to run a command in headless mode and returned nothing');
+      };
+      const cfg = config({ tiers: { triage: ['agy:flash', 'agy:pro', 'codex'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
+      const result = await runCascade(context(root), cfg, pool, { catalog, gitRunner: originRunner(root), clock: new FakeClock() });
+      expect(called).toEqual(['flash', 'pro']);
+      expect(result.calls.map(call => call.status)).toEqual(['unavailable', 'unavailable', 'ok']);
+      expect(result.warnings.filter(message => message.includes('agy tried to run a command'))).toEqual(['agy tried to run a command in headless mode and returned nothing']);
+    }
+  });
+  it('deduplicates response_format warnings across calls within each run', async () => {
+    const pool = providers({ agy: { flash: [] } });
+    pool.get('agy')!.executeReview = async (_context, _model, _prompt, options) => {
+      options.warn?.('qwen server does not support response_format');
+      options.warn?.('qwen server does not support response_format');
+      return { rawOutput: '[]', durationMs: 0, worktreeClean: true };
+    };
+    const result = await runCascade(context(root), config(), pool, { catalog, gitRunner: originRunner(root), clock: new FakeClock() });
+    expect(result.warnings.filter(message => message.includes('response_format'))).toEqual(['qwen server does not support response_format']);
   });
   it('reports below-floor Argon even when triage completes without escalation', async () => {
     const entries = catalog.map(entry => ({ ...entry, quotaGroup: entry.id === 'pro' ? 'agy:argon' : entry.quotaGroup }));

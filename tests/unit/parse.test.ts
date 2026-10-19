@@ -70,3 +70,10 @@ it('keeps a finding whose origin is unknown or missing (git blame sets it later)
   expect(result.findings.every(item => item.origin === 'introduced')).toBe(true);
   expect(result.dropped).toEqual([]);
 });
+
+it.each(['blocker', 'Important', 'oPtIoNaL'])('canonicalizes severity %s', severity => {
+  expect(parseFindings(JSON.stringify([{ ...finding(), severity }]), entry).findings[0]?.severity).toBe(severity.toUpperCase());
+});
+it.each(['high', 'critical'])('rejects severity synonyms %s', severity => {
+  expect(parseFindings(JSON.stringify([{ ...finding(), severity }]), entry).dropped[0]?.reason).toBe('invalid severity');
+});

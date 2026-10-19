@@ -66,7 +66,7 @@ function findingFrom(value: unknown, entry: CatalogEntry): Finding {
   for (const field of strings) {
     if (typeof value[field] !== 'string' || !value[field].trim()) throw new Error(`${field} must be a non-empty string`);
   }
-  if (typeof value.severity !== 'string' || !['BLOCKER', 'IMPORTANT', 'OPTIONAL'].includes(value.severity)) throw new Error('invalid severity');
+  if (typeof value.severity !== 'string' || !['BLOCKER', 'IMPORTANT', 'OPTIONAL'].includes(value.severity.toUpperCase())) throw new Error('invalid severity');
   // git blame decides introduced vs pre-existing later, and only "improvement" is kept from the model,
   // so an unknown or missing origin (seen from Gemini Flash in a real run) is not a reason to drop the finding.
   const origin: Finding['origin'] = typeof value.origin === 'string' && ['introduced', 'pre-existing', 'improvement'].includes(value.origin)
@@ -82,7 +82,7 @@ function findingFrom(value: unknown, entry: CatalogEntry): Finding {
     reproduction = { path: proposal.path as string, content: proposal.content as string, expect: proposal.expect as string, status: 'pending' };
   }
   const finding: Finding = {
-    severity: value.severity as Finding['severity'], origin,
+    severity: value.severity.toUpperCase() as Finding['severity'], origin,
     file: value.file as string, line: value.line as number, trigger: value.trigger as string,
     impact: value.impact as string, evidence_quote: value.evidence_quote as string, fix: value.fix as string,
     provider: entry.provider, model: entry.id, family: entry.family, confidence: Math.max(0, Math.min(1, value.confidence)),

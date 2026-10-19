@@ -5,6 +5,9 @@ import { createReviewWorktree, isClean } from '../worktree/index.js';
 import { ProviderCommands, quotaLanguage, remaining, cleanupPreservingError } from './commands.js';
 import { ProviderError, type ProviderAdapter, type Quota, type RawProviderResult, type ReviewOptions } from './types.js';
 
+export const AGY_NO_TOOLS = 'Do not call any tools: no file reads and no commands. Everything you need is in this prompt; answer only with the JSON.';
+export const AGY_COMMAND_DENIED = 'agy tried to run a command in headless mode and returned nothing';
+
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export function parseAgyQuota(text: string, model: string): Quota {
   try {
@@ -56,7 +59,7 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
     let failure: unknown;
     try {
       const timeoutMs = remaining(options, started, this.now);
-      const args = ['--model', modelId, '--sandbox', '--output-format', 'json', '--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`, `--print=${prompt}`];
+      const args = ['--model', modelId, '--sandbox', '--output-format', 'json', '--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`, `--print=${AGY_NO_TOOLS}\n${prompt}`];
       const purpose = options.purpose ?? 'review';
       args.push('--json-schema', JSON.stringify(AGY_SCHEMAS[purpose]));
       // Count resolved executable and quoting overhead, without ever shortening the prompt.
@@ -70,6 +73,11 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
       const result = await this.command('agy', args, worktree.path, timeoutMs);
       let envelope: unknown;
       try { envelope = JSON.parse(result.stdout); } catch { /* Failure stderr is still diagnostic. */ }
+      if (record(envelope) && typeof envelope.response === 'string' && !envelope.response.trim()
+        && !validStructuredOutput(envelope.structured_output, purpose)
+        && /required the "command" permission|auto-denied/i.test(result.stderr)) {
+        throw new ProviderError('unavailable', AGY_COMMAND_DENIED);
+      }
       if (result.exitCode !== 0 || (record(envelope) && envelope.status !== 'SUCCESS')) {
         const diagnostic = result.stderr + '\n' + (record(envelope) ? JSON.stringify([envelope.status, envelope.error]) : '');
         if (quotaLanguage(diagnostic)) throw new ProviderError('quota', 'agy quota exhausted or rate limited');
