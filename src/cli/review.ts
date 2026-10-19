@@ -7,6 +7,10 @@ import { createExecutionPlan, formatDryRun, runCascade } from '../cascade/index.
 import { runDeterministicChecks } from '../checks/index.js';
 import { resolveAuthorFamily, validateConfig } from '../config/index.js';
 import { buildReviewContext } from '../context/index.js';
+import { selectContextProvider, type ContextProvider } from '../context/providers.js';
+import { CodeGraphContextProvider } from '../context/codegraph.js';
+import { reviewChunks } from '../cascade/prompts.js';
+import { RunBudget, systemClock } from '../cascade/budget.js';
 import { git, mergeBase, revParse } from '../context/git.js';
 import { acceptanceCriteria, inventoryFeatures } from '../modes/index.js';
 import { runCommand } from '../process/runner.js';
@@ -25,6 +29,8 @@ import type { CliIo } from './index.js';
 import { UsageError, type ParsedFlags } from './args.js';
 
 export interface ReviewDependencies {
+  contextRunner?: CommandRunner;
+  contextProvider?: ContextProvider;
   fetch?: typeof globalThis.fetch;
   repoRoot?: string;
   providers?: ReadonlyMap<string, ProviderAdapter>;
@@ -63,7 +69,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const root = path.resolve(dependencies.repoRoot ?? process.cwd());
   const runner = dependencies.gitRunner ?? runCommand;
   const now = dependencies.now ?? Date.now;
-  const baseline = await checkoutSnapshot(root, runner);
+  let baseline = await checkoutSnapshot(root, runner);
   const head = await revParse('HEAD', root, runner);
   let headConfig: QuorumConfig | undefined;
   if (flags.trustHeadConfig) headConfig = await configAt(head, root, runner);
@@ -103,6 +109,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     throw new UsageError('No acceptance criteria detected. Use Markdown checkboxes (- [ ] criterion), or a list under a heading containing "acceptance".');
   }
   const catalog = withQwenModel(dependencies.catalog ?? DEFAULT_CATALOG, config.qwen?.model);
+  const selected = await selectContextProvider(config.context?.provider ?? 'git', root,
+    dependencies.contextProvider ?? new CodeGraphContextProvider({ now }));
+  context.contextProvider = { requested: config.context?.provider ?? 'git', available: selected.available, effective: selected.provider.name };
+  context.contextNotes = selected.notes;
   const plan = createExecutionPlan(context, config, catalog);
   const quotaFile = path.join(root, '.quorum', 'quota.json');
   let snapshot = await readQuota(quotaFile);
@@ -144,6 +154,17 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   }
   context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)
     .map(check => ({ name: check.argv.join(' '), stdout: check.stdoutTail, stderr: check.stderrTail }))).slice(0, 8192);
+  const budget = new RunBudget(config.budget, { ...systemClock, now });
+  const enrichment = await selected.provider.enrich(context, reviewChunks(context).chunks, {
+    runner: dependencies.contextRunner ?? runCommand, deadlineMs: budget.remainingMs,
+  });
+  context.providerContext = enrichment.perFile;
+  context.contextNotes.push(...enrichment.notes);
+  // Establish the review baseline after context, while retaining the earlier write check.
+  const afterContext = await checkoutSnapshot(root, runner);
+  const contextChange = checkoutDifference(baseline, afterContext);
+  if (contextChange) throw new Error(contextChange);
+  baseline = afterContext;
   const runId = `qrm-${randomUUID()}`;
   const timestamp = new Date(now()).toISOString();
   const verificationTree = await createReviewWorktree(root, head, runner, warn);
@@ -156,7 +177,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changedBefore) throw new Error(changedBefore);
     if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
-    const cascade = await runCascade(context, config, providers, { catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, cache,
+    const cascade = await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, cache,
       ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
         dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
           noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });

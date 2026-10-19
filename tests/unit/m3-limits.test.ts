@@ -110,7 +110,7 @@ it('old low quota is unknown and does not block planning or execution', async ()
 
 it('skips review payloads with no room for diff content', () => {
   const ctx = { ...context(root), diff: 'x'.repeat(40_000), specContent: 'y'.repeat(40_000) };
-  expect(reviewChunks(ctx)).toEqual({ chunks: [], skippedFiles: ['sample.ts'], truncatedHunks: [], binaryFiles: [] });
+  expect(reviewChunks(ctx)).toEqual({ chunks: [], notes: [], skippedFiles: ['sample.ts'], truncatedHunks: [], binaryFiles: [] });
 });
 
 it('caps actual confirm and adjudication prompts, removes reproduction, and truncates the hunk first', async () => {

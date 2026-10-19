@@ -64,6 +64,8 @@ Add `quorum.config.json` to the repository root:
 }
 ```
 
+`context.provider` defaults to `"git"`; set it to `"codegraph"` to add bounded, possibly stale symbol/caller context from an existing `.codegraph/` index and a shell-free CodeGraph executable on PATH (Quorum never creates or updates the index and falls back to git when unavailable).
+
 Check provider and model availability:
 
 ```sh

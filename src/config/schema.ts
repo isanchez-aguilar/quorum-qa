@@ -38,6 +38,7 @@ export function resolveAuthorFamily(author: string): Family {
 
 export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'author'>> {
   return {
+    context: { provider: 'git' },
     base: 'origin/main',
     tiers: {
       triage: ['agy:gemini-3.8-flash-medium', 'qwen', 'agy:gpt-oss-120b-medium'],
@@ -183,9 +184,16 @@ export function validateConfig(raw: unknown): QuorumConfig {
     'reproduce',
     'jules',
     'qwen',
+    'context',
   ]) as Obj;
 
   const checks = readChecks(top.checks, r.issues);
+  const contextRaw = r.object(top.context, 'context', ['provider']) ?? {};
+  let contextProvider = defaults.context.provider;
+  if (contextRaw.provider !== undefined) {
+    if (contextRaw.provider === 'git' || contextRaw.provider === 'codegraph') contextProvider = contextRaw.provider;
+    else r.issues.push('context.provider must be "git" or "codegraph"');
+  }
   const base = r.string(top.base, 'base', defaults.base);
 
   let author: string | undefined;
@@ -330,6 +338,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   if (r.issues.length > 0) throw new ConfigError(r.issues);
 
   const config: QuorumConfig = {
+    context: { provider: contextProvider },
     base,
     checks,
     tiers,
