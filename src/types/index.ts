@@ -69,6 +69,7 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  diffTruncated?: boolean;
   mode: 'feature' | 'redesign';
   diff: string;
   baseCommit: string;

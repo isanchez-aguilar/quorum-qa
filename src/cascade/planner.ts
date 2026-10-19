@@ -14,6 +14,7 @@ export interface ExecutionPlan {
   warnings: string[];
   payloadCharacters: number;
   chunkCount: number;
+  confirmationReserve: number;
   budgetCoversChunks: boolean;
 }
 
@@ -43,8 +44,9 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
   const payload = reviewChunks(context);
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
-  return { context: structuredClone(context), config: structuredClone(config), tiers, quotas, warnings,
-    chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls >= payload.chunks.length,
+  const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));
+  return { confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, quotas, warnings,
+    chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls - confirmationReserve >= payload.chunks.length,
     payloadCharacters: payload.chunks.reduce((sum, chunk) => sum + chunk.prompt.length, 0) };
 }
 
@@ -76,6 +78,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     '    Possibly related, cross-family pairs -> confirm: same defect?',
     '  [Phase 4: Reproduction Lane]', '    Enabled: No (M6; requires opt-in)',
     '', 'Budget Ceilings:', `    Max API Calls: ${config.budget.maxCalls}`,
+    `    Confirmation reserve: ${plan.confirmationReserve} calls (released when no findings need escalation)`,
     `    Max Run Time: ${config.budget.maxMinutes} minutes`, `    Quota Floor: ${config.budget.quotaFloorPercent}%`,
     ...plan.warnings.map(warning => `Warning: ${warning}`), '', 'Nothing was called: dry-run spends no quota.',
   ].join('\n');

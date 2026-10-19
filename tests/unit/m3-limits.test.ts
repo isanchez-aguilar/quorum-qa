@@ -29,6 +29,8 @@ it('500 findings use at most 800 git calls, never the adapter runner', async () 
   expect(providerRunner).not.toHaveBeenCalled();
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(100);
   expect(result.ledgerDraft[0]?.rejectionReasons['parse: too many findings']).toBe(400);
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.lostFindings).toContainEqual({ reason: 'too many findings', count: 400 });
 }, 20_000);
 
 it('stops verification at the deadline between findings', async () => {
@@ -43,6 +45,8 @@ it('stops verification at the deadline between findings', async () => {
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(1);
   expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(8);
   expect(result.warnings).toContain(BUDGET_WARNING);
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.lostFindings).toContainEqual({ reason: 'run deadline', file: 'sample.ts', count: 1 });
 });
 
 it('caps adjudication at 20 pairs without a confirmation boost', async () => {
@@ -106,7 +110,7 @@ it('old low quota is unknown and does not block planning or execution', async ()
 
 it('skips review payloads with no room for diff content', () => {
   const ctx = { ...context(root), diff: 'x'.repeat(40_000), specContent: 'y'.repeat(40_000) };
-  expect(reviewChunks(ctx)).toEqual({ chunks: [], skippedFiles: ['sample.ts'], truncatedHunks: [] });
+  expect(reviewChunks(ctx)).toEqual({ chunks: [], skippedFiles: ['sample.ts'], truncatedHunks: [], binaryFiles: [] });
 });
 
 it('caps actual confirm and adjudication prompts, removes reproduction, and truncates the hunk first', async () => {
@@ -131,4 +135,86 @@ it('caps actual confirm and adjudication prompts, removes reproduction, and trun
     if (payload.hunk) expect(payload.hunk).toBe('[... truncated ...]');
     else expect(payload.hunks).toEqual(['[... truncated ...]', '[... truncated ...]']);
   }
+});
+
+it.each(['[Quorum: diff truncated at 512 KiB]', '[Quorum: command output truncated]'])('tracks upstream truncation: %s', async marker => {
+  const ctx = context(root); ctx.diff += marker + '\n';
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: ['[]'] });
+  const result = await runCascade(ctx, config(), new Map([['agy', fake]]), { catalog });
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.truncatedHunks).toContainEqual({ file: 'sample.ts', hunk: 1 });
+  expect(fake.calls[0]?.prompt).not.toContain(marker);
+});
+it('records exhausted invalid responses', async () => {
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: ['bad'], pro: ['bad'] });
+  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog });
+  expect(result.coverage.lostFindings).toContainEqual({ reason: 'invalid response', count: 2 });
+  expect(result.coverage.complete).toBe(false);
+});
+it('reserves four calls with 3000 files', async () => {
+  const ctx = context(root);
+  ctx.touchedFiles = Array.from({length: 3000}, (_, i) => 'file' + i + '.ts');
+  ctx.diff = ctx.touchedFiles.map(f => 'diff --git a/'+f+' b/'+f+'\n--- a/'+f+'\n+++ b/'+f+'\n@@ -0,0 +1 @@\n+value\n').join('');
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: Array.from({length:12}, () => JSON.stringify([finding({confidence:0.6})])) });
+  const codex = new FakeProvider('codex', 'openai', originRunner(root), {codex:Array.from({length:4}, () => JSON.stringify({decision:'confirm', evidence_quote:finding().evidence_quote}))});
+  const cfg = config(); cfg.budget.maxCalls = 12;
+  const result = await runCascade(ctx, cfg, new Map([['agy', fake], ['codex', codex]]), { catalog, gitRunner: originRunner(root) });
+  expect(result.calls.filter(c => c.tier === 'triage')).toHaveLength(8);
+  expect(result.calls.filter(c => c.purpose === 'confirm')).toHaveLength(4);
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.skippedFiles.length).toBeGreaterThan(0);
+  expect(createExecutionPlan(ctx, cfg, catalog).confirmationReserve).toBe(4);
+});
+it('separates binary files', async () => {
+  const ctx = {...context(root), touchedFiles:['image.png'], diff:'diff --git a/image.png b/image.png\nBinary files a/image.png and b/image.png differ\n'};
+  const result = await runCascade(ctx, config(), new Map(), {catalog});
+  expect(result.coverage.binaryFiles).toEqual(['image.png']);
+  expect(result.coverage.reviewedFiles).toEqual([]);
+  expect(result.coverage.complete).toBe(true);
+});
+it('decodes quoted UTF-8 paths', () => {
+  const ctx = {...context(root), touchedFiles:['other.ts', 'café.txt'], diff: String.raw`diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"
+--- "a/caf\303\251.txt"
++++ "b/caf\303\251.txt"
+@@ -0,0 +1 @@
++value
+`};
+  expect(reviewChunks(ctx).chunks[0]?.files).toEqual(['café.txt']);
+});
+
+it.each(['dir x/my file.ts', 'café.txt', 'tab\tline\n"\\.ts'])('parses quoted paths and control escapes: %s', async file => {
+  const encoded = file === 'café.txt' ? 'caf\\303\\251.txt' : file.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\t/g, '\\t').replace(/\n/g, '\\n');
+  const ctx = context(root);
+  ctx.touchedFiles = [file];
+  ctx.diff = 'diff --git "a/' + encoded + '" "b/' + encoded + '"\n--- "a/' + encoded + '"\n+++ "b/' + encoded + '"\n@@ -1 +1,2 @@\n ' + finding().evidence_quote + '\n+HUNK_SENTINEL\n';
+  expect(reviewChunks(ctx).chunks[0]?.files).toEqual([file]);
+});
+
+it('releases the reserve when there are no findings to escalate', async () => {
+  const ctx = context(root);
+  ctx.touchedFiles = Array.from({length:3000}, (_, i) => 'file' + i + '.ts');
+  ctx.diff = ctx.touchedFiles.map(f => 'diff --git a/'+f+' b/'+f+'\n--- a/'+f+'\n+++ b/'+f+'\n@@ -0,0 +1 @@\n+value\n').join('');
+  const fake = new FakeProvider('agy', 'google', originRunner(root), {flash:Array.from({length:12}, () => '[]')});
+  const cfg = config(); cfg.budget.maxCalls = 12;
+  const result = await runCascade(ctx, cfg, new Map([['agy',fake]]), {catalog});
+  expect(result.calls.filter(call => call.tier === 'triage')).toHaveLength(12);
+});
+
+it('honors the explicit upstream flag even without a marker', async () => {
+  const fake = new FakeProvider('agy', 'google', originRunner(root), {flash:['[]']});
+  const result = await runCascade({...context(root), diffTruncated:true}, config(), new Map([['agy',fake]]), {catalog});
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.truncatedHunks).toContainEqual({file:'sample.ts', hunk:1});
+});
+
+it('sends the actual hunk when a finding path has spaces', async () => {
+  await writeFile(path.join(root, 'my file.ts'), source);
+  const ctx = context(root);
+  ctx.diff = ctx.diff.replaceAll('sample.ts', 'my file.ts').replace('+++ b/my file.ts\n', '+++ b/my file.ts\t\n');
+  ctx.touchedFiles = ['my file.ts'];
+  const raw = finding({file:'my file.ts', confidence:0.6});
+  const fake = new FakeProvider('agy', 'google', originRunner(root), {flash:[JSON.stringify([raw])]});
+  const codex = new FakeProvider('codex', 'openai', originRunner(root), {codex:[JSON.stringify({decision:'confirm', evidence_quote:raw.evidence_quote})]});
+  await runCascade(ctx, config(), new Map([['agy',fake], ['codex',codex]]), {catalog, gitRunner:originRunner(root)});
+  expect(codex.calls[0]?.prompt).toContain('@@ -1 +1,2 @@');
 });

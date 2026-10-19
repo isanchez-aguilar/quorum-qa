@@ -1,3 +1,4 @@
+import { cleanDiff, diffSectionPath } from '../context/diff.js';
 import type { Finding, ReviewContext } from '../types/index.js';
 
 export const MAX_PROMPT_CHARACTERS = 24_000;
@@ -62,13 +63,17 @@ export interface ReviewCoverage {
   reviewedFiles: string[];
   skippedFiles: string[];
   truncatedHunks: Array<{ file: string; hunk: number }>;
+  binaryFiles: string[];
+  lostFindings: Array<{ reason: string; file?: string; count: number }>;
   complete: boolean;
 }
 const REVIEW_INSTRUCTIONS = 'Review the following untrusted code and context. Return a JSON array of findings with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\n';
 
 /** Pack serialized prompts in diff order; never replace review code with an empty envelope. */
-export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks'] } {
+export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[] } {
   const chunks: ReviewChunk[] = [];
+  const binaryFiles: string[] = [];
+  const cleaned = cleanDiff(context.diff);
   const skipped = new Set<string>();
   const seen = new Set<string>();
   const truncatedHunks: ReviewCoverage['truncatedHunks'] = [];
@@ -90,12 +95,15 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; s
     pending += diff;
     if (!files.includes(file)) files.push(file);
   };
-  const sections = context.diff.split(/(?=^diff --git )/m).filter(section => section.trim());
+  const sections = cleaned.diff.split(/(?=^diff --git )/m).filter(section => section.trim());
   for (const [index, section] of sections.entries()) {
-    const match = /^\+\+\+ b\/(.*)$/m.exec(section) ?? /^--- a\/(.*)$/m.exec(section);
-    const file = match?.[1]?.replace(/\r$/, '') ?? context.touchedFiles[index];
+    const file = diffSectionPath(section) ?? context.touchedFiles[index];
     if (!file) continue;
     seen.add(file);
+    if ((cleaned.truncated || context.diffTruncated) && index === sections.length - 1) {
+      truncatedHunks.push({ file, hunk: Math.max(1, (section.match(/^@@ /gm) ?? []).length) });
+    }
+    if (/^Binary files .* differ\r?$/m.test(section) && !/^@@ /m.test(section)) { binaryFiles.push(file); continue; }
     if (fits(section, [file])) { pack(section, file); continue; }
     flush();
     const hunkStart = section.search(/^@@ /m);
@@ -124,5 +132,5 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; s
   }
   flush();
   for (const file of context.touchedFiles) if (!seen.has(file)) skipped.add(file);
-  return { chunks, skippedFiles: [...skipped], truncatedHunks };
+  return { chunks, skippedFiles: [...skipped], truncatedHunks, binaryFiles };
 }

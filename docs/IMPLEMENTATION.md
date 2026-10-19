@@ -1563,3 +1563,31 @@ Validation: pnpm typecheck and pnpm test pass (455 passed, 1 skipped across
 17 test files). No provider CLI, network, dependency installation, branch switch,
 commit or push was used. Independent provider review was not run because this
 round explicitly forbids provider CLIs and network.
+
+### M3 re-review fixes, round 3 (f241a27)
+
+- Coverage is complete only when all touched text files were fully sent and no
+  findings were lost to limits. Binary sections without hunks are the explicit
+  exception: listed in coverage.binaryFiles, never reviewedFiles, with a note
+  that visual review belongs to M5 redesign mode.
+- M2 sets optional ReviewContext.diffTruncated for either its 512 KiB cap or
+  command-output truncation. M3 strips both markers before creating prompts,
+  records the last section's cut hunk and warns; the flag also prevents complete
+  coverage even when a caller has already removed the marker.
+- coverage.lostFindings groups reason, optional file and count for run-deadline
+  losses, the 100-findings response limit and invalid responses after exhausted
+  review retries. Each group emits a warning and prevents complete coverage.
+  For unparseable output the unknown finding count is represented by the number
+  of discarded responses, not an invented count of findings. A successful
+  replacement review recovers an invalid response; verification rejections and
+  explicit confirmation rejections remain deliberate filtering.
+- Review chunks and confirmation hunks share the Git path parser. It reads
+  diff headers, handles the trailing tab on path lines, and decodes C escapes
+  and octal UTF-8 bytes. Tests include real Git paths with spaces and Unicode.
+- Initial review calls (including retries) preserve max(1, floor(maxCalls / 3))
+  calls once findings require escalation. With no escalation candidates the
+  reserve is released. Unsent files are skipped and coverage is incomplete.
+  Dry-run shows the reserve and evaluates chunk capacity after reserving it.
+- Round 3 validation uses only synthetic Git repositories and FakeProvider;
+  external cross-family review was not run under the explicit no-provider and
+  no-network instructions. No dependency, commit or branch change is needed.

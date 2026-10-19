@@ -1,3 +1,7 @@
+import { runCascade } from '../../src/cascade/index.js';
+import { FakeProvider } from '../../src/providers/fake.js';
+import { validateConfig } from '../../src/config/schema.js';
+import { catalog } from '../fixtures/cascade.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -122,12 +126,25 @@ describe.skipIf(!gitPath)('synthetic git context', () => {
     expect(await determineOrigin('sample.txt', 2, head, later, cwd, runner)).toBe('pre-existing');
     await expect(determineOrigin('sample.txt', 999, base, head, cwd, runner)).rejects.toThrow('git blame failed');
   });
+  it('reviews real git paths with spaces and Unicode', async () => {
+    await mkdir(path.join(cwd, 'dir x'), {recursive:true});
+    await writeFile(path.join(cwd, 'dir x/my file.ts'), 'value\n');
+    await writeFile(path.join(cwd, 'café.txt'), 'value\n');
+    await git('add', '.'); await git('commit', '-m', 'Paths');
+    const ctx = await buildReviewContext({base:later, head:'HEAD', cwd, mode:'feature', runner});
+    const fake = new FakeProvider('agy', 'google', runner, {flash:['[]']});
+    const cfg = validateConfig({checks:[], tiers:{triage:['agy:flash'], review:['agy:pro'], confirm:['codex'], visual:[]}});
+    const result = await runCascade(ctx, cfg, new Map([['agy',fake]]), {catalog});
+    expect(result.coverage.reviewedFiles).toEqual(['café.txt', 'dir x/my file.ts']);
+    expect(result.coverage.complete).toBe(true);
+  });
   it('caps a large real diff with a marker and preserves its beginning', async () => {
     await writeFile(path.join(cwd, 'large.txt'), 'synthetic content\n'.repeat(80_000));
     await git('add', '.'); await git('commit', '-m', 'Large');
     const context = await buildReviewContext({ base: later, head: 'HEAD', cwd, mode: 'feature', runner });
     expect(context.diff.startsWith('diff --git')).toBe(true);
     expect(context.diff.endsWith(DIFF_TRUNCATION_MARKER)).toBe(true);
+    expect(context.diffTruncated).toBe(true);
     expect(Buffer.byteLength(context.diff)).toBeLessThanOrEqual(MAX_DIFF_BYTES);
   });
 });
