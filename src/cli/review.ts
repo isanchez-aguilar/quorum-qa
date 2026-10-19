@@ -12,6 +12,9 @@ import { acceptanceCriteria, inventoryFeatures } from '../modes/index.js';
 import { runCommand } from '../process/runner.js';
 import { AgyProvider } from '../providers/agy.js';
 import { CodexProvider } from '../providers/codex.js';
+import { ClaudeProvider } from '../providers/claude.js';
+import { QwenProvider } from '../providers/qwen.js';
+import { reproduceBlocker, type ReproductionOptions } from '../reproduce/index.js';
 import type { ProviderAdapter } from '../providers/types.js';
 import { generateMarkdownReport, generateSarifReport, type ReviewResult } from '../reporters/index.js';
 import { appendLedger, atomicWrite, diskCache, readQuota } from '../storage/index.js';
@@ -27,6 +30,8 @@ export interface ReviewDependencies {
   catalog?: readonly CatalogEntry[];
   gitRunner?: CommandRunner;
   checkRunner?: CommandRunner;
+  containerRunner?: CommandRunner;
+  reproductionOptions?: Omit<ReproductionOptions, 'gitRunner' | 'deadlineMs' | 'noHostPrompt' | 'warn'>;
   appendLedger?: typeof appendLedger;
   now?: () => number;
 }
@@ -50,7 +55,6 @@ async function copyImages(directory: string, destination: string): Promise<strin
 }
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
-  if (flags.reproduce) { io.err('quorum review --reproduce: not implemented yet (M6)\n'); return 2; }
   const mode = flags.mode ?? 'feature';
   if (mode === 'feature' && !flags.spec) throw new UsageError('--spec is required for feature mode.');
   if (flags.since && flags.diff) throw new UsageError('--since and --diff cannot be combined.');
@@ -114,7 +118,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     warn(message); io.err(`quorum: ${message}\n`);
   }
   plan.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
-  const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()]]);
+  const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider()]]);
   const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
   const groups = new Set<string>();
   for (const ref of Object.values(config.tiers).flat()) {
@@ -150,18 +154,25 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (flags.images) context.images = await copyImages(path.resolve(root, flags.images), imageDirectory);
     const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changedBefore) throw new Error(changedBefore);
-    const cascade = await runCascade(context, config, providers, { catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, cache });
+    if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
+    const cascade = await runCascade(context, config, providers, { catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, cache,
+      ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
+        dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
+          noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
     const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.coverage.complete = false; }
     const clean = await isClean(verificationTree.path, runner);
     if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.coverage.complete = false; }
     const families = [...cascade.reviewedFamilies];
     // Cached reviews are still independent reviews by the original model family.
-    for (const f of [...cascade.findings, ...cascade.unconfirmed]) if (!families.includes(f.family)) families.push(f.family);
+    // Confirming families count too: a finding confirmed by another family was reviewed by it.
+    for (const f of [...cascade.findings, ...cascade.unconfirmed]) {
+      for (const family of [f.family, ...(f.confirmationFamilies ?? [])]) if (!families.includes(family)) families.push(family);
+    }
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
-    const confirmedBlocker = cascade.findings.some(f => f.severity === 'BLOCKER');
-    const unprovenBlocker = cascade.unconfirmed.some(f => f.family !== 'local' && f.severity === 'BLOCKER');
-    const exitCode = confirmedBlocker ? 1 : cascade.errors.length ? 2 : unprovenBlocker && !flags.allowUnproven ? 1 : !cascade.coverage.complete ? 2 : 0;
+    const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
+      .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
+    const exitCode = failingBlocker ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
     result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks,
       criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
     if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();

@@ -44,6 +44,11 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const container = docker?.exitCode === 0 || podman?.exitCode === 0;
   results.push({ id: 'container', status: container ? 'PASS' : 'WARN', message: container ? 'Container runtime is available.' : 'Neither Docker nor Podman is available; reproduction requires explicit interactive confirmation.' });
   if (config?.qwen) results.push(await checkQwen(config.qwen.endpoint));
+  for (const provider of ['claude', 'qwen']) {
+    if (Object.values(config?.tiers ?? {}).flat().some(ref => ref === provider || ref.startsWith(`${provider}:`))) {
+      results.push({ id: `${provider}.adapter`, status: 'WARN', message: `${provider}: not implemented in v1` });
+    }
+  }
   if (options.probe) {
     const model = configured.find(id => listed.has(id));
     results.push(model ? await readProbe('agy', model, context) : { id: 'agy.probe', status: 'FAIL', message: 'No configured agy model is listed by agy models; read probe skipped.' });

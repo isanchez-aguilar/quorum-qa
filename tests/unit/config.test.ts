@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config/index.js';
 import { ConfigError, resolveAuthorFamily, validateConfig } from '../../src/config/schema.js';
 
+it('defaults install scripts off and validates the explicit opt-in', () => {
+  expect(validateConfig({ checks: [] }).reproduce.allowInstallScripts).toBe(false);
+  expect(validateConfig({ checks: [], reproduce: { allowInstallScripts: true } }).reproduce.allowInstallScripts).toBe(true);
+  expect(() => validateConfig({ checks: [], reproduce: { allowInstallScripts: 'true' } })).toThrow('reproduce.allowInstallScripts must be a boolean');
+});
+
 // The full example from docs/PLAN.md, Configuration.
 const PLAN_EXAMPLE = {
   base: 'origin/main',
@@ -23,6 +29,7 @@ const PLAN_EXAMPLE = {
   escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
   budget: { maxCalls: 12, maxMinutes: 20, quotaFloorPercent: 15 },
   reproduce: {
+    allowInstallScripts: false,
     isolation: 'container',
     testGlobs: ['**/*.test.*', '**/*.spec.*'],
     testCommand: ['pnpm', 'vitest', 'run', '--reporter=json'],

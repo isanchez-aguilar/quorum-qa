@@ -491,7 +491,7 @@ export interface ProviderAdapter {
   3. Create the file with flag `wx` (exclusive), so an existing file is never overwritten. If the file exists, the proposal is **rejected**.
   4. All of this happens before the container starts. Nothing is written outside `.quorum/worktrees/<id>/`.
 - **Container contract (`isolation: "container"`):**
-  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per lockfile hash: same image, network **on**, the worktree mounted at `/work` read-only except for a named volume `quorum-deps-<lockfile hash>` mounted at `/work/node_modules`, and the lockfile's own command picked by which lockfile exists. The preparation first **builds a derived image** `quorum-prep:<lockfile hash>` from the base image, with network on, which installs the package manager the repo pins (the `packageManager` field of `package.json`, version included) with `npm install -g <manager>@<version>` into `/usr/local`, so it is available to any user and works offline. Then it runs the lockfile's own command in that image: `pnpm install --frozen-lockfile`, `npm ci` or `yarn install --immutable`. pnpm keeps its virtual store inside `node_modules`, so the volume is self-contained. The test step runs from the **derived image** and mounts the volume **read-only** at `/work/node_modules`, so nothing the test does can change it.
+  - **Image:** `reproduce.image` (default `node:22-bookworm-slim`, pinned by digest at M6). Dependencies are installed in a **preparation step** that runs once per dependency-input hash (see M6 as built): same image, network **on**, the worktree mounted at `/work` read-only except for a named volume `quorum-deps-<dependency-input hash>` mounted at `/work/node_modules`, and the lockfile's own command picked by which lockfile exists. The preparation first **builds a derived image** `quorum-prep:<dependency-input hash>` from the base image, with network on, which installs the package manager the repo pins (the `packageManager` field of `package.json`, version included) with `npm install -g <manager>@<version>` into `/usr/local`, so it is available to any user and works offline. Then it runs the lockfile's own command in that image: `pnpm install --frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts` or `yarn install --immutable --mode=skip-build` (decision 13 governs the explicit opt-in). pnpm keeps its virtual store inside `node_modules`, so the volume is self-contained. The test step runs from the **derived image** and mounts the volume **read-only** at `/work/node_modules`, so nothing the test does can change it.
   - **Test step:** network **off** (`--network none`), non-root user (`--user 1000:1000`), `--read-only` root filesystem with a tmpfs `/tmp`, the worktree mounted read-write at `/work`, the dependency volume mounted read-only, `--memory` and `--pids-limit` caps, and a hard timeout (`reproduce.timeoutSeconds`, default 120) enforced by killing the container.
   - **Caches:** the test step sets `XDG_CACHE_HOME`, `npm_config_cache` and `TMPDIR` to the tmpfs `/tmp`. A runner that insists on writing inside the read-only `node_modules` (for example a `.vite` or `.cache` directory) fails with `EROFS` or `EACCES`. That is classified as infrastructure, not as a test result. The cache directory flag for the repo's runner is an ASSUMPTION to settle with the synthetic repo in M6.
   - **Missing or failing infrastructure:** no container runtime, a failed preparation step, `EROFS`/`EACCES` writing a cache, a missing manager, or a timeout of the container itself -> status `unproven` with the reason. The severity is not changed. An infrastructure failure is never read as "not reproduced".
@@ -1135,6 +1135,8 @@ Minimal pinned dependency list. Strict adherence to exact versions, favoring Nod
 
 Each assumption listed below represents an unverified CLI behavior or interface contract requiring an explicit probe:
 
+9. **`[ASSUMPTION 9]` default reproduction image digest — partly settled.** On 2026-10-19 Claude read the index digest from the registry with `docker buildx imagetools inspect node:22-bookworm-slim` (`sha256:c3de60bf…978392`). The constant in `src/reproduce/isolation.ts` now uses it; the digest Codex had pinned did not match the registry. Still open: actual container behaviour (volume seeding, the report wrapper, vitest under `--read-only`), because the Docker daemon was not running. Run `QUORUM_CONTAINER_TESTS=1 pnpm vitest run tests/container` with Docker Desktop started to settle it.
+
 1. **`[ASSUMPTION 1]` agy write and shell deny rule names:**
    - *Known:* permissions live in `~/.gemini/antigravity-cli/settings.json` under `permissions.allow` / `permissions.deny`, with entries like `read_file(<path>)`.
    - *Unknown:* the tool names for writing files and running commands in deny rules.
@@ -1181,6 +1183,11 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 10. **Local CI barrier:** `relaykit ci-local` always runs `node --test`, so it can't run this vitest suite. Until Relaykit runs the repo's own test script, the barrier before a push is `pnpm typecheck` + `pnpm test`. Linux and macOS are reported as not verified.
 11. **Packaging:** Quorum stays a CLI. In v1.x a thin `/quorum` skill calls it, and the two ship together as a Claude Code plugin (see ROADMAP).
 12. **M5 review corrections (2026-10-19, Claude decisions for Isaac):** In M5, a verifier-accepted BLOCKER confirmed by another family always exits 1, including with `--allow-unproven`. The waiver applies only to unconfirmed non-local BLOCKERs; M6 will also handle reproduction explicitly labelled `unproven`. Empty ranges exit 2 with "nothing to review". Touched files with no reviewed files, or binaries without visual coverage, make coverage incomplete; successful redesign image review covers only PNG/JPG/WebP binaries, never arbitrary binary files. Zero feature criteria is a usage error explaining checkbox/acceptance-heading formats. Announce configured checks before execution and recommend `--no-checks` for untrusted changes. Spec, inventory and rules must be non-symlink regular files of at most 256 KiB. Storage parent validation stops at the repo root (external selected outputs and linked repo ancestors are allowed); report/SARIF write failures warn, preserve stdout and keep the review exit code. Status includes failed checks, dirty checkouts warn that only committed HEAD was reviewed, and SARIF records execution success, coverage counts and unconfirmed count. Criteria are untrusted JSON data; visual calls are never cached; ledger locks expire after ten minutes. The chosen diff range determines the trusted config merge-base. These corrections supersede the broader waiver wording in decision 4.
+
+13. **M6 install scripts and preparation:** install scripts default off: `pnpm install --frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts`, or `yarn install --immutable --mode=skip-build`. Validated `reproduce.allowInstallScripts: true` explicitly enables them and is disclosed in the report. Preparation has network access to fetch packages, runs as UID/GID 1000 with no-new-privileges, all capabilities dropped, 2 GiB memory, 512 PIDs, 2 CPUs, a read-only root and tmpfs `/tmp`. The worktree bind is read-only; the dependency volume is the only writable persistent mount.
+14. **M6 BLOCKER waiver:** `--allow-unproven` waives only BLOCKERs with fewer than two distinct model families among their independent sources plus confirmer, identically with or without `--reproduce`. A cross-family-confirmed BLOCKER stays exit 1 for every unproven reason (cap, budget, missing proposal/runtime, new code or infrastructure). Limits never relax this gate. `not-reproduced` downgrades to IMPORTANT; `reproduced` retains BLOCKER. This supersedes the broader waiver wording in decisions 4 and 12.
+15. **M6 informed host consent:** rename `--yes-run-untrusted` to `--no-host-prompt`; it automatically answers no (unproven), never authorizes execution. Before each revision's consent, show sanitized source, path and exact configured `testCommand` argv, explaining that the reviewed revision's package.json scripts, test config, setup files and dependencies also execute on the host. Strip ANSI, C0/C1 controls except newline/tab, and bidi controls. Pass only PATH plus SystemRoot/ComSpec/PATHEXT/TEMP/TMP on Windows, or HOME/TMPDIR/LANG on POSIX, never the full parent environment.
+16. **M6 installer hooks (for Isaac):** `--ignore-scripts` does not disable pnpm's `.pnpmfile.cjs`, or Yarn Berry's repository releases and plugins. Unless `reproduce.allowInstallScripts` is true, pnpm also receives `--ignore-pnpmfile`, and a Yarn `.yarnrc.yml` with top-level `yarnPath:` or `plugins:` is unproven with reason `yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)`. A minimal line scanner recognizes plain or quoted keys without a YAML dependency. Both cache keys include `.pnpmfile.cjs`, `.yarn/releases/**` and `.yarn/plugins/**`, using the same skip rules and a shared 500-file dependency metadata cap. The explicit opt-in allows these hooks as well as install scripts.
 
 ---
 
@@ -1838,3 +1845,229 @@ coverage, zero criteria, report and SARIF write failures, each oversized input,
 linked repo persistence, check announcement/help, dirty-checkout warning, SARIF
 metadata, failed-check Status, JSON criteria, expired lock and visual cache
 writes. The existing binary-coverage assertion was updated to the new contract.
+
+## M6 as built
+
+Reproduction is opt-in through `--reproduce`. The cascade asks the confirm tier
+for a fresh proposal only after verification and cross-family confirmation,
+excluding local-only findings. Requests use the existing bounded untrusted-data
+prompt, filtered JSON extraction, quota routing, shared call budget, deadline,
+checkout guard and ledger. Proposal-supplied status is discarded. Three BLOCKERs
+are selected by descending confidence; eligible remainder are `unproven` with
+`reproduction cap`. No confirmation/proposal response is cached. Without the
+flag there are no proposal calls, test writes or runtime probes.
+
+- `src/reproduce/write.ts` supplies the dependency-free `**`, `*`, `?` matcher
+  and exclusive writer. `**` spans whole path components; brackets and braces
+  are literal. Paths reject absolute roots, traversal, NUL, colon and Windows
+  trailing-dot/space aliases. Parent directories are checked with `lstat` and
+  `realpath`, missing parents are created one at a time and checked again, and
+  `wx` prevents overwrite. The 64 KiB content limit counts UTF-8 bytes. As with
+  existing verifier guards, this does not promise protection against a separate
+  hostile host process racing parent replacement.
+- `src/reproduce/index.ts` reuses `createReviewWorktree` for isolated head/base
+  trees. No separate worktree implementation was added. Introduced findings use
+  `fileExistsAtCommit`; new code is unproven before execution. Existing code must
+  fail by a matching assertion at head and pass at base. Pre-existing findings
+  skip base. Cleanup is attempted even after the deadline. An invalid/existing
+  path is `rejected` and retains severity; only `not-reproduced` downgrades to
+  IMPORTANT. Missing infrastructure is `unproven`, retaining severity.
+- `src/reproduce/evaluate.ts` parses Vitest/Jest JSON into the existing TestReport.
+  Assertion matching is a nonempty literal substring of the first failure line,
+  never a provider regular expression. Import/compile/other-test failures cannot
+  prove a defect. Cache EROFS/EACCES, missing executable/report, preparation
+  failure and container timeout are infrastructure failures. Vitest's fixture
+  was checked against a real, trusted synthetic assertion using installed Vitest;
+  Jest uses a synthetic JSON fixture without installing or invoking Jest.
+- `src/reproduce/isolation.ts` resolves Docker then Podman and checks daemon
+  availability. The default Node image has an immutable digest constant and
+  update instructions. Docker Hub was inaccessible during implementation: the
+  published digest reference has not been independently verified against the
+  registry or pulled. Explicit `reproduce.image` remains supported.
+- **Decision 13:** preparation defaults to disabled install scripts; the validated
+  `reproduce.allowInstallScripts: true` opt-in enables them and appears in report
+  warnings. Preparation uses the commands and hardening recorded in section 12.
+  Network is on (Docker `default`, Podman `private`) to fetch packages.
+- **Decision 16:** pnpm also uses `--ignore-pnpmfile` by default. Yarn configuration
+  with top-level `yarnPath` or `plugins` keys is unproven before preparation;
+  `allowInstallScripts: true` explicitly permits those repository hooks. The
+  scanner handles plain and quoted keys, ignoring comments and nested keys.
+- Both `quorum-prep:<hash>` and `quorum-deps-<hash>` use SHA-256 over the
+  lockfile, every package.json (repository walk skips node_modules and .git,
+  maximum 500 selected files total), .npmrc, .yarnrc.yml, .pnpmfile.cjs,
+  .yarn/releases/**, .yarn/plugins/**, pnpm-workspace.yaml, every patches/
+  directory's contents, manager/version, image digest and scripts mode. Paths
+  and raw bytes are hashed in sorted order. Tagged custom images are resolved
+  to a digest before deriving the key. Head and base compute their own keys;
+  identical input sets share a cache, changed manifests do not. Metadata symlinks,
+  oversized files and discovery limits fail unproven rather than using partial keys.
+- Infrastructure classification excludes assertion messages. Signals use exact,
+  case-sensitive names (SIGKILL, SIGSEGV, SIGTERM, SIGABRT, SIGBUS, SIGILL,
+  SIGFPE), or process termination phrases in suite errors and diagnostics.
+  Ordinary words such as signature, signed, signal and killed are not evidence.
+- Host display sanitization also removes U+200B–200D, U+2060, U+FEFF,
+  U+2028 and U+2029, preserving ordinary newlines and tabs.
+- The generated Dockerfile-only context installs the pinned manager and initializes
+  the volume for UID 1000; no repository data is copied into the image. Image labels
+  and .quorum-ready record the full key. An orphan or incompatible marker causes
+  one warned volume removal and rebuild, never permanent reuse or endless retries.
+  Named auxiliary containers are killed on timeout and removed on exit. Existing
+  node_modules files or symlinks/junctions are refused before mounting.
+- **Monorepo and Yarn Berry limitations:** only /work/node_modules is a dependency
+  volume. Installs requiring nested node_modules or PnP artifacts outside that
+  volume cannot complete against the read-only worktree and remain unproven.
+  This does not claim support for every workspace layout or Yarn linker.
+- Tests run with no network, UID/GID 1000, read-only root, tmpfs `/tmp`, a writable
+  worktree and read-only dependencies, cache environment pointing to `/tmp`,
+  1 GiB memory, 256 PIDs, 2 CPUs, no-new-privileges and --cap-drop ALL. The configured argv gets a
+  reporter output path inside `/tmp` and the proposed filename prefixed by `./`
+  so leading dashes cannot become options. A `node -e` argv wrapper spawns the
+  command without a shell, reads that report file and prints it after a fresh
+  UUID marker. No second shell command or persistent report bind mount is used.
+  Container kill and runner deadlines enforce the 120-second default and the
+  remaining run deadline. Every named container is force-removed on exit.
+- **Decision 15:** no runtime or noninteractive consent leaves execution unproven.
+  Each host revision needs its own informed y/N confirmation. Source, path and
+  configured argv are sanitized before display, including ANSI and bidi removal;
+  the prompt discloses execution of the revision's scripts, configuration, setup
+  files and dependencies. `--no-host-prompt` is automatic no, never permission.
+  Host processes receive only the platform-specific environment allowlist from
+  section 12. Reports use fresh temporary files; Windows worktree prefixes are
+  compared case-insensitively.
+- Markdown encloses raw proposed source inside a collapsible details block with
+  a blank line before a fence longer than every backtick run (minimum three).
+  The summary path is HTML-escaped and controls are removed. Blank lines, Markdown
+  headings, links, images and closing HTML cannot escape the fence. No pre/code
+  HTML wrapper remains. SARIF retains reproduction.status.
+- **Decision 14:** independent source/confirmation families determine the waiver
+  both with and without reproduction. Cross-family BLOCKERs remain exit 1 even
+  when unproven due to cap, budget, missing proposal/runtime, new code or any
+  infrastructure failure. Only not-reproduced downgrades severity; reproduced
+  retains it. A same-family confirmation can be waived. Coverage/errors still
+  retain their existing exit-2 behavior when no failing BLOCKER remains.
+- Empty reports, absent target tests, skipped-only targets, worker crashes,
+  out-of-memory/ENOSPC/EMFILE, killed processes/signals and exits without reports
+  remain unproven with a reason at either revision. Import and compile failures
+  in the target suite remain non-assertion failures.
+- Claude/Qwen are registered stubs: probe is unavailable, execution throws a
+  typed NotImplementedError classified as unavailable, and routing falls back.
+  Doctor emits WARN when configured, preserving the loopback Qwen endpoint check.
+  `scripts/smoke-review.md` contains a synthetic sample setup and exact manual
+  command bounded to six real calls. It was not executed.
+
+Tests cover safe writes/glob cases, report evaluation, exact fake-container argv,
+cache reuse/failures, timeout cleanup, cross-family eligibility, ordering/caps,
+shared budget, filtered proposals, consent and end-to-end `main()` exit codes.
+`tests/container/escape.test.ts` is explicitly slow and skips unless both
+`QUORUM_CONTAINER_TESTS=1` and a responding Docker daemon are present. Its
+synthetic test fails if an outside-root write or external socket succeeds; fake
+tests assert the mounts and network/root constraints. Default tests never start
+a container. The synthetic Vitest config redirects Vite cache to `/tmp`.
+
+Remaining verification: no real provider, smoke run, container, Jest invocation,
+Linux or macOS run was performed. The cache/volume initialization and Vite cache
+behavior in a real container remain assumptions. The root package.json and smoke fixture pin their package manager. External cross-family review
+was not run because provider CLIs were prohibited; separate read-only internal
+review found and corrected host report paths, deadline units, leading-dash
+filenames and preparation-container timeout cleanup. No new dependency, branch
+switch, commit or push was made.
+
+Original M6 validation on Windows (before the review fixes below): `pnpm.cmd typecheck` passed;
+`pnpm.cmd test` rebuilt the CLI and passed **758 tests**, with **6 skipped**,
+across 29 files. Skips are the explicit slow-container gate, four unavailable
+Windows file-symlink tests, and one inherited skip. Directory-junction tests
+passed. `git diff --check` passed (Git's LF/CRLF notices are not errors).
+The trusted standalone Vitest assertion probe exited 1 as expected and its JSON
+parsed as `assertion-failure-matching`. Automatic command review rejected
+cleanup of the ignored `.quorum/m6-parser-check` scratch with `blocked by policy`;
+that scratch remains, outside the delivery diff.
+
+Files changed in M6:
+
+- Runtime: `src/reproduce/{index,write,evaluate,isolation}.ts`,
+  `src/cascade/{index,parse,prompts}.ts`, `src/cli/{args,index,review}.ts`,
+  `src/providers/{types,claude,qwen}.ts`, `src/doctor/index.ts`,
+  `src/reporters/index.ts`.
+- Tests: `tests/unit/reproduce-{write,evaluate,isolation,cascade}.test.ts`,
+  `tests/unit/providers.test.ts`, `tests/integration/{reproduce,review,doctor}.test.ts`,
+  `tests/container/escape.test.ts`.
+- Fixtures: `tests/fixtures/reproduce/{vitest,jest}.json` and
+  `tests/fixtures/repro-repo/{package.json,pnpm-lock.yaml,vitest.config.ts,escape.test.js}`.
+- Documentation: this file and `scripts/smoke-review.md`.
+
+### M6 independent-review fixes (95f0f0d)
+
+The fixes above implement decisions 13–15 on the existing feat/m6-reproduce
+worktree. No provider CLI, Docker or Podman was executed; all runtime argv tests
+use injected fake runners. No dependencies, commit, push or branch switch were
+introduced. The image digest remains ASSUMPTION 9; actual container execution,
+Linux/macOS and a new cross-provider review remain unverified because those
+executions were outside the authorized scope.
+
+Regression evidence against the original code:
+
+- The first focused isolation/integration run failed 20 cases: orphan recovery,
+  both preparation script modes/hardening, changed package.json identity,
+  node_modules file rejection, same-family waiver without reproduction,
+  cross-family cap and missing-runtime gates, ten empty/missing/skipped/resource
+  failure/no-report cases, Markdown containment, and informed host display.
+- Configuration default/validation and CLI help checks added two original-code
+  failures. Two additional checks against a temporary copy of HEAD's evaluator
+  failed for case-insensitive Windows prefixes and missing/skipped targets with
+  unrelated suite errors. Both temporary baseline files were removed.
+- Further coverage checks manifest/config/patch inputs, manager/version/digest/
+  script-mode keys, discovery caps, ignored dependency directories, junction
+  rejection, head/base isolation, all three managers' argv, script-mode reporting,
+  platform environment allowlists, and independent sources with a local primary.
+
+Files changed for these fixes:
+
+- Runtime: src/cascade/index.ts; src/cli/{args,index,review}.ts;
+  src/config/schema.ts; src/reporters/index.ts;
+  src/reproduce/{evaluate,index,isolation}.ts; src/types/index.ts.
+- Tests: tests/integration/{cli,reproduce,review}.test.ts;
+  tests/unit/{args,config,reproduce-evaluate,reproduce-host,reproduce-isolation}.test.ts.
+- Documentation: docs/IMPLEMENTATION.md and docs/PLAN.md.
+
+Final review-fix validation on Windows: `pnpm typecheck` passed; `pnpm test`
+rebuilt the CLI and passed **798 tests**, with **6 skipped**, across **30 files**.
+`QUORUM_CONTAINER_TESTS=0` was set for the run; the slow container test still
+skips by default without an explicit opt-in. `git diff --check` passed.
+No log files were written to the repository root.
+
+### v1 smoke run (2026-10-19)
+
+The approved smoke run from `scripts/smoke-review.md` was run once on Isaac's Windows machine. It used a synthetic repo under `.quorum/smoke-m6` with a removed zero-divisor guard, `--reproduce`, and a 6-call budget. Docker Desktop was not running.
+
+- **Result: exit 1, one BLOCKER, 4 calls, 75 s.**
+  - Gemini 4 Argon (the review tier) reported the regression at `divide.js:1`, tied to AC1. The verifier accepted the quote, and blame set it to `introduced`.
+  - **Codex (another family) confirmed it.**
+  - Codex then proposed a reproduction test (`divide-zero.test.js`). The reproduction stayed `unproven` ("no container runtime"), and nothing ran on the host.
+  - The user's checkout stayed unchanged, and every review worktree was removed.
+- **Two defects found only by the real run, fixed in the following commit:**
+  1. Gemini Flash's finding was dropped as `parse: invalid origin`: it wrote an origin outside the enum. Since blame decides introduced vs pre-existing anyway, an unknown or missing origin is now kept (as `introduced` until blame runs), with a regression test.
+  2. The report's Independence line listed only `google`, although Codex (`openai`) confirmed. Confirming families now count.
+- **Still not verified:**
+  - a real container run (the reproduction path and the escape test);
+  - Linux and macOS;
+  - a second smoke run after these two fixes, skipped to save quota.
+
+**v1 "done" check:** a real `quorum review --mode feature` ran on a sample diff with real providers, and the verifier and dedupe tests pass. This is met, with the container path still open.
+
+### Real container run (2026-10-19, later the same day)
+
+With Docker Desktop running (engine 29.8.1, Linux), the opt-in container test and a second smoke run were executed.
+
+- **The first container run failed, which is what it was for.** Two defects that no fake runner could show:
+  1. The preparation step mounts the worktree read-only at `/work` and the dependency volume at `/work/node_modules`. Docker can't create that mount point inside a read-only bind mount, so every preparation failed. Fix: create the empty `node_modules` directory in the disposable worktree first; git ignores empty directories.
+  2. vite bundles its config into `node_modules/.vite-temp`, and that volume is read-only in the test step. Fix: create the runner cache directories (`.vite-temp`, `.vite`, `.vitest`, `.cache`) during the writable preparation, and cover them with `tmpfs` in the test step. The volume layout is versioned (`layout-2`), so older volumes are detected and rebuilt.
+
+  Both times the outcome was `unproven`, never a false "not reproduced". That is the conservative design working as intended.
+- **The escape test passes on real Docker.** A hostile test could neither write outside `/work` nor open a socket to 1.1.1.1:80.
+- **Second smoke run** (same synthetic repo, `--reproduce`, Docker running):
+  - **Result: exit 1, one BLOCKER, `reproduced`** ("matching assertion at head; passed at base"), coverage COMPLETE.
+  - **Cost:** 4 calls, 128 s.
+  - **What each provider did:** Gemini Flash's answer had no JSON, so rule 4 escalated it to Gemini 4 Argon, which found the BLOCKER. Codex confirmed it and proposed the reproduction test.
+  - **Cleanup:** no container was left behind, and the user's checkout was unchanged.
+  - **Independence:** the Independence line now lists `google, openai`.
+- **ASSUMPTION 9 is settled:** the pinned digest pulls and runs, and the container path works end to end. Still not verified: Linux and macOS hosts, Podman, npm and Yarn repos, and monorepos.

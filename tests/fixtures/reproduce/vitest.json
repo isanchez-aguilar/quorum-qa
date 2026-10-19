@@ -1,0 +1,55 @@
+{
+  "numTotalTestSuites": 2,
+  "numPassedTestSuites": 0,
+  "numFailedTestSuites": 2,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 1,
+  "numPassedTests": 0,
+  "numFailedTests": 1,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "synthetic balance"
+          ],
+          "fullName": "synthetic balance preserves zero",
+          "status": "failed",
+          "title": "preserves zero",
+          "duration": 1,
+          "failureMessages": [
+            "AssertionError: expected 1 to be +0 // Object.is equality\n    at /work/tests/reproduction.test.ts:4:42"
+          ],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1,
+      "endTime": 2,
+      "status": "failed",
+      "message": "",
+      "name": "/work/tests/reproduction.test.ts"
+    }
+  ]
+}

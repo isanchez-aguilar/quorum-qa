@@ -36,3 +36,10 @@ export class ProviderError extends Error {
     this.name = 'ProviderError';
   }
 }
+
+export class NotImplementedError extends ProviderError {
+  constructor(readonly provider: 'claude' | 'qwen') {
+    super('unavailable', 'not implemented in v1');
+    this.name = 'NotImplementedError';
+  }
+}

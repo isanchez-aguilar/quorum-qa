@@ -53,6 +53,13 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function parseReproductionProposal(raw: string): ReproductionProposal {
+  const value = extractJson(raw, item => isRecord(item)
+    && ['path', 'content', 'expect'].every(key => typeof item[key] === 'string' && item[key].trim()));
+  const proposal = value as Record<string, string>;
+  return { path: proposal.path!, content: proposal.content!, expect: proposal.expect!, status: 'pending' };
+}
+
 function findingFrom(value: unknown, entry: CatalogEntry): Finding {
   if (!isRecord(value)) throw new Error('finding must be an object');
   const strings = ['file', 'trigger', 'impact', 'evidence_quote', 'fix'] as const;
@@ -60,7 +67,10 @@ function findingFrom(value: unknown, entry: CatalogEntry): Finding {
     if (typeof value[field] !== 'string' || !value[field].trim()) throw new Error(`${field} must be a non-empty string`);
   }
   if (typeof value.severity !== 'string' || !['BLOCKER', 'IMPORTANT', 'OPTIONAL'].includes(value.severity)) throw new Error('invalid severity');
-  if (typeof value.origin !== 'string' || !['introduced', 'pre-existing', 'improvement'].includes(value.origin)) throw new Error('invalid origin');
+  // git blame decides introduced vs pre-existing later, and only "improvement" is kept from the model,
+  // so an unknown or missing origin (seen from Gemini Flash in a real run) is not a reason to drop the finding.
+  const origin: Finding['origin'] = typeof value.origin === 'string' && ['introduced', 'pre-existing', 'improvement'].includes(value.origin)
+    ? value.origin as Finding['origin'] : 'introduced';
   if (!Number.isSafeInteger(value.line) || (value.line as number) < 1) throw new Error('line must be a positive integer');
   if (typeof value.confidence !== 'number' || !Number.isFinite(value.confidence)) throw new Error('confidence must be finite');
   let reproduction: ReproductionProposal | undefined;
@@ -72,7 +82,7 @@ function findingFrom(value: unknown, entry: CatalogEntry): Finding {
     reproduction = { path: proposal.path as string, content: proposal.content as string, expect: proposal.expect as string, status: 'pending' };
   }
   const finding: Finding = {
-    severity: value.severity as Finding['severity'], origin: value.origin as Finding['origin'],
+    severity: value.severity as Finding['severity'], origin,
     file: value.file as string, line: value.line as number, trigger: value.trigger as string,
     impact: value.impact as string, evidence_quote: value.evidence_quote as string, fix: value.fix as string,
     provider: entry.provider, model: entry.id, family: entry.family, confidence: Math.max(0, Math.min(1, value.confidence)),

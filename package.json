@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "A quorum of AI reviewers for your code. It reports only verified findings.",
   "license": "Apache-2.0",
+  "packageManager": "pnpm@9.15.0",
   "type": "module",
   "private": true,
   "bin": {

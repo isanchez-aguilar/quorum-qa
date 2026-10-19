@@ -20,6 +20,8 @@ export interface Finding {
   family: Family;
   confidence: number;
   verified?: boolean;
+  // Computed by the cascade from verified sources, never accepted from provider JSON.
+  confirmationFamilies?: Family[];
   verification_note?: string;
   reproduction?: ReproductionProposal;
   // Set by dedupe: other findings at the same place whose text overlaps but was not strong enough
@@ -103,6 +105,7 @@ export interface QuorumConfig {
     quotaFloorPercent: number;
   };
   reproduce: {
+    allowInstallScripts?: boolean;
     isolation: 'container' | 'interactive';
     // Default node:22-bookworm-slim, pinned by digest at M6.
     image?: string;
@@ -161,6 +164,8 @@ export interface ReproductionProposal {
 // Parsed from the test runner's JSON reporter (vitest or jest). Quorum never parses human-readable output.
 export interface TestReport {
   runner: 'vitest' | 'jest';
+  // Includes suites that failed to load before producing assertions.
+  suiteFiles?: string[];
   tests: Array<{
     // Path relative to the worktree root.
     file: string;

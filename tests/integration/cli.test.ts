@@ -33,6 +33,9 @@ describe('router (in process)', () => {
     const result = await run(['--help']);
     expect(result.code).toBe(0);
     expect(result.out).toMatch(/Usage: quorum/);
+    expect(result.out).toContain('--no-host-prompt');
+    expect(result.out).toContain('automatic "no" (unproven)');
+    expect(result.out).not.toContain('--yes-run-untrusted');
     expect(result.err).toBe('');
   });
 

@@ -82,6 +82,7 @@ describe('parseArgs', () => {
       '--dry-run',
       '--reproduce',
       '--allow-unproven',
+      '--no-host-prompt',
     ]);
     expect(parsed.flags).toEqual({
       mode: 'redesign',
@@ -95,6 +96,7 @@ describe('parseArgs', () => {
       dryRun: true,
       reproduce: true,
       allowUnproven: true,
+      noHostPrompt: true,
     });
   });
 
