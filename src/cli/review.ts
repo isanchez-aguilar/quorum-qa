@@ -165,7 +165,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.coverage.complete = false; }
     const families = [...cascade.reviewedFamilies];
     // Cached reviews are still independent reviews by the original model family.
-    for (const f of [...cascade.findings, ...cascade.unconfirmed]) if (!families.includes(f.family)) families.push(f.family);
+    // Confirming families count too: a finding confirmed by another family was reviewed by it.
+    for (const f of [...cascade.findings, ...cascade.unconfirmed]) {
+      for (const family of [f.family, ...(f.confirmationFamilies ?? [])]) if (!families.includes(family)) families.push(family);
+    }
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
     const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
       .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));

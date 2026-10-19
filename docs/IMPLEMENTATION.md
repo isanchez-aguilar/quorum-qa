@@ -2034,3 +2034,22 @@ rebuilt the CLI and passed **798 tests**, with **6 skipped**, across **30 files*
 `QUORUM_CONTAINER_TESTS=0` was set for the run; the slow container test still
 skips by default without an explicit opt-in. `git diff --check` passed.
 No log files were written to the repository root.
+
+### v1 smoke run (2026-10-19)
+
+The approved smoke run from `scripts/smoke-review.md` was run once on Isaac's Windows machine. It used a synthetic repo under `.quorum/smoke-m6` with a removed zero-divisor guard, `--reproduce`, and a 6-call budget. Docker Desktop was not running.
+
+- **Result: exit 1, one BLOCKER, 4 calls, 75 s.**
+  - Gemini 4 Argon (the review tier) reported the regression at `divide.js:1`, tied to AC1. The verifier accepted the quote, and blame set it to `introduced`.
+  - **Codex (another family) confirmed it.**
+  - Codex then proposed a reproduction test (`divide-zero.test.js`). The reproduction stayed `unproven` ("no container runtime"), and nothing ran on the host.
+  - The user's checkout stayed unchanged, and every review worktree was removed.
+- **Two defects found only by the real run, fixed in the following commit:**
+  1. Gemini Flash's finding was dropped as `parse: invalid origin`: it wrote an origin outside the enum. Since blame decides introduced vs pre-existing anyway, an unknown or missing origin is now kept (as `introduced` until blame runs), with a regression test.
+  2. The report's Independence line listed only `google`, although Codex (`openai`) confirmed. Confirming families now count.
+- **Still not verified:**
+  - a real container run (the reproduction path and the escape test);
+  - Linux and macOS;
+  - a second smoke run after these two fixes, skipped to save quota.
+
+**v1 "done" check:** a real `quorum review --mode feature` ran on a sample diff with real providers, and the verifier and dedupe tests pass. This is met, with the container path still open.

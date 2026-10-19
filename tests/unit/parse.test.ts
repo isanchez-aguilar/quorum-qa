@@ -43,7 +43,7 @@ describe('provider JSON parsing', () => {
     expect(parseFindings(JSON.stringify([finding({ confidence: -1 })]), entry).findings[0]?.confidence).toBe(0);
   });
 
-  it.each(['file', 'line', 'severity', 'origin', 'trigger', 'impact', 'evidence_quote', 'fix', 'confidence'])('drops a missing %s with a reason', field => {
+  it.each(['file', 'line', 'severity', 'trigger', 'impact', 'evidence_quote', 'fix', 'confidence'])('drops a missing %s with a reason', field => {
     const item: Record<string, unknown> = { ...finding() };
     delete item[field];
     const result = parseFindings(JSON.stringify([item, finding()]), entry);
@@ -52,7 +52,7 @@ describe('provider JSON parsing', () => {
     expect(result.dropped[0]?.reason).toContain(field);
   });
 
-  it.each([{ severity: ['BLOCKER'] }, { origin: ['introduced'] }, { line: 1.2 }, { confidence: '0.5' },
+  it.each([{ severity: ['BLOCKER'] }, { line: 1.2 }, { confidence: '0.5' },
     { evidence_quote: null }, { reproduction: { path: 'only' } }])('rejects invalid field types %j', override => {
     expect(parseFindings(JSON.stringify([{ ...finding(), ...override }]), entry).dropped).toHaveLength(1);
   });
@@ -60,4 +60,13 @@ describe('provider JSON parsing', () => {
   it.each(['not JSON', '[{ broken }]', '[', '{"findings": [}', 'x'.repeat(1_048_577)])('reports unparseable output', raw => {
     expect(parseFindings(raw, entry).error).toBeDefined();
   });
+});
+
+it('keeps a finding whose origin is unknown or missing (git blame sets it later)', () => {
+  // Seen in a real run: Gemini Flash answered with an origin outside the enum.
+  const { origin: _origin, ...withoutOrigin } = finding();
+  const result = parseFindings(JSON.stringify([finding({ origin: 'regression' as never }), withoutOrigin]), entry);
+  expect(result.findings).toHaveLength(2);
+  expect(result.findings.every(item => item.origin === 'introduced')).toBe(true);
+  expect(result.dropped).toEqual([]);
 });
