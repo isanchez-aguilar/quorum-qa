@@ -1306,3 +1306,50 @@ Test expectations that these fixes legitimately changed (nothing else was touche
 Where this round departs from the request: the brief asked for an identifier similarity of 0.8, but `TAX_RATE` and `TAX_RATIO`, its own example and table 4.4 row 11, are two edits in nine characters (0.778) and fall under it, so the bound is 0.77, which still keeps a four-character name exact. The treatment of `user`/`users` and of identifiers that differ in digits, and the neighbouring-swap edit, are decisions the brief left open.
 
 **Known limits of the verifier.** It is a lexical check of the quote against the code. It does not know semantics: it cannot tell that two different identifiers are interchangeable, nor that two spellings of one expression mean the same, it ignores punctuation (so `(a + b) * c` and `a + (b * c)` have the same tokens), it cannot judge whether the finding's explanation is true, and a short exact quote at the right line is weak evidence that a model may produce without having understood the code. A typo-sized difference in a name is tolerated on purpose, so `token` and `taken` count as one name. Dedupe is conservative and cannot decide that two differently worded findings are the same defect; it keeps them apart and points at them with `possibly_related`, and deciding is a job for the confirm tier in M3.
+
+## M2 as built
+
+M2 adds `src/checks/{resolver,index}.ts`, `src/context/{git,blame,index}.ts`,
+`src/process/runner.ts`, and four test files (`resolver`, `checks`, `context`,
+`runner`). The current M2 brief supersedes the older signatures in section 3.
+No M0/M1 source, types, tests, dependencies, PLAN.md or AGENTS.md were changed.
+
+Decisions and deviations:
+
+- Checks return per-command argv, exit code, duration, timeout and UTF-8 byte
+  tails (4 KiB), continue after failures, and default to 120 seconds per check.
+  Git commands default to 30 seconds. The existing `CommandRunner` type is
+  unchanged: `CommandTimeoutError` carries captured output; checks report
+  `timedOut: true` and exit code 1. An ordinary exit code 124 is not a timeout.
+- Resolution ignores empty, relative and cwd PATH entries, including an explicit
+  cwd entry. Explicit absolute executable paths are allowed. Windows environment
+  keys are case-insensitive. Shim paths, as well as arguments, reject expansion
+  characters; NUL is rejected in addition to the specified metacharacters.
+- `buildReviewContext` compares the resolved base and head directly (`base..head`),
+  rather than silently replacing base with a merge base. The diff helper also
+  accepts `a...b`. Diff truncation includes its marker within 512 KiB. No AST
+  extraction was added: it is outside the current brief and ReviewContext type.
+- Changed files use NUL-delimited status/path pairs with rename detection disabled;
+  a rename is represented as deletion plus addition. Refs use a conservative plain
+  ASCII ref grammar; revision operators such as `HEAD~1` are intentionally rejected.
+  Missing commits and blame errors fail explicitly. Blame validates the head line
+  before treating a file absent at base as introduced; invalid lines do not receive
+  an origin. This layer never emits improvement.
+- Capture retains at most 1 MiB each for the prefix and tail of each stream (up to
+  4 MiB total retained bytes). `CommandOutputLimitError` exposes bounded output and
+  the exit code. Checks use its tails; diffs use its marked prefix. Other Git
+  helpers fail on overflow instead of accepting an incomplete file list or SHA.
+- The runner spawns without a shell, uses a POSIX process group and SIGKILL, and
+  invokes absolute System32 taskkill with /T /F on Windows. If taskkill fails, it
+  attempts direct termination and reports an explicit unverified-tree diagnostic
+  in the timeout error. In this restricted Windows environment taskkill returns
+  Access denied. The real timeout tests verify parent and child PIDs disappear,
+  but successful taskkill execution and the POSIX process-group branch remain
+  unverified here. Direct termination alone is not a general tree-kill guarantee.
+- Tests create only synthetic temporary repositories with fixed identity/dates;
+  Git integration skips only when git cannot be resolved on PATH. Windows shim
+  quoting is tested both with injected win32 resolution and a real .cmd file.
+  Git's external diff and text conversion are disabled for diff extraction.
+- Same-family read-only QA found and reproduced a UTF-8 prefix boundary overflow;
+  it was fixed with a regression test. Cross-family review remains pending under
+  this task's no-network restriction; no provider CLI was invoked.
