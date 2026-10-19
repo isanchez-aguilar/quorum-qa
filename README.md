@@ -39,6 +39,15 @@ pnpm build
 node bin/quorum.js --help
 ```
 
+### Claude Code plugin (optional)
+
+The repo is also a Claude Code plugin marketplace with a `/quorum` skill. It runs `quorum doctor`, always shows a `--dry-run` plan first, and asks before spending provider quota:
+
+```sh
+claude plugin marketplace add isanchez-aguilar/quorum-qa
+claude plugin install quorum@quorum
+```
+
 ## Quick start
 
 Add `quorum.config.json` to the repository root:

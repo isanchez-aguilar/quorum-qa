@@ -1,0 +1,14 @@
+{
+  "name": "quorum",
+  "description": "Quorum: a multi-model code reviewer that reports only verified findings, usable from Claude Code.",
+  "owner": {
+    "name": "Isaac Sanchez Aguilar"
+  },
+  "plugins": [
+    {
+      "name": "quorum",
+      "source": "./plugin",
+      "description": "Run Quorum reviews from Claude Code: dry-run first, verified findings only."
+    }
+  ]
+}
