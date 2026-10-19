@@ -83,6 +83,8 @@ export function formatDryRun(plan: ExecutionPlan): string {
     '', 'Execution Cascade:', '  [Phase 2: Triage]', `    Provider / Model: ${names('triage')}`,
     `    Payload: surgical diff + supplied spec, inventory and rules (${context.diff.split('\n').length} diff lines)`,
     `    Payload size: ${plan.payloadCharacters} characters (not tokens)`,
+    ...(context.mode === 'bughunt' ? [`    Windows: ${context.bughunt?.windows.length ?? 0} (${context.bughunt?.windows.reduce((sum, window) => sum + window.end - window.start + 1, 0) ?? 0} total lines); radius ${context.radius ?? 40}`,
+      ...(context.bughunt?.windows ?? []).map(window => `      ${window.file}:${window.start}-${window.end}`)] : []),
     `    Review chunks: ${plan.chunkCount}; call budget ${plan.budgetCoversChunks ? 'covers' : 'does not cover'} initial triage (retries and escalation extra; time depends on providers)`,
     '  [Phase 3: Conditional Escalation Paths]',
     `    Triggers: findings matching [${[...new Set([...config.escalate.focus, ...Object.keys(plan.routes)])].join(', ')}] OR confidence < ${config.escalate.belowConfidence.toFixed(2)} OR BLOCKER`,

@@ -82,6 +82,9 @@ node bin/quorum.js review --mode feature --diff origin/main...HEAD --spec docs/s
 # Feature review against acceptance criteria
 node bin/quorum.js review --mode feature --diff origin/main...HEAD --spec docs/spec.md
 
+# Hunt pre-existing bugs in unchanged code around the diff (default radius: 40 lines)
+node bin/quorum.js review --mode bughunt --diff origin/main...HEAD --radius 40
+
 # Redesign review auditing feature parity and visual assets
 node bin/quorum.js review --mode redesign --diff origin/main...HEAD --inventory docs/old-features.md --images shots/
 ```
@@ -114,7 +117,8 @@ node bin/quorum.js review --mode redesign --diff origin/main...HEAD --inventory 
 
 | Command | Flag | Description |
 |---|---|---|
-| `review` | `--mode <feature\|redesign>` | Review mode |
+| `review` | `--mode <feature\|redesign\|bughunt>` | Review mode |
+| `review` | `--radius <n>` | Bughunt lines before/after each hunk; default 40, clamped to 1-200 |
 | `review` | `--diff <range>` | Git range to review, e.g. origin/main...HEAD |
 | `review` | `--spec <file>` | Spec with the acceptance criteria (feature) |
 | `review` | `--inventory <file>` | Inventory of the old features (redesign) |

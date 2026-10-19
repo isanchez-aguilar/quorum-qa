@@ -6,7 +6,7 @@ import type { Family, Finding } from '../types/index.js';
 export interface ReviewResult extends CascadeResult {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign';
+  mode: 'feature' | 'redesign' | 'bughunt';
   range: string;
   headSha: string;
   baseSha: string;
@@ -51,18 +51,23 @@ export function generateMarkdownReport(result: ReviewResult): string {
     `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`,
     '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs exits 2.**',
     `- Reviewed: ${coverage.reviewedFiles.map(cell).join(', ') || 'none'}`,
+    ...(result.mode === 'bughunt' ? [
+      `- Windows reviewed: ${(coverage.reviewedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
+      `- Windows skipped: ${(coverage.skippedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
+    ] : []),
     `- Skipped: ${coverage.skippedFiles.map(cell).join(', ') || 'none'}`,
     `- Truncated: ${coverage.truncatedHunks.map(h => `${cell(h.file)} hunk ${h.hunk}`).join(', ') || 'none'}`,
     `- Binary: ${coverage.binaryFiles.map(cell).join(', ') || 'none'} (excluded from text review)`,
     `- Lost: ${coverage.lostFindings.map(f => `${cell(f.reason)}: ${f.count}`).join(', ') || 'none'}`,
     ...(result.mode === 'feature' ? ['## Acceptance criteria', '| Criterion | Status |', '|---|---|',
       ...result.criteria.map((criterion, i) => `| AC${i + 1}: ${cell(criterion)} | ${all.some(f => new RegExp(`\\bAC${i + 1}\\b`, 'i').test(f.trigger + '\n' + f.impact)) ? 'unmet' : 'not assessed (no finding)'} |`)]
-      : ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)]),
+      : result.mode === 'redesign' ? ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)] : ['## Pre-existing bugs', 'Only pre-existing findings count toward this bughunt summary and exit status.']),
     '## Blockers', details(result.findings.filter(f => f.severity === 'BLOCKER')),
     '## Important Findings', details(result.findings.filter(f => f.severity === 'IMPORTANT')),
     '## Optional Findings', details(result.findings.filter(f => f.severity === 'OPTIONAL')),
     '## Unconfirmed (local model only)', details(result.unconfirmed.filter(f => f.family === 'local')),
     '## Unconfirmed (other reviewers)', details(result.unconfirmed.filter(f => f.family !== 'local')),
+    ...(result.mode === 'bughunt' ? ['## Points at the change (use feature mode)', details(result.pointsAtChange ?? [])] : []),
     '## Reproduction', reproductionDetails([...result.findings, ...result.unconfirmed]),
     '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',
     result.checks === null ? 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
@@ -92,7 +97,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;
       return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, snippet: { text: f.evidence_quote } } } }],
-        properties: { origin: f.origin, confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
+        properties: { origin: f.origin, ...(result ? { mode: result.mode } : {}), confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
           ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },
       };

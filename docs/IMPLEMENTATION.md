@@ -2328,3 +2328,72 @@ Files changed: `src/context/{providers,codegraph}.ts`,
 `src/index.ts`; `tests/unit/{context-providers,config,m3-limits}.test.ts`,
 `tests/integration/{review,doctor}.test.ts`; `README.md`,
 `docs/IMPLEMENTATION.md` and `docs/ROADMAP.md`.
+
+## v2 bughunt as built
+
+Implemented on `feat/v2-bughunt`, with no new dependencies. The mode accepts
+`--mode bughunt` and `--radius` (default 40, integer values clamped to 1-200).
+Spec, inventory and images are not accepted; radius belongs only to bughunt.
+
+- Context is read from committed HEAD in a disposable worktree, including dry-run.
+  A HEAD cursor walks each unified hunk: context advances it, added lines form
+  changed ranges, and pure deletions anchor at the cursor without excluding a
+  HEAD line. No-newline markers are ignored. Windows surround these ranges and
+  exclude only changed lines, keeping unified context and gaps between edits
+  reviewable. Overlapping windows merge; EOF bounds and terminal newlines are
+  handled without inventing source lines.
+- Windows show minimum-four-digit HEAD line numbers and nearby diff hunks marked
+  as orientation only. Prompts target UNCHANGED HEAD code. Oversized payloads
+  truncate orientation first, with the truncation marker, then split unchanged
+  code into sub-windows at whole-line boundaries. Only a single line exceeding
+  the serialized 24,000-character prompt cap is skipped; its HEAD line is stored
+  in `truncatedHunks[].hunk` and explained in a note. Optional provider context
+  cannot displace review code. Coverage subtracts reviewed sub-ranges from each
+  original window, so successful split-window reviews are complete.
+- Files deleted at HEAD have the note `deleted at head: nothing to hunt` and
+  do not make other coverage incomplete. New files have no unchanged targets
+  and receive a corresponding note. Renames under `--no-renames` follow these
+  delete/add rules. Binary, unreadable, unsafe, non-regular and oversized text
+  files remain excluded with incomplete coverage (the text limit is 2 MiB).
+  A run selecting zero windows exits 2 before provider calls, including dry-run,
+  with `nothing to review in bughunt mode (no unchanged lines near the change)`.
+- Findings from triage, review and confirmation share verification and blame.
+  For numbered evidence, the original quote is checked first; if it fails, a
+  leading `^\s*\d{4,}: ` is removed from each line and accepted only if the
+  resulting quote verifies. Literal source text starting with digits and a colon
+  remains valid. Confirmation prompts explicitly request code without prefixes.
+  Corrected pre-existing locations outside selected windows are rejected.
+- Introduced findings appear separately under `Points at the change (use feature
+  mode)`; they do not escalate, merge into bughunt findings or affect exit codes.
+  A confirmation relocating onto introduced code is invalid, just like moving
+  outside the original location: its verified ledger count is undone and its
+  rejection recorded. If no valid confirmation follows, the original finding
+  survives as unconfirmed.
+- Exit codes use the same BLOCKER rule as other modes: confirmed BLOCKERs exit 1;
+  unconfirmed non-local BLOCKERs also exit 1 unless `--allow-unproven` is set.
+  Local-only findings never cause exit 1. Incomplete coverage otherwise exits 2;
+  complete coverage without a failing BLOCKER exits 0. SARIF contains bughunt
+  results only, with pre-existing origin and bughunt mode properties.
+- Routes, quotas, reproduction, budgets, cache and ledger retain the existing
+  cascade. Prompt cache keys distinguish mode and radius. Dry-run lists window
+  ranges, total lines and chunk count. Only non-local review covers a window.
+
+The Argon-review fixes have regression tests for unified context between edits,
+a context finding two lines after an edit, pure deletion anchors, minimum radius,
+empty selections, confirmation relocation and ledger accounting, unproven exit
+semantics, numbered evidence, oversized windows/lines and deleted files. These
+failed against the original implementation before their fixes (12 failing cases,
+including the two radius values; the empty-selection fixture was corrected and
+rerun separately to demonstrate exit 0 instead of 2). Additional controls cover
+literal numeric prefixes, multiline review-tier quotes, confirmed and local-only
+BLOCKERs, renames, and complete coverage across sub-windows. All provider activity
+in tests uses FakeProvider or injected runners; no real provider was called.
+
+External cross-family review and live provider validation were prohibited by the
+task. Linux/macOS and opt-in container checks remain unverified. No branch switch,
+commit, push or repository log was created for these fixes.
+
+Validation of the Argon-review fixes on Windows: `pnpm.cmd typecheck` passed;
+`pnpm.cmd test` rebuilt the CLI and passed **1,098 tests**, with **6 skips**,
+across **40 files** (83.09 seconds). The bughunt suites now contain 55 tests.
+`git diff --check` passed. No dependencies were added.
