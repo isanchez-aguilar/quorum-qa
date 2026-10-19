@@ -1194,6 +1194,7 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 14. **M6 BLOCKER waiver:** `--allow-unproven` waives only BLOCKERs with fewer than two distinct model families among their independent sources plus confirmer, identically with or without `--reproduce`. A cross-family-confirmed BLOCKER stays exit 1 for every unproven reason (cap, budget, missing proposal/runtime, new code or infrastructure). Limits never relax this gate. `not-reproduced` downgrades to IMPORTANT; `reproduced` retains BLOCKER. This supersedes the broader waiver wording in decisions 4 and 12.
 15. **M6 informed host consent:** rename `--yes-run-untrusted` to `--no-host-prompt`; it automatically answers no (unproven), never authorizes execution. Before each revision's consent, show sanitized source, path and exact configured `testCommand` argv, explaining that the reviewed revision's package.json scripts, test config, setup files and dependencies also execute on the host. Strip ANSI, C0/C1 controls except newline/tab, and bidi controls. Pass only PATH plus SystemRoot/ComSpec/PATHEXT/TEMP/TMP on Windows, or HOME/TMPDIR/LANG on POSIX, never the full parent environment.
 16. **M6 installer hooks (for Isaac):** `--ignore-scripts` does not disable pnpm's `.pnpmfile.cjs`, or Yarn Berry's repository releases and plugins. Unless `reproduce.allowInstallScripts` is true, pnpm also receives `--ignore-pnpmfile`, and a Yarn `.yarnrc.yml` with top-level `yarnPath:` or `plugins:` is unproven with reason `yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)`. A minimal line scanner recognizes plain or quoted keys without a YAML dependency. Both cache keys include `.pnpmfile.cjs`, `.yarn/releases/**` and `.yarn/plugins/**`, using the same skip rules and a shared 500-file dependency metadata cap. The explicit opt-in allows these hooks as well as install scripts.
+17. **v1.x local-only coverage (2026-10-19, for Isaac):** A chunk reviewed successfully only by a local-family model is not fully reviewed: `coverage.complete` is false and the warning is `reviewed only by a local model: <files>`. As in rule 3b, a local model never stands alone, whether it found something or returned no findings. A run without BLOCKERs exits 2 when this leaves coverage incomplete. Finding-level confirmation does not replace a full review of the chunk.
 
 ---
 
@@ -2153,3 +2154,9 @@ and passed 916 tests, with 6 skipped, across 32 files (65.20 seconds). Skips are
 the existing opt-in container gate, four unavailable Windows file-symlink cases
 and one inherited skip. git diff --check passed. The branch remains
 feat/v1x-claude-qwen, with all changes uncommitted.
+
+## v1.x on a real machine (2026-10-19)
+
+`quorum doctor --probe` was run on Isaac's machine with this branch: `qwen.endpoint` PASS, `qwen.model` PASS (`qwen3-coder-next`), and `qwen.probe` PASS. That probe is one real chat completion to the local server, which answered "OK". `claude.path` PASS. `claude.probe` FAIL, because the CLI login had expired (ASSUMPTION 10 has the recorded envelope). agy and codex probes PASS.
+
+**Not verified:** a full review through the Qwen adapter, and a successful Claude review.

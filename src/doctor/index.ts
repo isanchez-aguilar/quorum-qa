@@ -63,7 +63,8 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
     if (required('qwen') && local?.model) {
       try {
         const answer = await qwen.complete(local.model, 'Reply with OK', { deadlineMs: 30_000 }, 'You are a local connectivity probe. Reply with OK.');
-        results.push({ id: 'qwen.probe', status: answer?.trim() === 'OK' ? 'PASS' : 'FAIL', message: answer?.trim() === 'OK' ? 'Qwen replied with OK.' : 'Qwen probe did not reply with OK.' });
+        const accepted = answer?.trim().replace(/\p{P}+$/u, '').toUpperCase() === 'OK';
+        results.push({ id: 'qwen.probe', status: accepted ? 'PASS' : 'FAIL', message: accepted ? 'Qwen replied with OK.' : 'Qwen probe did not reply with OK.' });
       } catch { results.push({ id: 'qwen.probe', status: 'FAIL', message: 'Qwen chat probe failed.' }); }
     } else results.push({ id: 'qwen.probe', status: required('qwen') ? 'FAIL' : 'WARN', message: 'Qwen probe skipped: no configured, available model.' });
   }

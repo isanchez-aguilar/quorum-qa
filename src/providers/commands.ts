@@ -7,7 +7,7 @@ export interface AdapterOptions extends Pick<ResolveOptions, 'env' | 'platform' 
   runner?: CommandRunner;
   now?: () => number;
 }
-export const quotaLanguage = (text: string): boolean => /RESOURCE_EXHAUSTED|\bquota\b|\b429\b|rate.?limit/i.test(text);
+export const quotaLanguage = (text: string): boolean => /RESOURCE_EXHAUSTED|\bquota\b|\b429\b|rate.?limit|\busage limit\b/i.test(text);
 
 export function codexDiagnostics(stderr: string, prompt = ''): string {
   stderr = stderr.replace(/\r\n/g, '\n');

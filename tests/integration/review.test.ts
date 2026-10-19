@@ -57,7 +57,8 @@ describe('M5 zero-quota review CLI', () => {
     expect(dry.code).toBe(0); expect(fetcher).not.toHaveBeenCalled();
     if (model) expect(dry.out).toContain(`qwen:${model}`);
     const first = await review(fake(), ['--trust-head-config'], dependencies);
-    expect(first.code).toBe(0);
+    expect(first.code).toBe(2);
+    expect(first.result?.coverage.complete).toBe(false);
     const expected = model ?? 'discovered-qwen';
     expect(first.result?.unconfirmed[0]).toMatchObject({ provider: 'qwen', model: expected, family: 'local' });
     expect(first.result?.findings).toEqual([]);
@@ -68,6 +69,17 @@ describe('M5 zero-quota review CLI', () => {
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'GET')).toHaveLength(model ? 0 : 2);
     expect(fetcher.mock.calls.every(([url]) => (url as URL).href.startsWith('http://localhost:1234/custom/'))).toBe(true);
+  });
+  it('returns exit 2 when agy is unavailable and Qwen alone answers empty', async () => {
+    await commitConfig({ ...config(), tiers: { triage: ['agy:flash', 'qwen'], review: ['agy:pro'], confirm: [], visual: [] } });
+    await git('add', '.'); await git('commit', '-m', 'synthetic local fallback');
+    const agy = new FakeProvider('agy', 'google', runner, {});
+    const qwen = new FakeProvider('qwen', 'local', runner, { qwen: ['[]'] });
+    const result = await review(agy, ['--trust-head-config'], { providers: new Map([['agy', agy], ['qwen', qwen]]) });
+    expect(result.result?.coverage.complete).toBe(false);
+    expect(result.result?.warnings.join(' ')).toContain('reviewed only by a local model:');
+    expect(result.result?.warnings.join(' ')).toContain('sample.ts');
+    expect(result.code).toBe(2);
   });
   it('runs feature review end to end, reports three criteria, SARIF, ledger, and cache without a second call', async () => {
     const provider = fake([JSON.stringify([finding({ trigger: 'AC2 is missing' })])]);

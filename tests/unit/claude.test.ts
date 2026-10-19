@@ -49,7 +49,7 @@ it.each(['{}', 'null', '[]', 'not JSON', '{"result":[]}', '{"subtype":"success",
   expect((await review()).rawOutput).toBe('Invalid Claude result envelope');
   expect(answer).toHaveBeenCalledOnce();
 });
-it.each([{ subtype: 'error', result: 'quota 429' }, { subtype: 'success', is_error: true, result: 'rate limit' }])('fails error envelopes without scanning answer text', async envelope => {
+it.each([{ subtype: 'error', result: 'quota 429' }])('fails error envelopes without scanning answer text', async envelope => {
   answer.mockResolvedValue({ ...ok(), stdout: JSON.stringify(envelope) });
   await expect(review()).rejects.toMatchObject({ kind: 'unavailable' });
 });
@@ -121,5 +121,22 @@ it('recognizes the recorded expired-login envelope (ASSUMPTION 10)', async () =>
   expect(claudeAuthFailure(claudeEnvelope(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '[]' })))).toBe(false);
   // A review that merely mentions OAuth is an answer, not an auth failure.
   expect(claudeAuthFailure(claudeEnvelope(JSON.stringify({ subtype: 'success', is_error: false, result: 'The OAuth refresh path lacks a check' })))).toBe(false);
-  expect(CLAUDE_LOGIN_HINT).toMatch(/sign in/);
+  answer.mockResolvedValue({ stdout: recorded, stderr: '', exitCode: 1 });
+  await expect(review()).rejects.toMatchObject({ kind: 'unavailable', message: CLAUDE_LOGIN_HINT });
+});
+
+it.each(["You've hit your usage limit", 'API Error: 429 rate_limit_error'])('exhausts the Claude quota group from error result: %s', async result => {
+  answer.mockResolvedValue({ stdout: JSON.stringify({ subtype: 'success', is_error: true, result }), stderr: '', exitCode: 1 });
+  await expect(review()).rejects.toMatchObject({ kind: 'quota' });
+  answer.mockClear();
+  const cfg = validateConfig({ checks: [], tiers: { triage: ['claude:sonnet', 'claude:opus'], review: ['agy:gemini-4-argon-high'], confirm: [], visual: [] } });
+  const agy = new FakeProvider('agy', 'google', runner, { 'gemini-4-argon-high': ['[]'] });
+  const cascade = await runCascade(context(root), cfg, new Map<string, ProviderAdapter>([['claude', new ClaudeProvider(settings())], ['agy', agy]]), { gitRunner: originRunner(root) });
+  expect(cascade.calls.map(call => call.status)).toEqual(['quota', 'ok']);
+  expect(answer.mock.calls.filter(([, args]) => args.includes('-p'))).toHaveLength(1);
+});
+
+it('does not scan error result beyond the first 300 characters', async () => {
+  answer.mockResolvedValue({ stdout: JSON.stringify({ subtype: 'success', is_error: true, result: 'x'.repeat(300) + '429' }), stderr: '', exitCode: 1 });
+  await expect(review()).rejects.toMatchObject({ kind: 'unavailable' });
 });

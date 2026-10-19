@@ -10,9 +10,11 @@ Verified on a real machine (Windows 11, agy 1.2.x, codex 0.160.0, Claude Code 2.
 - `quorum doctor` and `quorum doctor --probe`
 - End-to-end `quorum review --mode feature` smoke runs with real providers
 - The reproduction lane and escape test under Docker Desktop (engine 29.8.1, Linux): a real BLOCKER was confirmed by a second model family and reproduced by a failing test
-- The local Qwen adapter; the Claude adapter up to authentication (see `quorum doctor --probe`)
+- Qwen: doctor probe against a real local server (one chat completion)
+- Claude Code: CLI present; review blocked by an expired login on the test machine
 
 Not verified:
+- a full review through the Qwen or Claude adapters
 - Linux and macOS hosts
 - Podman
 - npm and Yarn repositories

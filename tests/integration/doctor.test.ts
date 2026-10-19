@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CLAUDE_LOGIN_HINT } from '../../src/providers/claude.js';
 import { runDoctor } from '../../src/doctor/index.js';
 import { checkPermissions, checkQwen, permissionPath, readProbe } from '../../src/doctor/checks.js';
 import { validateConfig } from '../../src/config/schema.js';
@@ -79,7 +80,7 @@ describe('doctor with synthetic executables and injected runner', () => {
     expect(status(result, 'qwen.endpoint')).toBe('PASS'); expect(status(result, 'qwen.model')).toBe('FAIL');
     expect(status(result, 'qwen.probe')).toBe('FAIL'); expect(fetcher).toHaveBeenCalledOnce();
   });
-  it.each(['OK', 'wrong', 'nonjson', 'connection'])('makes exactly one local chat probe and checks its answer: %s', async output => {
+  it.each(['OK', ' ok! ', 'OK.', 'oK', 'OK?', 'OK extra', 'wrong', 'nonjson', 'connection'])('makes exactly one local chat probe and checks its answer: %s', async output => {
     const cfg = config(); cfg.tiers.triage = ['qwen'];
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       if (init?.method === 'GET') return new Response(JSON.stringify({ data: [{ id: 'selected-model' }] }));
@@ -87,7 +88,7 @@ describe('doctor with synthetic executables and injected runner', () => {
       return new Response(output === 'nonjson' ? 'invalid' : JSON.stringify({ choices: [{ message: { content: output } }] }));
     });
     const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, fetch: fetcher, probe: true });
-    expect(status(result, 'qwen.probe')).toBe(output === 'OK' ? 'PASS' : 'FAIL');
+    expect(status(result, 'qwen.probe')).toBe(['OK', ' ok! ', 'OK.', 'oK', 'OK?'].includes(output) ? 'PASS' : 'FAIL');
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetcher.mock.calls[1]![1]!.body as string)).toMatchObject({ model: 'selected-model', messages: [
       { role: 'system', content: expect.stringContaining('connectivity probe') }, { role: 'user', content: 'Reply with OK' },
@@ -115,6 +116,20 @@ describe('doctor with synthetic executables and injected runner', () => {
     expect(args).toEqual(['-p', '--output-format', 'json', '--model', 'sonnet', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--tools', 'Read,Grep,Glob', '--permission-mode', 'dontAsk']);
     expect(opts?.cwd).toBe(root); expect(opts?.stdin).toContain('Read README.md');
     expect(opts?.stdin).not.toMatch(/never read|do not read/i);
+  });
+  it('wires the recorded expired-login envelope to the doctor hint', async () => {
+    await writeFile(path.join(root, 'README.md'), '# Synthetic');
+    const cleanup = vi.fn(async () => {});
+    vi.mocked(createReviewWorktree).mockResolvedValue({ path: root, cleanup });
+    runner.mockImplementation(async (_file, args) => args.includes('--verify') ? ok('a'.repeat(40)) : {
+      stdout: JSON.stringify({ type: 'result', subtype: 'success', is_error: true, terminal_reason: 'api_error',
+        result: 'Failed to authenticate: OAuth session expired and could not be refreshed', usage: { input_tokens: 0, output_tokens: 0 } }),
+      stderr: '', exitCode: 1,
+    });
+    expect(await readProbe('claude', 'sonnet', { runner, env, repoRoot: root })).toMatchObject({
+      status: 'FAIL', message: 'claude read-only probe failed: ' + CLAUDE_LOGIN_HINT + '.',
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
   });
   it('runs the configured Claude alias probe only with --probe', async () => {
     await writeFile(path.join(root, 'README.md'), '# Synthetic');

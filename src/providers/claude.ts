@@ -44,9 +44,10 @@ export class ClaudeProvider extends ProviderCommands implements ProviderAdapter 
         const envelope = claudeEnvelope(result.stdout);
         const failed = result.exitCode !== 0 || envelope?.is_error === true
           || (typeof envelope?.subtype === 'string' && envelope.subtype !== 'success');
-        // `result` is answer text, even in failed envelopes: never scan it for quota.
+        // Only explicit error envelopes put diagnostics rather than answer text in `result`.
+        const errorResult = envelope?.is_error === true && typeof envelope.result === 'string' ? envelope.result.slice(0, 300) : '';
         if (failed && claudeAuthFailure(envelope)) throw new ProviderError('unavailable', CLAUDE_LOGIN_HINT);
-        if (failed && quotaLanguage(result.stderr + '\n' + JSON.stringify([envelope?.subtype, envelope?.error, envelope?.errors]))) {
+        if (failed && quotaLanguage(result.stderr + '\n' + JSON.stringify([envelope?.subtype, envelope?.error, envelope?.errors]) + '\n' + errorResult)) {
           throw new ProviderError('quota', 'claude quota exhausted or rate limited');
         }
         const rawOutput = claudeAnswer(envelope) ?? 'Invalid Claude result envelope';
