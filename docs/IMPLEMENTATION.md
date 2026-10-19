@@ -2179,6 +2179,23 @@ above define the extended coverage rule and optional confirmation routes.
   confirm. Same-family-only confirmation emits the independence warning. An
   exhausted route warns and tries the normal confirm tier without resetting
   attempts, quota or budget. Adjudication and reproduction keep their tier routes.
+- Confirmation independence warnings also apply when no route matches or a
+  route falls back to the confirm tier; the tier name labels those warnings.
+  For a local finding requiring both review and confirmation, the second call
+  prefers a family outside **all** existing sources (local and the review
+  confirmer). A money route of Argon then Codex therefore selects Codex after
+  Argon reviewed the local finding; an Argon-only route warns.
+- Ledger locks contain a unique UUID owner token. Expired locks are renamed to
+  unique `.stale-<uuid>` paths before deletion, never deleted at the shared path.
+  A short-lived `.lock.reclaim` directory serializes stale-lock inspections and
+  renames, with a second age check inside it: rename alone cannot prevent a
+  delayed reclaimer from moving a newly acquired lock. Release checks the token
+  on every attempt and runs even if closing the handle fails. Transient Windows
+  inspection/deletion errors retry within ten seconds; atomic replacement still
+  retries transient rename errors. The reclaim directory is removed in `finally`.
+  Abrupt process termination during reclamation can leave that directory behind;
+  reclamation then fails closed at the deadline rather than stealing a lock.
+  Removing such an orphan requires establishing that no reclaimer is active.
 - Each successfully parsed local-only chunk gets a full non-local review pass,
   with review-tier fallback. Its findings join the normal verifier/confirmation
   flow while the original local findings retain rule 3b. Only unresolved chunks
@@ -2217,3 +2234,22 @@ Files changed: `src/cascade/{index,planner}.ts`, `src/catalog/tiers.ts`,
 configuration example are supporting changes for routes. No functional
 deviation from the brief is intended; cross-provider review was omitted as
 required by the prohibition above.
+
+Post-Gemini regression fixes: `tests/unit/storage-lock.test.ts` adds 11 cases
+using wrappers around real filesystem functions: two synchronized stale readers
+(the second resumes after fresh acquisition), transient open/rename errors,
+EPERM/EACCES/EBUSY on stale inspection and deletion, EBUSY on release, failing
+close, and replacement ownership. `tests/unit/routing-independence.test.ts`
+adds four cases for unmatched routes, route fallback, and the two local money
+confirmation routes above. All **15 tests failed against the pre-fix HEAD
+sources** and pass with the fixes. The pre-fix sources were restored temporarily
+in the same checkout for validation, then the fixes restored in `finally`; no
+branch switch, provider call, log file, commit or push was used.
+
+Post-fix Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+(`QUORUM_CONTAINER_TESTS=0`) rebuilt the CLI and passed **987 tests**, with
+**6 skips**, across **37 files** (66.76 seconds). The focused command was
+`pnpm.cmd exec vitest run tests/unit/storage-lock.test.ts tests/unit/routing-independence.test.ts`.
+`git diff --check` passed. Changed files for this follow-up are
+`src/storage/index.ts`, `src/cascade/index.ts`, the two regression test files
+above, and this document. Provider review and Linux/macOS remain unverified.
