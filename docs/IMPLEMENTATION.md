@@ -2053,3 +2053,21 @@ The approved smoke run from `scripts/smoke-review.md` was run once on Isaac's Wi
   - a second smoke run after these two fixes, skipped to save quota.
 
 **v1 "done" check:** a real `quorum review --mode feature` ran on a sample diff with real providers, and the verifier and dedupe tests pass. This is met, with the container path still open.
+
+### Real container run (2026-10-19, later the same day)
+
+With Docker Desktop running (engine 29.8.1, Linux), the opt-in container test and a second smoke run were executed.
+
+- **The first container run failed, which is what it was for.** Two defects that no fake runner could show:
+  1. The preparation step mounts the worktree read-only at `/work` and the dependency volume at `/work/node_modules`. Docker can't create that mount point inside a read-only bind mount, so every preparation failed. Fix: create the empty `node_modules` directory in the disposable worktree first; git ignores empty directories.
+  2. vite bundles its config into `node_modules/.vite-temp`, and that volume is read-only in the test step. Fix: create the runner cache directories (`.vite-temp`, `.vite`, `.vitest`, `.cache`) during the writable preparation, and cover them with `tmpfs` in the test step. The volume layout is versioned (`layout-2`), so older volumes are detected and rebuilt.
+
+  Both times the outcome was `unproven`, never a false "not reproduced". That is the conservative design working as intended.
+- **The escape test passes on real Docker.** A hostile test could neither write outside `/work` nor open a socket to 1.1.1.1:80.
+- **Second smoke run** (same synthetic repo, `--reproduce`, Docker running):
+  - **Result: exit 1, one BLOCKER, `reproduced`** ("matching assertion at head; passed at base"), coverage COMPLETE.
+  - **Cost:** 4 calls, 128 s.
+  - **What each provider did:** Gemini Flash's answer had no JSON, so rule 4 escalated it to Gemini 4 Argon, which found the BLOCKER. Codex confirmed it and proposed the reproduction test.
+  - **Cleanup:** no container was left behind, and the user's checkout was unchanged.
+  - **Independence:** the Independence line now lists `google, openai`.
+- **ASSUMPTION 9 is settled:** the pinned digest pulls and runs, and the container path works end to end. Still not verified: Linux and macOS hosts, Podman, npm and Yarn repos, and monorepos.
