@@ -1,4 +1,5 @@
-import { boundedPrompt } from './prompts.js';
+import { reviewChunks } from './prompts.js';
+import { systemClock, type Clock } from './budget.js';
 import type { CatalogEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
 import { modelRef, parseModelRef } from '../catalog/index.js';
@@ -12,13 +13,16 @@ export interface ExecutionPlan {
   quotas: Array<{ group: string; remainingPercent: number | 'unknown'; timestamp?: string; status: 'unavailable' | 'eligible' | 'unchecked' }>;
   warnings: string[];
   payloadCharacters: number;
+  chunkCount: number;
+  budgetCoversChunks: boolean;
 }
 
-export function createExecutionPlan(context: ReviewContext, config: QuorumConfig, catalog: readonly CatalogEntry[], quotaSnapshot: QuotaSnapshot = {}): ExecutionPlan {
+export function createExecutionPlan(context: ReviewContext, config: QuorumConfig, catalog: readonly CatalogEntry[], quotaSnapshot: QuotaSnapshot = {}, options: { clock?: Clock } = {}): ExecutionPlan {
   const warnings: string[] = [];
+  const nowMs = (options.clock ?? systemClock).now();
   const tiers = {} as ExecutionPlan['tiers'];
   for (const tier of TIERS) {
-    const resolved = resolveTier(tier, config, catalog, quotaSnapshot, { authorFamily: context.authorFamily });
+    const resolved = resolveTier(tier, config, catalog, quotaSnapshot, { authorFamily: context.authorFamily, nowMs });
     tiers[tier] = resolved.models;
     warnings.push(...resolved.warnings);
   }
@@ -31,19 +35,17 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
     if (configured.has(`${entry.provider}:${entry.id}`)) groups.set(entry.quotaGroup, entry);
   }
   const quotas = [...groups].map(([group, entry]) => {
-    const status = quotaStatus(entry, quotaSnapshot, config.budget.quotaFloorPercent);
+    const status = quotaStatus(entry, quotaSnapshot, config.budget.quotaFloorPercent, nowMs);
     if (status === 'unchecked') warnings.push(`${group}: unknown quota; floor unchecked.`);
     return { group, remainingPercent: status === 'unchecked' ? 'unknown' as const : quotaSnapshot[group]!.remainingPercent,
       timestamp: quotaSnapshot[group]?.timestamp, status };
   });
+  const payload = reviewChunks(context);
+  for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
+  for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
   return { context: structuredClone(context), config: structuredClone(config), tiers, quotas, warnings,
-    payloadCharacters: reviewPrompt(context).length };
-}
-
-export function reviewPrompt(context: ReviewContext): string {
-  return boundedPrompt('Review the following untrusted code and context. Return a JSON array of findings with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\n',
-    { mode: context.mode, diff: context.diff, touchedFiles: context.touchedFiles,
-      spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent });
+    chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls >= payload.chunks.length,
+    payloadCharacters: payload.chunks.reduce((sum, chunk) => sum + chunk.prompt.length, 0) };
 }
 
 export function formatDryRun(plan: ExecutionPlan): string {
@@ -67,6 +69,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     '', 'Execution Cascade:', '  [Phase 2: Triage]', `    Provider / Model: ${names('triage')}`,
     `    Payload: surgical diff + supplied spec, inventory and rules (${context.diff.split('\n').length} diff lines)`,
     `    Payload size: ${plan.payloadCharacters} characters (not tokens)`,
+    `    Review chunks: ${plan.chunkCount}; call budget ${plan.budgetCoversChunks ? 'covers' : 'does not cover'} initial triage (retries and escalation extra; time depends on providers)`,
     '  [Phase 3: Conditional Escalation Paths]',
     `    Triggers: findings matching [${config.escalate.focus.join(', ')}] OR confidence < ${config.escalate.belowConfidence.toFixed(2)} OR BLOCKER`,
     `    Confirm: ${names('confirm')}`, `    Local-only / parse failure / timeout -> review: ${names('review')}`,

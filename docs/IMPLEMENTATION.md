@@ -1484,12 +1484,12 @@ These decisions supersede the original M3 notes above:
   readings retain the existing behavior for callers without ledger timestamps.
 - Adjudicated merges retain the absorbed trigger and impact in verification_note.
   Confirm and adjudication prompts explicitly label findings and hunks untrusted.
-  Every prompt is capped at 24,000 serialized characters: hunk/diff first, then
-  long fields, with a visible truncation marker. Reproduction proposals are
-  omitted entirely from confirm/adjudication prompts. If even shortened fields
-  cannot fit (huge collections), a marked omitted-payload envelope preserves the
-  hard cap. Planner tests assert the injected runner and no longer spy on unrelated
-  child_process exports.
+  Every prompt is capped at 24,000 serialized characters. Review prompts use the
+  coverage-aware chunking described below. Confirm/adjudication prompts shrink
+  hunks first, then long fields, with a visible marker; reproduction proposals
+  are omitted. Their last-resort omitted-payload envelope retains the hard cap.
+  Planner tests mock child_process at module level and assert that neither spawn
+  nor execFile runs.
 
 Regression verification: the single completed old-source run had 24 failures and
 45 passes across parser, cascade, limits and pipeline tests. New failing cases:
@@ -1511,3 +1511,55 @@ pnpm.cmd ran the one completed baseline. No index, branch, commit or push change
 The full final typecheck/test results are reported at delivery. External review
 remains unperformed under the explicit no-provider-CLI/no-network restriction;
 Linux and macOS are not verified. No dependencies were added.
+
+### M3 re-review fixes, round 2
+
+Review payloads are packed by complete file diff in diff order, measuring the
+serialized prompt (including JSON escapes and instructions) against 24,000
+characters. Only an oversized file is split at hunk boundaries, retaining its
+file header. Only an oversized individual hunk is cut, with a visible marker
+and a one-based hunk index. Supplied spec, inventory and rules are preserved;
+if they leave no room for diff content, the file is skipped without a model call.
+Missing diff sections are also skipped. Each chunk gets its own triage call and
+review fallback, sharing the run budget with retries, confirmation and adjudication.
+
+CascadeResult.coverage contains:
+
+- reviewedFiles: unique files with at least one successfully parsed review chunk.
+- skippedFiles: unique files with any missing, unsendable or unsuccessful chunk,
+  including budget/deadline skips. A partially reviewed file can be in both lists.
+- truncatedHunks: { file, hunk } entries for cuts made by the prompt builder.
+- complete: false if any file was skipped or any hunk was cut. This describes
+  diff review coverage; verification and confirmation outcomes remain in the
+  ledger, unconfirmed list and warnings.
+
+Each skipped file and each cut hunk generates a warning naming the file. The
+planner uses the same chunk builder, reports chunk count and total serialized
+characters, and estimates whether maxCalls covers initial triage. Retries and
+escalation need extra calls; provider latency determines time feasibility.
+Quota freshness and tier resolution both use the planner's injected clock.
+
+Local verification never consumes provider-call slots: it continues after the
+last allowed call. Findings left when time runs out are counted as rejections
+with reason "run deadline", and emit the budget warning. Relocated confirmation
+rejections no longer also count as verified. The 20-pair adjudication cap reports
+the exact number of remaining eligible pairs. Confirmation and adjudication
+JSON extraction skips unrelated JSON values such as prose [1].
+
+Regression evidence: running the three updated unit-test files against HEAD's
+original cascade sources produced 18 failures and 33 passes. Failures covered
+last-slot verification, deadline rejection/accounting and warning, confirmation
+and adjudication [1] prefixes, relocated-confirmation ledger counts, 100,000+
+characters across files, insufficient call budget, 3,000 files, oversized hunk
+cuts, no-room payloads, hunk-boundary splitting with full/partial budgets,
+missing/unsuccessful chunks, planner clock/chunk estimate, and the 25-pair
+unadjudicated warning. One direct builder test fails because the old sources lack
+the new builder; the cascade no-room test separately proves the behavioral bug.
+The no-process guard was mutation-tested by temporarily inserting a spawn call:
+the mocked call made the planner test fail, without starting a process. Original
+source bytes were restored in finally after both experiments.
+
+Validation: pnpm typecheck and pnpm test pass (455 passed, 1 skipped across
+17 test files). No provider CLI, network, dependency installation, branch switch,
+commit or push was used. Independent provider review was not run because this
+round explicitly forbids provider CLIs and network.

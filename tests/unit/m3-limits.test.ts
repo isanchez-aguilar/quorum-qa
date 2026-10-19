@@ -4,7 +4,8 @@ import path from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { runCascade } from '../../src/cascade/index.js';
 import { RunBudget, BUDGET_WARNING } from '../../src/cascade/budget.js';
-import { reviewPrompt, createExecutionPlan } from '../../src/cascade/planner.js';
+import { createExecutionPlan } from '../../src/cascade/planner.js';
+import { reviewChunks } from '../../src/cascade/prompts.js';
 import { quotaStatus } from '../../src/catalog/groups.js';
 import { validateConfig } from '../../src/config/schema.js';
 import { FakeProvider } from '../../src/providers/fake.js';
@@ -41,7 +42,7 @@ it('stops verification at the deadline between findings', async () => {
   const result = await runCascade(context(root), cfg, new Map([['agy', fake]]), { catalog, gitRunner, clock });
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(1);
   expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(8);
-  expect(result.warnings).not.toContain(BUDGET_WARNING);
+  expect(result.warnings).toContain(BUDGET_WARNING);
 });
 
 it('caps adjudication at 20 pairs without a confirmation boost', async () => {
@@ -58,6 +59,7 @@ it('caps adjudication at 20 pairs without a confirmation boost', async () => {
   const result = await runCascade(context(root), cfg, new Map([['agy', fake], ['codex', codex]]), { catalog, gitRunner: originRunner(root) });
   expect(result.calls.filter(call => call.purpose === 'adjudicate')).toHaveLength(20);
   expect(result.findings).toHaveLength(10);
+  expect(result.warnings).toContain('Adjudication cap reached: 25 pairs left unadjudicated.');
   expect(result.findings.every(item => item.confidence === 0.6)).toBe(true);
 });
 
@@ -102,10 +104,9 @@ it('old low quota is unknown and does not block planning or execution', async ()
 });
 
 
-it('caps review prompts with a visible truncation marker', () => {
+it('skips review payloads with no room for diff content', () => {
   const ctx = { ...context(root), diff: 'x'.repeat(40_000), specContent: 'y'.repeat(40_000) };
-  expect(reviewPrompt(ctx).length).toBeLessThanOrEqual(24_000);
-  expect(reviewPrompt(ctx)).toContain('[... truncated ...]');
+  expect(reviewChunks(ctx)).toEqual({ chunks: [], skippedFiles: ['sample.ts'], truncatedHunks: [] });
 });
 
 it('caps actual confirm and adjudication prompts, removes reproduction, and truncates the hunk first', async () => {

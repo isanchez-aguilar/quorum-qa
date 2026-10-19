@@ -39,7 +39,7 @@ describe('fake provider cascade', () => {
 
   it('testCascade_BelowConfidenceEscalation', async () => {
     const result = await runCascade(context(root), config(), providers({ agy: { flash: [JSON.stringify([finding({ confidence: 0.5 })])] },
-      codex: { codex: [yes({ fix: 'Use the confirming fix' })] } }), { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
+      codex: { codex: ['See [1]. ' + yes({ fix: 'Use the confirming fix' })] } }), { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
     expect(result.findings[0]).toMatchObject({ confidence: 0.5, fix: 'Use the confirming fix' });
     expect(result.calls.map(call => call.purpose)).toEqual(['review', 'confirm']);
   });
@@ -99,15 +99,15 @@ describe('fake provider cascade', () => {
     expect(result.findings).toHaveLength(1);
   });
 
-  it('stops verification when the call cap is exhausted', async () => {
+  it('verifies findings even when the call cap is exhausted', async () => {
     const result = await runCascade(context(root), config({ budget: { maxCalls: 1 } }), providers({ agy: { flash: [JSON.stringify([
       finding({ confidence: 0.5 }), finding({ line: 2, trigger: 'Loading uses a stale cache', impact: 'Old data is displayed', evidence_quote: 'export const other = load(input);' }),
     ])] }, codex: { codex: [yes()] } }), { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
     expect(result.calls).toHaveLength(1);
-    expect(result.findings).toHaveLength(0);
-    expect(result.unconfirmed).toHaveLength(0);
-    expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(0);
-    expect(result.warnings).not.toContain(BUDGET_WARNING);
+    expect(result.findings).toHaveLength(1);
+    expect(result.unconfirmed).toHaveLength(1);
+    expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(2);
+    expect(result.warnings).toContain(BUDGET_WARNING);
   });
 
   it('returns and records a hanging call at the run deadline', async () => {
@@ -176,7 +176,7 @@ describe('fake provider cascade', () => {
     const raw = [finding({ trigger: 'Missing authorization when deleting users', impact: 'Users can delete protected records', confidence: 0.7 }),
       finding({ line: 2, trigger: 'Missing audit when deleting users', impact: 'Users can delete protected records', confidence: 0.7, evidence_quote: 'export const other = load(input);' })];
     const cfg = config({ escalate: { focus: ['authorization'], belowConfidence: 0.7 }, budget: { maxCalls: verdict === 'no budget' ? 2 : 3 } });
-    const pool = providers({ agy: { flash: [JSON.stringify(raw)] }, codex: { codex: [yes(), JSON.stringify({ same: verdict })] } });
+    const pool = providers({ agy: { flash: [JSON.stringify(raw)] }, codex: { codex: [yes(), 'See [1]. ' + JSON.stringify({ same: verdict })] } });
     const result = await runCascade(context(root), cfg, pool, { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
     if (verdict === true) {
       expect(result.findings).toHaveLength(1);
@@ -236,6 +236,74 @@ describe('fake provider cascade', () => {
     const result = await runCascade(context(root), config(), pool, { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
     expect(result.findings).toHaveLength(0);
     expect(result.unconfirmed).toHaveLength(1);
+    for (const ledger of result.ledgerDraft) expect(ledger.rawFindingsCount).toBe(ledger.verifiedFindingsCount + ledger.rejectedFindingsCount);
   });
 
+
+  it.each([10, 1, 3000])('reports chunk coverage for %s files/calls', async size => {
+    const count = size === 3000 ? 3000 : 10;
+    const ctx = context(root);
+    ctx.touchedFiles = Array.from({ length: count }, (_, i) => 'file' + i + '.ts');
+    ctx.diff = ctx.touchedFiles.map(file => 'diff --git a/' + file + ' b/' + file + '\n--- a/' + file + '\n+++ b/' + file + '\n@@ -1 +1 @@\n+' + 'x'.repeat(count === 3000 ? 10 : 10000) + '\n').join('');
+    const pool = providers({ agy: { flash: Array(100).fill('[]') } });
+    const result = await runCascade(ctx, config({ budget: { maxCalls: size === 1 ? 1 : 100 } }), pool, { catalog, clock: new FakeClock() });
+    expect(result.coverage.complete).toBe(size !== 1);
+    expect(result.coverage.skippedFiles.length).toBe(size === 1 ? 8 : 0);
+    expect(result.calls.length).toBeGreaterThan(size === 1 ? 0 : 1);
+    const payloads = pool.get('agy')!.calls.map(call => {
+      expect(call.prompt.length).toBeLessThanOrEqual(24000);
+      return JSON.parse(call.prompt.slice(call.prompt.indexOf('\n') + 1)) as { diff: string };
+    });
+    expect(payloads.every(payload => payload.diff?.includes('@@'))).toBe(true);
+    if (size !== 1) expect(payloads.map(payload => payload.diff).join('')).toBe(ctx.diff);
+    else for (const file of result.coverage.skippedFiles) expect(result.warnings.join(' ')).toContain(file);
+  });
+  it('records a cut oversized hunk', async () => {
+    const ctx = context(root);
+    ctx.diff += '+' + 'x'.repeat(100000);
+    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock() });
+    expect(result.coverage.complete).toBe(false);
+    expect(result.coverage.truncatedHunks).toEqual([{ file: 'sample.ts', hunk: 1 }]);
+    expect(result.warnings.join(' ')).toContain('sample.ts');
+  });
+  it('skips files when no diff content fits', async () => {
+    const ctx = { ...context(root), specContent: 'x'.repeat(30000) };
+    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock() });
+    expect(result.calls).toHaveLength(0);
+    expect(result.coverage).toMatchObject({ complete: false, skippedFiles: ['sample.ts'] });
+  });
+  it('counts findings left at the verification deadline', async () => {
+    const clock = new FakeClock();
+    const runner: ReturnType<typeof originRunner> = async (...args) => {
+      clock.advance(60000);
+      return originRunner(root)(...args);
+    };
+    const result = await runCascade(context(root), config({ budget: { maxMinutes: 1 } }), providers({ agy: { flash: [JSON.stringify([finding(), finding()])] } }), { catalog, clock, gitRunner: runner });
+    expect(result.ledgerDraft[0]!.rejectionReasons['run deadline']).toBe(1);
+    expect(result.warnings).toContain(BUDGET_WARNING);
+  });
+
+  it.each([1, 10])('splits large files at hunk boundaries with %s calls', async maxCalls => {
+    const ctx = context(root);
+    const header = ctx.diff.slice(0, ctx.diff.indexOf('@@'));
+    const hunks = [1, 2, 3].map(line => '@@ -' + line + ' +' + line + ' @@\n+' + ('hunk' + line).repeat(3000) + '\n');
+    ctx.diff = header + hunks.join('');
+    const pool = providers({ agy: { flash: Array(10).fill('[]') } });
+    const result = await runCascade(ctx, config({ budget: { maxCalls } }), pool, { catalog, clock: new FakeClock() });
+    expect(result.calls).toHaveLength(maxCalls === 1 ? 1 : 3);
+    expect(result.coverage.truncatedHunks).toEqual([]);
+    expect(result.coverage.complete).toBe(maxCalls !== 1);
+    expect(result.coverage.skippedFiles).toEqual(maxCalls === 1 ? ['sample.ts'] : []);
+    pool.get('agy')!.calls.forEach((call, index) => {
+      const payload = JSON.parse(call.prompt.slice(call.prompt.indexOf('\n') + 1));
+      expect(payload.diff).toBe(header + hunks[index]);
+    });
+  });
+  it('reports missing diff files and unsuccessful review responses', async () => {
+    const ctx = context(root);
+    ctx.touchedFiles.push('missing.ts');
+    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['invalid'], pro: ['invalid'] } }), { catalog, clock: new FakeClock() });
+    expect(result.coverage).toMatchObject({ complete: false, reviewedFiles: [], skippedFiles: ['missing.ts', 'sample.ts'] });
+    for (const file of ctx.touchedFiles) expect(result.warnings.join(' ')).toContain(file);
+  });
 });
