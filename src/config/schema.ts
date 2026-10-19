@@ -48,6 +48,7 @@ export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'author'
     escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
     budget: { maxCalls: 12, maxMinutes: 20, quotaFloorPercent: 15 },
     reproduce: {
+      allowInstallScripts: false,
       isolation: 'container',
       testGlobs: ['**/*.test.*', '**/*.spec.*'],
       testCommand: ['pnpm', 'vitest', 'run', '--reporter=json'],
@@ -248,6 +249,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
       'timeoutSeconds',
       'testGlobs',
       'testCommand',
+      'allowInstallScripts',
     ]) ?? {};
   let isolation = defaults.reproduce.isolation;
   if (reproduceRaw.isolation !== undefined) {
@@ -259,6 +261,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   }
   const reproduce: QuorumConfig['reproduce'] = {
     isolation,
+    allowInstallScripts: false,
     testGlobs: r.stringArray(
       reproduceRaw.testGlobs,
       'reproduce.testGlobs',
@@ -272,6 +275,10 @@ export function validateConfig(raw: unknown): QuorumConfig {
       false,
     ),
   };
+  if (reproduceRaw.allowInstallScripts !== undefined) {
+    if (typeof reproduceRaw.allowInstallScripts === 'boolean') reproduce.allowInstallScripts = reproduceRaw.allowInstallScripts;
+    else r.issues.push('reproduce.allowInstallScripts must be a boolean');
+  }
   if (reproduceRaw.image !== undefined) {
     reproduce.image = r.string(reproduceRaw.image, 'reproduce.image', '');
   }

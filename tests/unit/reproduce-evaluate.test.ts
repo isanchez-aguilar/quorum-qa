@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { evaluateReproduction, infrastructureFailure, infrastructureReason, parseTestReport, passedAtBase } from '../../src/reproduce/evaluate.js';
 import type { TestReport } from '../../src/types/index.js';
 
@@ -63,10 +63,17 @@ describe('vitest and Jest JSON reporters', () => {
     raw.testResults[0].name = 'C:\\temp\\worktree\\tests\\reproduction.test.ts';
     expect(parseTestReport(raw, 'C:\\temp\\worktree')?.tests[0]?.file).toBe(testFile);
   });
+  it('compares the worktree prefix case-insensitively on win32', async () => {
+    const raw = await fixture('vitest');
+    raw.testResults[0].name = 'c:/TEMP/WORKTREE/tests/reproduction.test.ts';
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try { expect(parseTestReport(raw, 'C:/temp/worktree')?.tests[0]?.file).toBe(testFile); }
+    finally { platform.mockRestore(); }
+  });
   it('keeps a different root absolute so it cannot impersonate the target', async () => {
     const raw = await fixture('vitest');
     raw.testResults[0].name = '/work-other/tests/reproduction.test.ts';
-    expect(evaluateReproduction(parseTestReport(raw)!, testFile, 'expected 1')).toBe('other-test-failed');
+    expect(evaluateReproduction(parseTestReport(raw)!, testFile, 'expected 1')).toBe('unproven');
   });
   it.each([null, '', 'not json', {}, { testResults: [null] }, { testResults: [{ name: 'x', assertionResults: [{}] }] }])('refuses malformed reports %j', raw => {
     expect(parseTestReport(raw)).toBeNull();
@@ -112,6 +119,13 @@ describe('evaluation', () => {
 });
 
 describe('infrastructure classification', () => {
+  it('keeps missing or skipped targets unproven even alongside unrelated suite errors', () => {
+    const missing = parseTestReport({ testResults: [{ name: '/work/other.test.ts', message: 'SyntaxError: invalid', assertionResults: [] }] })!;
+    expect(infrastructureFailure(missing, '', testFile)).toBe('target test missing from report');
+    expect(evaluateReproduction(missing, testFile, 'invalid')).toBe('unproven');
+    const skipped = { ...report([test({ status: 'skipped' })]), suiteErrors: ['SyntaxError: other suite'] };
+    expect(infrastructureFailure(skipped, '', testFile)).toBe('target test only skipped');
+  });
   it.each([
     ['EROFS: read-only file system, mkdir /work/node_modules/.vite', 'cache is not writable'],
     ['EACCES: permission denied, open /work/node_modules/.cache/file', 'cache is not writable'],

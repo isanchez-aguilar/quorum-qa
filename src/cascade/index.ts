@@ -467,6 +467,7 @@ export async function runCascade(
   const findings: Finding[] = [];
   const unconfirmed: Finding[] = [];
   for (const node of nodes) {
+    node.finding.confirmationFamilies = [...new Set(node.sources.map(source => source.family))];
     (node.unconfirmed || node.sources.every(source => source.family === 'local') ? unconfirmed : findings).push(node.finding);
   }
   if (options.reproduce && !errors.length) {
@@ -478,8 +479,7 @@ export async function runCascade(
       const markUnproven = (reason: string) => {
         finding.reproduction = { path: '', content: '', expect: '', status: 'unproven', failureReason: reason };
       };
-      if (node.unconfirmed || new Set(node.sources.map(source => source.family)).size < 2
-        || node.sources.every(source => source.family === 'local') || !finding.verified) {
+      if ((finding.confirmationFamilies?.length ?? 0) < 2 || !finding.verified) {
         markUnproven('no cross-family confirmation'); continue;
       }
       if (selected++ >= 3) { markUnproven('reproduction cap'); continue; }

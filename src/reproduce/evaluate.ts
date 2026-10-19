@@ -2,7 +2,7 @@ import type { TestReport } from '../types/index.js';
 
 type Test = TestReport['tests'][number];
 export type ReproductionEvaluation = 'assertion-failure-matching' | 'assertion-failure-other-message'
-  | 'non-assertion-failure' | 'passed' | 'other-test-failed';
+  | 'non-assertion-failure' | 'passed' | 'other-test-failed' | 'unproven';
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -15,7 +15,8 @@ function cleanMessage(message: string): string {
 function normalizeFile(file: string, root = '/work'): string {
   const normalized = file.replace(/\\/g, '/');
   const prefix = root.replace(/\\/g, '/').replace(/\/$/, '') + '/';
-  return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized.replace(/^\.\//, '');
+  const matches = process.platform === 'win32' ? normalized.toLowerCase().startsWith(prefix.toLowerCase()) : normalized.startsWith(prefix);
+  return matches ? normalized.slice(prefix.length) : normalized.replace(/^\.\//, '');
 }
 
 function failureKind(message: string, details: unknown): Test['failureKind'] {
@@ -38,10 +39,11 @@ export function parseTestReport(raw: unknown, worktreeRoot = '/work'): TestRepor
   const isJest = 'wasInterrupted' in value || value.testResults.some(suite => record(suite)
     && ('testExecError' in suite || Array.isArray(suite.assertionResults)
       && suite.assertionResults.some(assertion => record(assertion) && 'failureDetails' in assertion)));
-  const report: TestReport = { runner: isJest ? 'jest' : 'vitest', tests: [], suiteErrors: [] };
+  const report: TestReport = { runner: isJest ? 'jest' : 'vitest', tests: [], suiteErrors: [], suiteFiles: [] };
   for (const suite of value.testResults) {
     if (!record(suite) || typeof suite.name !== 'string' || !Array.isArray(suite.assertionResults)) return null;
     const file = normalizeFile(suite.name, worktreeRoot);
+    report.suiteFiles!.push(file);
     if ('testExecError' in suite) report.runner = 'jest';
     if (record(suite.testExecError)) {
       report.suiteErrors.push(typeof suite.testExecError.message === 'string' ? cleanMessage(suite.testExecError.message) : 'Test suite execution error');
@@ -76,6 +78,7 @@ export function parseTestReport(raw: unknown, worktreeRoot = '/work'): TestRepor
 }
 
 export function evaluateReproduction(report: TestReport, testFile: string, expected: string): ReproductionEvaluation {
+  if (infrastructureFailure(report, '', testFile)) return 'unproven';
   if (report.suiteErrors.length > 0) return 'non-assertion-failure';
   const target = normalizeFile(testFile);
   const tests = report.tests.filter(test => normalizeFile(test.file) === target);
@@ -95,12 +98,26 @@ export function passedAtBase(report: TestReport, testFile: string): boolean {
 }
 
 export function infrastructureReason(output: string): string | undefined {
+  if (/worker[^\r\n]*(?:crash|exit|died)|out of memory|\b(?:ENOSPC|EMFILE|ENOMEM|SIG[A-Z0-9]+)\b|\bkilled\b|\bsignal\b/i.test(output)) return 'test infrastructure failure';
   if (/\b(?:EROFS|EACCES)\b[^\r\n]*(?:cache|node_modules|\.vite)|(?:cache|node_modules|\.vite)[^\r\n]*\b(?:EROFS|EACCES)\b/i.test(output)) return 'cache is not writable';
   if (/\bcommand not found\b|\bexecutable file not found\b|\bspawn [^\r\n]+ ENOENT\b/i.test(output)) return 'command not found';
   return undefined;
 }
 
-export function infrastructureFailure(report: TestReport | null, diagnostic = ''): string | undefined {
+export function infrastructureFailure(report: TestReport | null, diagnostic = '', testFile?: string): string | undefined {
   const reason = infrastructureReason([diagnostic, ...(report?.suiteErrors ?? []), ...(report?.tests.map(test => test.message ?? '') ?? [])].join('\n'));
-  return reason ?? (report === null ? 'missing test report' : undefined);
+  if (reason) return reason;
+  if (report === null) return 'missing test report';
+  if (testFile !== undefined && report.suiteFiles?.length && !report.suiteFiles.some(file => normalizeFile(file) === normalizeFile(testFile))) {
+    return 'target test missing from report';
+  }
+  const tests = testFile === undefined ? [] : report.tests.filter(test => normalizeFile(test.file) === normalizeFile(testFile));
+  if (tests.length && tests.every(test => test.status === 'skipped')) return 'target test only skipped';
+  // Ordinary compile/import suite errors still disprove the proposed test.
+  if (report.suiteErrors.length) return undefined;
+  if (!report.tests.length) return 'empty test report';
+  if (testFile !== undefined) {
+    if (!tests.length) return 'target test missing from report';
+  }
+  return undefined;
 }

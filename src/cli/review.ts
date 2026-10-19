@@ -31,7 +31,7 @@ export interface ReviewDependencies {
   gitRunner?: CommandRunner;
   checkRunner?: CommandRunner;
   containerRunner?: CommandRunner;
-  reproductionOptions?: Omit<ReproductionOptions, 'gitRunner' | 'deadlineMs' | 'yesRunUntrusted' | 'warn'>;
+  reproductionOptions?: Omit<ReproductionOptions, 'gitRunner' | 'deadlineMs' | 'noHostPrompt' | 'warn'>;
   appendLedger?: typeof appendLedger;
   now?: () => number;
 }
@@ -154,10 +154,11 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (flags.images) context.images = await copyImages(path.resolve(root, flags.images), imageDirectory);
     const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changedBefore) throw new Error(changedBefore);
+    if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
     const cascade = await runCascade(context, config, providers, { catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, cache,
       ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
         dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
-          yesRunUntrusted: flags.yesRunUntrusted, warn, display: text => io.err(text) }) } : {}) });
+          noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
     const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.coverage.complete = false; }
     const clean = await isClean(verificationTree.path, runner);
@@ -166,10 +167,9 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     // Cached reviews are still independent reviews by the original model family.
     for (const f of [...cascade.findings, ...cascade.unconfirmed]) if (!families.includes(f.family)) families.push(f.family);
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
-    const confirmedBlocker = cascade.findings.some(f => f.severity === 'BLOCKER'
-      && !(flags.allowUnproven && f.reproduction?.status === 'unproven'));
-    const unprovenBlocker = cascade.unconfirmed.some(f => f.family !== 'local' && f.severity === 'BLOCKER');
-    const exitCode = confirmedBlocker ? 1 : cascade.errors.length ? 2 : unprovenBlocker && !flags.allowUnproven ? 1 : !cascade.coverage.complete ? 2 : 0;
+    const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
+      .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
+    const exitCode = failingBlocker ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
     result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks,
       criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
     if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();

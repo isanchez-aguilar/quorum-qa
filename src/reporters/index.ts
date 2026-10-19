@@ -28,9 +28,11 @@ function reproductionDetails(findings: Finding[]): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return findings.filter(f => f.severity === 'BLOCKER' || f.reproduction?.status && f.reproduction.status !== 'pending').map(f => {
     const proposal = f.reproduction;
+    const summary = escape((proposal?.path || '(none)').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ''));
+    const fence = '`'.repeat(Math.max(3, ...[...(proposal?.content ?? '').matchAll(/`+/g)].map(match => match[0].length + 1)));
     return `### ${cell(f.file)}:${f.line}\n\nStatus: **${proposal?.status ?? 'unproven'}**\n\n`
-      + `Reason: ${cell(proposal?.failureReason ?? 'reproduction not requested')}\n\nProposed test: ${cell(proposal?.path || '(none)')}\n\n`
-      + (proposal?.content ? `<details>\n<summary>Proposed test content (untrusted)</summary>\n<pre><code>${escape(proposal.content)}</code></pre>\n</details>` : 'No proposed test.');
+      + `Reason: ${cell(proposal?.failureReason ?? 'reproduction not requested')}\n\n`
+      + (proposal?.content ? `<details><summary>${summary}</summary>\n\n${fence}\n${proposal.content}\n${fence}\n\n</details>` : 'No proposed test.');
   }).join('\n\n') || 'No BLOCKERs required reproduction.';
 }
 

@@ -275,7 +275,7 @@ describe('M5 review corrections', () => {
   it('documents check execution, waiver boundaries, range trust and all exits in help', async () => {
     let out = ''; await main(['--help'], { out: text => { out += text; }, err() {} });
     expect(out).toContain('use with untrusted changes');
-    expect(out).toContain('Reproduced and rejected BLOCKERs still fail');
+    expect(out).toContain('Cross-family BLOCKERs fail even when reproduction is unproven');
     expect(out).toContain('2 = incomplete coverage with no BLOCKER');
     expect(out).toContain('merge-base of the range you chose');
   });

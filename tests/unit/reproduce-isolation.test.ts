@@ -1,17 +1,16 @@
-import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../src/config/schema.js';
 import { CommandTimeoutError } from '../../src/process/runner.js';
-import { DEFAULT_REPRODUCE_IMAGE, REPORT_WRAPPER, runIsolatedTest } from '../../src/reproduce/isolation.js';
+import { DEFAULT_REPRODUCE_IMAGE, REPORT_WRAPPER, runIsolatedTest, dependencyKey } from '../../src/reproduce/isolation.js';
 import type { CommandRunner } from '../../src/types/index.js';
 
 const config = defaultConfig().reproduce;
 const lock = 'synthetic-lockfile';
-const hash = createHash('sha256').update(lock).digest('hex');
-const identity = createHash('sha256').update(JSON.stringify([DEFAULT_REPRODUCE_IMAGE, 'pnpm', '10.0.0'])).digest('hex');
+let hash: string;
+let identity: string;
 const resolver = { platform: 'linux' as const, env: { PATH: '/tools' }, exists: () => true };
 const report = {
   numTotalTests: 1, numFailedTests: 1, success: false,
@@ -24,6 +23,8 @@ beforeEach(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), 'quorum-isolation-'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0' }));
   await writeFile(path.join(root, 'pnpm-lock.yaml'), lock);
+  hash = await dependencyKey(root, 'pnpm-lock.yaml', 'pnpm', '10.0.0', DEFAULT_REPRODUCE_IMAGE, false);
+  identity = hash;
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -58,10 +59,10 @@ it('builds from a Dockerfile-only context and installs the pinned manager with f
   expect(build.slice(0, -1)).toEqual(['build', '--network', 'default', '--label', `quorum.preparation=${identity}`, '--tag', `quorum-prep:${hash}`]);
   await expect(readdir(build.at(-1)!)).rejects.toMatchObject({ code: 'ENOENT' });
   const prep = runner.mock.calls.find(([, args]) => args.includes('--frozen-lockfile'))![1];
-  expect(prep).toEqual(['run', '--name', prep[2]!, '--rm', '--network', 'default', '--user', '1000:1000', '--workdir', '/work',
+  expect(prep).toEqual(['run', '--name', prep[2]!, '--rm', '--network', 'default', '--user', '1000:1000', '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL', '--memory', '2g', '--pids-limit', '512', '--cpus', '2', '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
     '--mount', `type=bind,src=${root},dst=/work,readonly`, '--mount', `type=volume,src=quorum-deps-${hash},dst=/work/node_modules`,
     '--env', 'XDG_CACHE_HOME=/tmp', '--env', 'npm_config_cache=/tmp', '--env', 'TMPDIR=/tmp',
-    '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', `quorum-prep:${hash}`, 'pnpm', 'install', '--frozen-lockfile']);
+    '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', `quorum-prep:${hash}`, 'pnpm', 'install', '--frozen-lockfile', '--ignore-scripts']);
 });
 
 it('runs only the proposed test with exact isolated argv and the JSON report in tmpfs', async () => {
@@ -79,7 +80,7 @@ it('runs only the proposed test with exact isolated argv and the JSON report in 
     '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
     '--mount', `type=bind,src=${root},dst=/work`, '--mount', `type=volume,src=quorum-deps-${hash},dst=/work/node_modules,readonly`,
     '--env', 'XDG_CACHE_HOME=/tmp', '--env', 'npm_config_cache=/tmp', '--env', 'TMPDIR=/tmp',
-    '--memory', '1g', '--pids-limit', '256', '--cpus', '2', '--security-opt', 'no-new-privileges',
+    '--memory', '1g', '--pids-limit', '256', '--cpus', '2', '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
     `quorum-prep:${hash}`, 'node', '-e', REPORT_WRAPPER, marker, reportPath,
     JSON.stringify(['pnpm', 'vitest', 'run', '--reporter=json', `--outputFile=${reportPath}`, './src/repro.test.ts'])]);
   expect(call[2]?.timeoutMs).toBe(120000);
@@ -194,8 +195,8 @@ describe('infrastructure failures', () => {
 });
 
 it.each([
-  ['npm', 'package-lock.json', ['npm', 'ci']],
-  ['yarn', 'yarn.lock', ['yarn', 'install', '--immutable']],
+  ['npm', 'package-lock.json', ['npm', 'ci', '--ignore-scripts']],
+  ['yarn', 'yarn.lock', ['yarn', 'install', '--immutable', '--mode=skip-build']],
 ] as const)('uses the frozen command for %s', async (manager, lockfile, command) => {
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: `${manager}@10.0.0` }));
   await writeFile(path.join(root, lockfile), lock);
@@ -214,12 +215,119 @@ it('rejects Dockerfile image injection before building', async () => {
   expect(runner.mock.calls).toHaveLength(1);
 });
 
-it('refuses a cached volume without its completed installation marker', async () => {
+it('rebuilds an orphan volume once and warns', async () => {
   const runner = fake({ cached: true });
   const original = runner.getMockImplementation()!;
   runner.mockImplementation(async (command, args, options) => args.some(arg => arg.includes('readFileSync') && arg.includes('.quorum-ready'))
     ? { exitCode: 1, stdout: '', stderr: 'ENOENT' } : original(command, args, options));
-  expect((await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver })).reason)
-    .toBe('preparation failed: incomplete or incompatible dependency volume');
-  expect(runner.mock.calls.some(([, args]) => args.includes(REPORT_WRAPPER))).toBe(false);
+  const warn = vi.fn();
+  expect((await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver, warn })).reason).toBeUndefined();
+  expect(runner.mock.calls.filter(([, args]) => args[0] === 'volume' && args[1] === 'rm')).toHaveLength(1);
+  expect(runner.mock.calls.filter(([, args]) => args.includes('--frozen-lockfile'))).toHaveLength(1);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('orphan'));
+});
+
+it.each([false, true])('hardens preparation and controls install scripts (%s)', async allowInstallScripts => {
+  const runner = fake();
+  await runIsolatedTest(root, 'src/repro.test.ts', { ...config, allowInstallScripts }, runner, { resolveOptions: resolver });
+  const prep = runner.mock.calls.find(([, args]) => args.includes('--frozen-lockfile'))![1];
+  expect(prep.includes('--ignore-scripts')).toBe(!allowInstallScripts);
+  for (const pair of [['--security-opt', 'no-new-privileges'], ['--cap-drop', 'ALL'], ['--memory', '2g'], ['--pids-limit', '512'], ['--cpus', '2'], ['--tmpfs', '/tmp']]) {
+    expect(prep[prep.indexOf(pair[0]!) + 1]).toBe(pair[1]);
+  }
+  expect(prep).toContain('--read-only');
+  const test = runner.mock.calls.find(([, args]) => args.includes(REPORT_WRAPPER))![1];
+  expect(test[test.indexOf('--cap-drop') + 1]).toBe('ALL');
+});
+
+it('keys identical manifests identically but invalidates changed package.json', async () => {
+  async function key() {
+    const runner = fake();
+    await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver });
+    return runner.mock.calls.find(([, args]) => args[0] === 'volume' && args[1] === 'inspect')![1][2];
+  }
+  const first = await key();
+  expect(await key()).toBe(first);
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0', dependencies: { synthetic: '1.0.0' } }));
+  expect(await key()).not.toBe(first);
+});
+
+it('refuses a node_modules file before mounting', async () => {
+  await writeFile(path.join(root, 'node_modules'), 'not a directory');
+  const runner = fake();
+  expect((await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver })).reason).toContain('node_modules');
+  expect(runner.mock.calls.some(([, args]) => args[0] === 'run')).toBe(false);
+});
+
+it('refuses a node_modules symlink or Windows junction before mounting', async () => {
+  const target = path.join(root, 'external');
+  await mkdir(target);
+  await symlink(target, path.join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  const runner = fake();
+  expect((await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver })).reason).toContain('node_modules');
+  expect(runner.mock.calls.some(([, args]) => args[0] === 'run')).toBe(false);
+});
+
+it.each(['packages/a/package.json', '.npmrc', '.yarnrc.yml', 'pnpm-workspace.yaml', 'patches/a.patch', 'packages/a/patches/b.patch', 'pnpm-lock.yaml'])
+('invalidates both image and volume when %s changes', async file => {
+  const runner = fake();
+  await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+  await writeFile(path.join(root, file), 'synthetic first');
+  await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver });
+  const firstVolume = runner.mock.calls.find(([, args]) => args[0] === 'volume' && args[1] === 'inspect')![1][2];
+  const firstImage = runner.mock.calls.find(([, args]) => args[0] === 'image')![1].at(-1);
+  runner.mockClear();
+  await writeFile(path.join(root, file), 'synthetic changed');
+  await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver });
+  expect(runner.mock.calls.find(([, args]) => args[0] === 'volume' && args[1] === 'inspect')![1][2]).not.toBe(firstVolume);
+  expect(runner.mock.calls.find(([, args]) => args[0] === 'image')![1].at(-1)).not.toBe(firstImage);
+});
+
+it('bounds package discovery and skips .git and node_modules', async () => {
+  const key = () => dependencyKey(root, 'pnpm-lock.yaml', 'pnpm', '10.0.0', DEFAULT_REPRODUCE_IMAGE, false);
+  const first = await key();
+  for (const directory of ['node_modules', '.git']) {
+    await mkdir(path.join(root, directory));
+    await writeFile(path.join(root, directory, 'package.json'), 'ignored');
+  }
+  expect(await key()).toBe(first);
+  await Promise.all(Array.from({ length: 500 }, async (_, i) => {
+    const directory = path.join(root, `pkg-${i}`);
+    await mkdir(directory); await writeFile(path.join(directory, 'package.json'), '{}');
+  }));
+  await expect(key()).rejects.toThrow('500');
+});
+
+it('includes manager/version, digest and scripts mode in cache identity', async () => {
+  const key = (manager = 'pnpm', version = '10.0.0', image = DEFAULT_REPRODUCE_IMAGE, scripts = false) =>
+    dependencyKey(root, 'pnpm-lock.yaml', manager, version, image, scripts);
+  const first = await key();
+  expect(await key('npm')).not.toBe(first);
+  expect(await key('pnpm', '10.0.1')).not.toBe(first);
+  expect(await key('pnpm', '10.0.0', 'node@sha256:' + 'a'.repeat(64))).not.toBe(first);
+  expect(await key('pnpm', '10.0.0', DEFAULT_REPRODUCE_IMAGE, true)).not.toBe(first);
+});
+
+it('resolves a tagged custom image to a digest before deriving the cache key', async () => {
+  const digest = 'node@sha256:' + 'a'.repeat(64);
+  const runner = vi.fn<CommandRunner>(async (_file, args) => {
+    if (args.includes('{{json .RepoDigests}}')) return { exitCode: 0, stdout: JSON.stringify([digest]), stderr: '' };
+    return { exitCode: args[0] === 'volume' && args[1] === 'inspect' ? 1 : 0, stdout: '', stderr: '' };
+  });
+  await runIsolatedTest(root, 'src/repro.test.ts', { ...config, image: 'node:22' }, runner, { resolveOptions: resolver });
+  const expected = await dependencyKey(root, 'pnpm-lock.yaml', 'pnpm', '10.0.0', digest, false);
+  expect(runner.mock.calls.some(([, args]) => args[0] === 'pull' && args[1] === 'node:22')).toBe(true);
+  expect(runner.mock.calls.find(([, args]) => args[0] === 'volume' && args[1] === 'create')![1][2]).toBe(`quorum-deps-${expected}`);
+});
+
+it.each([
+  ['pnpm', 'pnpm-lock.yaml', ['pnpm', 'install', '--frozen-lockfile']],
+  ['npm', 'package-lock.json', ['npm', 'ci']],
+  ['yarn', 'yarn.lock', ['yarn', 'install', '--immutable']],
+] as const)('explicit opt-in restores scripts for %s', async (manager, lockfile, command) => {
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: `${manager}@10.0.0` }));
+  await writeFile(path.join(root, lockfile), lock);
+  const runner = vi.fn<CommandRunner>(async (_file, args) => ({ exitCode: args[0] === 'volume' && args[1] === 'inspect' ? 1 : 0, stdout: '', stderr: '' }));
+  await runIsolatedTest(root, 'src/repro.test.ts', { ...config, allowInstallScripts: true }, runner, { resolveOptions: resolver });
+  expect(runner.mock.calls.some(([, args]) => JSON.stringify(args.slice(-command.length)) === JSON.stringify(command))).toBe(true);
 });

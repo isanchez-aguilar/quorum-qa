@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { stripVTControlCharacters } from 'node:util';
 import { resolveCommand } from '../checks/resolver.js';
 import { fileExistsAtCommit } from '../context/git.js';
 import { CommandTimeoutError, runCommand } from '../process/runner.js';
@@ -19,7 +20,7 @@ export interface ReproductionOptions {
   warn?: (message: string) => void;
   isTTY?: boolean;
   // This flag suppresses the interactive fallback; it never grants host execution.
-  yesRunUntrusted?: boolean;
+  noHostPrompt?: boolean;
   confirm?: (proposal: ReproductionProposal, revision: string) => Promise<boolean>;
   display?: (text: string) => void;
 }
@@ -28,9 +29,17 @@ export type ReproductionOutcome = {
   status: 'reproduced' | 'not-reproduced' | 'rejected' | 'unproven'; reason?: string;
 };
 
-async function confirmOnStdin(proposal: ReproductionProposal, revision: string, display: (text: string) => void, timeoutMs: number): Promise<boolean> {
-  display(`Proposed untrusted test at ${revision}: ${proposal.path}\n${proposal.content}\n`
-    + 'Run this test on the host without container isolation? [y/N] ');
+export function sanitizeHostDisplay(text: string): string {
+  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
+}
+
+export function hostEnvironment(platform = process.platform, source = process.env): NodeJS.ProcessEnv {
+  const allowed = platform === 'win32' ? ['PATH', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP'] : ['PATH', 'HOME', 'TMPDIR', 'LANG'];
+  return Object.fromEntries(Object.entries(source).filter(([key]) => allowed.includes(platform === 'win32' ? key.toUpperCase() : key)));
+}
+
+async function confirmOnStdin(display: (text: string) => void, timeoutMs: number): Promise<boolean> {
+  display('Run this test on the host without container isolation? [y/N] ');
   const input = createInterface({ input: process.stdin, output: process.stderr });
   try { return /^y(?:es)?$/i.test((await input.question('', { signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs))) })).trim()); }
   catch { return false; }
@@ -45,9 +54,10 @@ async function runHostTest(worktree: string, testFile: string, config: QuorumCon
   try {
     const jest = config.testCommand.some(arg => /(?:^|[/\\])jest(?:\.[cm]?js)?$/.test(arg));
     const argv = [...config.testCommand.slice(1), `./${testFile}`, ...(jest ? ['--json', `--outputFile=${reportFile}`] : ['--reporter=json', `--outputFile=${reportFile}`])];
-    const command = resolveCommand(config.testCommand[0]!, argv, { cwd: worktree });
+    const env = hostEnvironment();
+    const command = resolveCommand(config.testCommand[0]!, argv, { cwd: worktree, env });
     const result = await runner(command.file, command.args, { cwd: worktree, timeoutMs, windowsVerbatimArguments: command.windowsVerbatimArguments,
-      env: { ...process.env, XDG_CACHE_HOME: directory, npm_config_cache: directory, TMPDIR: directory } });
+      env });
     const report = await readFile(reportFile, 'utf8').then(raw => parseTestReport(raw, worktree)).catch(() => null);
     return { timedOut: false, report, exitCode: result.exitCode, reason: infrastructureFailure(report, result.stderr) };
   } catch (error) {
@@ -77,15 +87,17 @@ export async function reproduceBlocker(finding: Finding, proposal: ReproductionP
       let result = config.reproduce.isolation === 'interactive'
         ? { timedOut: false, report: null, exitCode: -1, reason: 'interactive confirmation required' }
         : await runIsolatedTest(tree.path, written.relative, config.reproduce, runner,
-          { ...options.isolationOptions, deadlineMs: remaining(), now });
+          { ...options.isolationOptions, warn: options.warn, deadlineMs: remaining(), now });
       if (result.reason === 'no container runtime' || config.reproduce.isolation === 'interactive') {
-        if (!(options.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY)) || options.yesRunUntrusted) return { result };
+        if (!(options.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY)) || options.noHostPrompt) return { result };
         const display = options.display ?? (text => { process.stderr.write(text); });
+        display(sanitizeHostDisplay(`Proposed untrusted test at ${commit}: ${proposal.path}\n${proposal.content}\n`)
+          + `testCommand argv: ${JSON.stringify(config.reproduce.testCommand.map(sanitizeHostDisplay))}\n`
+          + 'The reviewed revision\'s package.json scripts, test config, setup files and dependencies also run on the host.\n');
         let approved: boolean;
         if (options.confirm) {
-          display(`Proposed untrusted test at ${commit}: ${proposal.path}\n${proposal.content}\n`);
           approved = await options.confirm(proposal, commit);
-        } else approved = await confirmOnStdin(proposal, commit, display, remaining());
+        } else approved = await confirmOnStdin(display, remaining());
         if (!approved || !remaining()) return { result: { ...result, reason: approved ? 'run deadline' : 'host execution declined' } };
         result = await runHostTest(tree.path, written.relative, config.reproduce, runner,
           Math.min(remaining(), (config.reproduce.timeoutSeconds ?? 120) * 1000));
@@ -104,7 +116,7 @@ export async function reproduceBlocker(finding: Finding, proposal: ReproductionP
     const head = await atRevision(context.headCommit);
     if (head.rejected) return { status: 'rejected', reason: head.rejected };
     const headRun = head.result!;
-    const headInfra = headRun.reason ?? (headRun.timedOut ? 'container timeout' : infrastructureFailure(headRun.report));
+    const headInfra = headRun.reason ?? (headRun.timedOut ? 'container timeout' : infrastructureFailure(headRun.report, '', proposal.path));
     if (headInfra) return unproven(headInfra);
     const evaluation = evaluateReproduction(headRun.report!, proposal.path, proposal.expect);
     if (evaluation !== 'assertion-failure-matching') return { status: 'not-reproduced', reason: evaluation };
@@ -112,7 +124,7 @@ export async function reproduceBlocker(finding: Finding, proposal: ReproductionP
       const base = await atRevision(context.baseCommit);
       if (base.rejected) return { status: 'rejected', reason: base.rejected };
       const baseRun = base.result!;
-      const baseInfra = baseRun.reason ?? (baseRun.timedOut ? 'container timeout' : infrastructureFailure(baseRun.report));
+      const baseInfra = baseRun.reason ?? (baseRun.timedOut ? 'container timeout' : infrastructureFailure(baseRun.report, '', proposal.path));
       if (baseInfra) return unproven(baseInfra);
       if (!passedAtBase(baseRun.report!, proposal.path)) return { status: 'not-reproduced', reason: 'test did not pass at base' };
     }
