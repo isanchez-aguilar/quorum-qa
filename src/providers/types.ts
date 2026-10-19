@@ -12,6 +12,7 @@ export interface RawProviderResult {
 
 export interface ReviewOptions {
   deadlineMs: number;
+  warn?: (message: string) => void;
   assertCheckoutUnchanged?: () => Promise<void>;
   // Reserves an additional inference slot before an adapter retries a call.
   reserveRetry?: () => boolean;

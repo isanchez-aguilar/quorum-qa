@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { parseArgs, UsageError } from '../../src/cli/args.js';
 
 describe('parseArgs', () => {
+  it('parses M5 report, cache, checks and trust flags', () => {
+    expect(parseArgs(['review', '--out', 'report.md', '--sarif=result.sarif', '--no-cache', '--no-checks', '--trust-head-config']).flags)
+      .toEqual({ out: 'report.md', sarif: 'result.sarif', noCache: true, noChecks: true, trustHeadConfig: true });
+  });
+  it.each(['--no-cache=true', '--no-checks=false', '--trust-head-config=yes', '--out', '--sarif='])('rejects malformed M5 option %s', flag => {
+    expect(() => parseArgs(['review', flag])).toThrow(UsageError);
+  });
   it('parses doctor probe and JSON switches without enabling them by default', () => {
     expect(parseArgs(['doctor']).flags).toEqual({});
     expect(parseArgs(['doctor', '--probe', '--json']).flags).toEqual({ probe: true, json: true });

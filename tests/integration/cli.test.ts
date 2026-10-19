@@ -46,10 +46,10 @@ describe('router (in process)', () => {
     expect(result.out).toBe(`${version}\n`);
   });
 
-  it('keeps review unimplemented until M5', async () => {
+  it('requires a specification for feature review', async () => {
     const result = await run(['review']);
     expect(result.code).toBe(2);
-    expect(result.err).toMatch(/not implemented yet \(M5\)/);
+    expect(result.err).toMatch(/--spec is required/);
   });
 
   it('runs doctor without probes by default and reports WARN without failure', async () => {

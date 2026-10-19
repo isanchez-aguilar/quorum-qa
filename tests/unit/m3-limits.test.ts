@@ -19,13 +19,13 @@ beforeAll(async () => {
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 const config = () => validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
 
-it('500 findings use at most 800 origin calls plus four checkout checks, never the adapter runner', async () => {
+it('500 findings use at most 800 origin calls plus eight checkout checks, never the adapter runner', async () => {
   const gitRunner = vi.fn(originRunner(root));
   const providerRunner = vi.fn(originRunner(root));
   const fake = new FakeProvider('agy', 'google', providerRunner, { flash: [JSON.stringify(Array.from({ length: 500 }, () => finding()))] });
   const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, gitRunner });
   expect(gitRunner.mock.calls.length).toBeGreaterThan(0);
-  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(804);
+  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(808);
   expect(providerRunner).not.toHaveBeenCalled();
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(100);
   expect(result.ledgerDraft[0]?.rejectionReasons['parse: too many findings']).toBe(400);
@@ -43,7 +43,7 @@ it('stops verification at the deadline between findings', async () => {
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding(), finding()])] });
   const result = await runCascade(context(root), cfg, new Map([['agy', fake]]), { catalog, gitRunner, clock });
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(1);
-  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(12);
+  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(16);
   expect(result.warnings).toContain(BUDGET_WARNING);
   expect(result.coverage.complete).toBe(false);
   expect(result.coverage.lostFindings).toContainEqual({ reason: 'run deadline', file: 'sample.ts', count: 1 });

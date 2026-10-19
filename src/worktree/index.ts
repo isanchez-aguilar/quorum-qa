@@ -4,7 +4,7 @@ import path from 'node:path';
 import { git, requireWorktreeRoot, validateRef } from '../context/git.js';
 import type { CommandRunner } from '../types/index.js';
 
-export async function createReviewWorktree(repoRoot: string, sha: string, runner: CommandRunner): Promise<{ path: string; cleanup: () => Promise<void> }> {
+export async function createReviewWorktree(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn): Promise<{ path: string; cleanup: () => Promise<void> }> {
   validateRef(sha, false);
   await requireWorktreeRoot(repoRoot, runner);
   const ignored = await git(['check-ignore', '--quiet', '--', '.quorum/'], repoRoot, runner);
@@ -30,11 +30,16 @@ export async function createReviewWorktree(repoRoot: string, sha: string, runner
   for (const entry of await readdir(parent, { withFileTypes: true })) {
     const candidate = path.resolve(parent, entry.name);
     if (path.dirname(candidate) !== path.resolve(parent) || registered.has(normalize(candidate))) continue;
+    try {
     const stat = await lstat(candidate);
     if (stat.isSymbolicLink() || !stat.isDirectory() || Date.now() - stat.mtimeMs <= 24 * 60 * 60 * 1000) continue;
     const actual = await realpath(candidate);
     if (path.dirname(actual) !== await realpath(parent)) throw new Error('Stale worktree must stay inside its parent.');
     await rm(candidate, { recursive: true, force: true });
+    } catch (error) {
+      if (!['EBUSY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      warn(`Stale worktree cleanup failed: ${candidate}: ${(error as Error).message}`);
+    }
   }
   const location = path.join(parent, randomUUID());
   const added = await git(['worktree', 'add', '--detach', location, sha], repoRoot, runner);

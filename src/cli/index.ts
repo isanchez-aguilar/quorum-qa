@@ -1,3 +1,4 @@
+import { review, type ReviewDependencies } from './review.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError, loadConfig } from '../config/index.js';
@@ -13,7 +14,7 @@ export interface CliIo {
   err: (text: string) => void;
 }
 
-export interface CliDependencies {
+export interface CliDependencies extends ReviewDependencies {
   repoRoot?: string;
   loadConfig?: typeof loadConfig;
   runDoctor?: typeof runDoctor;
@@ -27,7 +28,7 @@ const defaultIo: CliIo = {
 export const USAGE = `Usage: quorum <command> [options]
 
 Commands:
-  review    Run a quorum of AI reviewers over a change (not implemented yet)
+  review    Run a quorum of AI reviewers over a change
   doctor    Check which providers and models are usable
 
 Options for review:
@@ -43,6 +44,12 @@ Options for review:
   --dry-run                  Print the plan and spend nothing
   --reproduce                Try to reproduce BLOCKERs with a failing test
   --allow-unproven           Unproven BLOCKERs do not fail the run
+  --out <report.md>          Markdown output (default .quorum/reports/<runId>.md)
+  --sarif <file>             SARIF 2.1.0 output
+  --json                    Print the full review result
+  --no-cache                Bypass cache reads and writes
+  --no-checks               Skip deterministic checks
+  --trust-head-config       Use committed HEAD config (own repos only)
 
 Options for doctor:
   --probe                    Run one read probe per provider (spends quota)
@@ -80,8 +87,7 @@ export async function main(
 
     switch (command) {
       case 'review':
-        io.err('quorum review: not implemented yet (M5)\n');
-        return EXIT_ERROR;
+        return await review(flags, io, dependencies);
       case 'doctor': {
         const repoRoot = dependencies.repoRoot ?? process.cwd();
         let config;

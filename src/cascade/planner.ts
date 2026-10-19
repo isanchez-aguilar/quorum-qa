@@ -7,6 +7,7 @@ import { quotaStatus, type QuotaSnapshot } from '../catalog/groups.js';
 import { resolveTier } from '../catalog/tiers.js';
 
 export interface ExecutionPlan {
+  nowMs: number;
   context: ReviewContext;
   config: QuorumConfig;
   tiers: Record<Tier, CatalogEntry[]>;
@@ -45,7 +46,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
   const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));
-  return { confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, quotas, warnings,
+  return { nowMs, confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, quotas, warnings,
     chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls - confirmationReserve >= payload.chunks.length,
     payloadCharacters: payload.chunks.reduce((sum, chunk) => sum + chunk.prompt.length, 0) };
 }
@@ -66,7 +67,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     ...config.checks.map((check, index) => `  [${index + 1}] ${check.map(arg => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ')}`),
     '', 'Provider Quota Status:',
     ...plan.quotas.map(quota => `  ${quota.group}: ${quota.remainingPercent === 'unknown' ? 'unknown' : `${quota.remainingPercent}%`}`
-      + `${quota.timestamp ? ` at ${quota.timestamp} from the ledger (unknown after 6 hours)` : ' (no reading time in the ledger)'}`
+      + `${quota.timestamp ? ` at ${quota.timestamp} (age ${Math.max(0, Math.floor((plan.nowMs - Date.parse(quota.timestamp)) / 1000))}s) from the ledger (unknown after 6 hours)` : ' (no reading time in the ledger)'}`
       + ` [${quota.status === 'unavailable' ? 'UNAVAILABLE' : quota.status === 'unchecked' ? 'ELIGIBLE, floor unchecked' : 'ELIGIBLE'}]`),
     '', 'Execution Cascade:', '  [Phase 2: Triage]', `    Provider / Model: ${names('triage')}`,
     `    Payload: surgical diff + supplied spec, inventory and rules (${context.diff.split('\n').length} diff lines)`,

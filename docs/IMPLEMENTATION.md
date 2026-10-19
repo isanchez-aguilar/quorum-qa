@@ -1712,3 +1712,90 @@ After the fixes, both probes pass: each provider read README.md inside a disposa
 Real calls spent on M4: agy 3 (one fixture capture, two probes; `/usage` spends no inference), Codex 3 (two doctor probes and one manual reproduction).
 
 The repo now has its own `quorum.config.json` (checks: `pnpm typecheck`, `pnpm test`), so Quorum can review its own changes from M5 on.
+
+## M5 as built
+
+M5 wires `quorum review` to the existing context, cascade, adapters, planner,
+worktree and checks implementations. No dependency or provider process was used
+in implementation validation. Tests use synthetic repositories, FakeProvider
+and injected runners. `--reproduce` prints "not implemented yet" and exits 2;
+reproduction remains M6.
+
+- Feature mode requires `--spec`. Markdown checkboxes and list items beneath
+  acceptance headings become numbered AC criteria in the short mode suffix.
+  Verified findings referencing an exact AC number in trigger or impact mark
+  it unmet. Silence is `not assessed (no finding)`, never "met". Local-only
+  unconfirmed findings cannot mark a criterion unmet or become final findings.
+- Redesign accepts an inventory, rules and up to 20 regular PNG/JPG/WebP files,
+  each at most 5 MiB. Images are copied beside the verification worktree under
+  `.quorum/worktrees/<id>-images`, passed only to image-capable visual-tier
+  calls, and removed afterwards. Visual context that cannot fit the prompt
+  limit fails closed as incomplete coverage rather than silently losing paths.
+- Config comes from the reviewed range's merge base. `--trust-head-config`
+  selects the committed HEAD config, not uncommitted working-copy edits.
+  Without an explicit range, config discovery starts at `origin/main`, reads
+  its `base`, then reads the config at that base's merge base with HEAD. This
+  bootstrap is necessary to discover `config.base` without trusting HEAD;
+  repositories without `origin/main` must supply `--diff <base>...HEAD` (or
+  explicitly trust HEAD). `--since` changes only the reviewed diff to exactly
+  `sha..HEAD`; configuration still comes from the configured base's merge base,
+  never from an earlier untrusted PR commit. Ranges must end at current HEAD.
+- Checks execute before inference in their own disposable HEAD worktree. They
+  execute the change's own code, just as CI does: trusting the base command list
+  does not make the implementation of those commands trusted. Failure does not
+  stop model review. Capped failed-check names and tails enter prompt context;
+  the report includes all check results. `--no-checks` is explicit in the report.
+  A separate clean HEAD worktree verifies findings, including cache hits; dirty
+  content in the user's checkout never supplies verification evidence.
+- Markdown includes summary, findings, AC/inventory tables, full coverage
+  categories, local-only and other unconfirmed findings, checks, warnings and
+  reviewer families. SARIF 2.1.0 uses three severity rules, provenance properties
+  and SHA-256 fingerprints of path plus whitespace-normalized quote. `--json`
+  prints the complete result. Markdown is always written, by default beneath
+  `.quorum/reports`; SARIF is opt-in.
+- Exit 1 includes nonlocal unconfirmed BLOCKERs, which remain unproven in M5.
+  `--allow-unproven` waives those blockers. The inherited local-only quarantine
+  remains: local findings are not final blockers until another family confirms
+  them. Tool/config errors and checkout changes exit 2. Incomplete coverage with
+  no failing blocker also exits 2 and displays **INCOMPLETE**; it cannot look
+  clean. Ordinary check failures are reported, not treated as review tool errors.
+- The cache stores only clean, completely parsed review responses under
+  `.quorum/cache/v1/<aa>/<hash>.json`. Keys include the serialized chunk prompt
+  (which contains its payload) and model reference. Hits bypass calls, budget
+  charges and ledger rows but always rerun verification and any confirmation.
+  No confirm/adjudication answers or malformed responses are cached. Writes are
+  staged until the complete run passes checkout/worktree guards; an initially
+  dirty checkout or any dirty provider response prevents all writes. Cache hits
+  retain reviewer-family provenance even for empty findings. `--no-cache`
+  bypasses reads and writes. Visual prompts contain disposable image paths, so
+  visual cache reuse across runs is intentionally not claimed in M5.
+- The ledger appends one line per charged inference with run ID, timestamp,
+  coverage and existing M3 counts. Atomic replacement is protected by an
+  exclusive short-lived lock to avoid losing concurrent appends; lock or I/O
+  failures warn without failing review. The M4 retry interface reports aggregate
+  duration/tokens and findings, so retry rows contain zero counts and the final
+  attempt carries those aggregate metrics; per-attempt timing is unavailable.
+  Quota readings persist with timestamps in `quota.json`; dry-run reads these
+  without provider/check calls and prints age and the existing six-hour expiry.
+  Internal writes reject symlink/junction parents and use temp-file rename.
+- M4 follow-ups: checkout snapshots now hash `git diff HEAD --binary` and the
+  untracked filename list (not untracked contents); Codex failed-call diagnostics
+  remove echoed prompts with LF/CRLF normalization before examining ERROR lines
+  and the final 20 diagnostic lines; stale sweep EBUSY/EPERM warns and continues;
+  cleanup after a successful adapter call warns rather than throwing. Ignored
+  files, untracked file contents and writes elsewhere remain outside the guard.
+
+Layout deviation: the small mode, storage and reporter helpers each share one
+`index.ts` rather than the multiple modules proposed in section 3. Existing M3
+prompt construction remains the single chunking/24,000-character limit path;
+mode suffixes extend it rather than introducing a parallel prompt builder.
+Cross-family external review and real provider/OS probes were not performed
+because the brief forbids provider CLIs. Linux and macOS remain unverified.
+No commit, branch switch, push, network call or dependency installation was made.
+
+Final M5 validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+rebuilt the CLI and passed 613 tests with one existing skip across 23 files;
+`git diff --check` passed. Additional QA covers late confirmation coverage loss,
+untracked-list changes, staged-cache rejection after a later dirty call, the
+20-image boundary, and an explicit shared finding schema in visual prompts.
+Read-only same-family review closed with no outstanding BLOCKER or IMPORTANT.
