@@ -2518,3 +2518,7 @@ not replace it. Windows is the validated host; Linux/macOS and opt-in container
 checks remain unverified. No lint script exists. Grouping also by source family
 preserves per-candidate independence; reproduction takes priority as existing
 mandatory work. These are the implementation choices within the brief.
+
+### Real check of the batch schema (2026-10-19)
+
+Before merging decision 22, `agy --json-schema` was run once with the real `confirm-batch` schema (Gemini 3.8 Flash-low, a two-candidate prompt, no tools). It was accepted in 9 s and returned `structured_output` with `decisions` for `c1` (confirm: a real division by zero) and `c2` (reject: an unused variable), matching what the parser expects. The full pipeline with real providers has not been run since this feature; Gemini 4 Argon was out of quota.
