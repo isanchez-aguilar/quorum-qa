@@ -30,7 +30,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
   return [
     '# Quorum QA Review Report', `**Run ID:** ${result.runId} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
     `**Time:** ${result.timestamp} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
-    `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · Cache hits: ${result.cacheHits}`,
+    `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 || check.timedOut).length ?? 0} failed deterministic checks · Cache hits: ${result.cacheHits}`,
     '## Executive Summary', '| Category | Introduced | Pre-existing | Improvement | Total |', '|---|---:|---:|---:|---:|',
     ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => {
       const rows = all.filter(f => f.severity === severity);
@@ -61,7 +61,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
   ].join('\n\n').replace(/\|\n\n(?=\|)/g, '|\n') + '\n';
 }
 
-export function generateSarifReport(findings: Finding[]): string {
+export function generateSarifReport(findings: Finding[], result?: ReviewResult): string {
   const rules = [
     { id: 'QRM001', name: 'Blocker', shortDescription: { text: 'Blocker defect' }, defaultConfiguration: { level: 'error' } },
     { id: 'QRM002', name: 'ImportantDefect', shortDescription: { text: 'Important defect' }, defaultConfiguration: { level: 'warning' } },
@@ -69,6 +69,12 @@ export function generateSarifReport(findings: Finding[]): string {
   ];
   return JSON.stringify({ $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0', runs: [{
     tool: { driver: { name: 'Quorum', version: '0.0.0', rules } },
+    invocations: [{ executionSuccessful: result ? !result.errors.length && result.coverage.complete : true }],
+    properties: {
+      coverage: { complete: result?.coverage.complete ?? true, skipped: result?.coverage.skippedFiles.length ?? 0,
+        lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
+      unconfirmedCount: result?.unconfirmed.length ?? 0,
+    },
     results: findings.map(f => {
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;
       return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },

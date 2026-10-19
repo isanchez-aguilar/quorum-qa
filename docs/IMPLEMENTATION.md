@@ -1180,6 +1180,7 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 9. **Jules for building Quorum:** skipped while session creation keeps failing (a 400, then a hang, on 2026-10-19). The provider order goes on to Codex.
 10. **Local CI barrier:** `relaykit ci-local` always runs `node --test`, so it can't run this vitest suite. Until Relaykit runs the repo's own test script, the barrier before a push is `pnpm typecheck` + `pnpm test`. Linux and macOS are reported as not verified.
 11. **Packaging:** Quorum stays a CLI. In v1.x a thin `/quorum` skill calls it, and the two ship together as a Claude Code plugin (see ROADMAP).
+12. **M5 review corrections (2026-10-19, Claude decisions for Isaac):** In M5, a verifier-accepted BLOCKER confirmed by another family always exits 1, including with `--allow-unproven`. The waiver applies only to unconfirmed non-local BLOCKERs; M6 will also handle reproduction explicitly labelled `unproven`. Empty ranges exit 2 with "nothing to review". Touched files with no reviewed files, or binaries without visual coverage, make coverage incomplete; successful redesign image review covers only PNG/JPG/WebP binaries, never arbitrary binary files. Zero feature criteria is a usage error explaining checkbox/acceptance-heading formats. Announce configured checks before execution and recommend `--no-checks` for untrusted changes. Spec, inventory and rules must be non-symlink regular files of at most 256 KiB. Storage parent validation stops at the repo root (external selected outputs and linked repo ancestors are allowed); report/SARIF write failures warn, preserve stdout and keep the review exit code. Status includes failed checks, dirty checkouts warn that only committed HEAD was reviewed, and SARIF records execution success, coverage counts and unconfirmed count. Criteria are untrusted JSON data; visual calls are never cached; ledger locks expire after ten minutes. The chosen diff range determines the trusted config merge-base. These corrections supersede the broader waiver wording in decision 4.
 
 ---
 
@@ -1722,7 +1723,9 @@ and injected runners. `--reproduce` prints "not implemented yet" and exits 2;
 reproduction remains M6.
 
 - Feature mode requires `--spec`. Markdown checkboxes and list items beneath
-  acceptance headings become numbered AC criteria in the short mode suffix.
+  acceptance headings become numbered AC criteria inside the untrusted JSON data block.
+  Zero criteria exits 2 with the accepted formats. Spec, inventory and rules must
+  each be a regular non-symlink file of at most 256 KiB.
   Verified findings referencing an exact AC number in trigger or impact mark
   it unmet. Silence is `not assessed (no finding)`, never "met". Local-only
   unconfirmed findings cannot mark a criterion unmet or become final findings.
@@ -1744,21 +1747,34 @@ reproduction remains M6.
   execute the change's own code, just as CI does: trusting the base command list
   does not make the implementation of those commands trusted. Failure does not
   stop model review. Capped failed-check names and tails enter prompt context;
-  the report includes all check results. `--no-checks` is explicit in the report.
+  the report includes all check results and the Status line counts failed checks.
+  Before execution, stderr announces the configured check count and explains
+  that checks execute the change's code; use `--no-checks` for untrusted changes.
   A separate clean HEAD worktree verifies findings, including cache hits; dirty
-  content in the user's checkout never supplies verification evidence.
+  content in the user's checkout never supplies verification evidence. Uncommitted
+  changes produce a warning that only committed HEAD was reviewed.
 - Markdown includes summary, findings, AC/inventory tables, full coverage
   categories, local-only and other unconfirmed findings, checks, warnings and
   reviewer families. SARIF 2.1.0 uses three severity rules, provenance properties
-  and SHA-256 fingerprints of path plus whitespace-normalized quote. `--json`
+  and SHA-256 fingerprints of path plus whitespace-normalized quote. Invocations
+  record executionSuccessful (no tool errors and complete coverage, independent
+  of findings); run properties include coverage complete/skipped/lost counts and
+  unconfirmedCount (including quarantined local findings). `--json`
   prints the complete result. Markdown is always written, by default beneath
-  `.quorum/reports`; SARIF is opt-in.
+  `.quorum/reports`; SARIF is opt-in. Either write can fail without losing stdout
+  or changing the review exit code; the failure is warned on stderr and in stdout.
 - Exit 1 includes nonlocal unconfirmed BLOCKERs, which remain unproven in M5.
-  `--allow-unproven` waives those blockers. The inherited local-only quarantine
+  `--allow-unproven` waives only those blockers in M5. A verifier-accepted BLOCKER
+  confirmed by another family always exits 1. M6 will add the explicitly unproven
+  reproduction case. The inherited local-only quarantine
   remains: local findings are not final blockers until another family confirms
   them. Tool/config errors and checkout changes exit 2. Incomplete coverage with
   no failing blocker also exits 2 and displays **INCOMPLETE**; it cannot look
-  clean. Ordinary check failures are reported, not treated as review tool errors.
+  clean. Empty ranges exit 2 with "nothing to review". Touched files with none
+  reviewed are incomplete; binaries require successful visual review, which only
+  covers PNG/JPG/WebP images in redesign mode. Ordinary check failures are
+  reported, not treated as review tool errors. `--diff <sha>...HEAD` trusts config
+  at the merge-base of the range the user chose.
 - The cache stores only clean, completely parsed review responses under
   `.quorum/cache/v1/<aa>/<hash>.json`. Keys include the serialized chunk prompt
   (which contains its payload) and model reference. Hits bypass calls, budget
@@ -1768,16 +1784,20 @@ reproduction remains M6.
   dirty checkout or any dirty provider response prevents all writes. Cache hits
   retain reviewer-family provenance even for empty findings. `--no-cache`
   bypasses reads and writes. Visual prompts contain disposable image paths, so
-  visual cache reuse across runs is intentionally not claimed in M5.
+  visual calls bypass both cache reads and cache writes.
 - The ledger appends one line per charged inference with run ID, timestamp,
   coverage and existing M3 counts. Atomic replacement is protected by an
-  exclusive short-lived lock to avoid losing concurrent appends; lock or I/O
+  exclusive short-lived lock to avoid losing concurrent appends; orphaned locks
+  expire after ten minutes. Lock or I/O
   failures warn without failing review. The M4 retry interface reports aggregate
   duration/tokens and findings, so retry rows contain zero counts and the final
   attempt carries those aggregate metrics; per-attempt timing is unavailable.
   Quota readings persist with timestamps in `quota.json`; dry-run reads these
   without provider/check calls and prints age and the existing six-hour expiry.
-  Internal writes reject symlink/junction parents and use temp-file rename.
+  Internal writes reject symlink/junction parents inside the repo, stopping before
+  the repo root, and use temp-file rename. Linked repo roots and ancestors (such
+  as macOS /var or /tmp) are allowed. User-selected external output paths are
+  outside that internal parent check.
 - M4 follow-ups: checkout snapshots now hash `git diff HEAD --binary` and the
   untracked filename list (not untracked contents); Codex failed-call diagnostics
   remove echoed prompts with LF/CRLF normalization before examining ERROR lines
@@ -1793,9 +1813,28 @@ Cross-family external review and real provider/OS probes were not performed
 because the brief forbids provider CLIs. Linux and macOS remain unverified.
 No commit, branch switch, push, network call or dependency installation was made.
 
-Final M5 validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+Initial M5 validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
 rebuilt the CLI and passed 613 tests with one existing skip across 23 files;
 `git diff --check` passed. Additional QA covers late confirmation coverage loss,
 untracked-list changes, staged-cache rejection after a later dirty call, the
 20-image boundary, and an explicit shared finding schema in visual prompts.
 Read-only same-family review closed with no outstanding BLOCKER or IMPORTANT.
+
+M5 correction validation on Windows (against reviewed commit `7c788b2`):
+`pnpm.cmd typecheck` passed; `pnpm.cmd test` rebuilt the CLI and passed
+630 tests, with 4 skipped, across 23 files. `git diff --check` passed.
+Three skips explicitly report that Windows refused file symlink creation for
+spec/inventory/rules; the fourth skip already existed. The repository-directory
+junction regression passed. Linux and macOS remain unverified. No provider CLI
+was run and no independent provider review was requested, as prohibited by this
+fix brief. The branch remains `feat/m5-review`, with no commit or push.
+
+The corrected regression tests were also run against an isolated copy of the
+`7c788b2` source under `.quorum/m5-before`, without changing branches:
+`pnpm.cmd exec vitest run --root .quorum/m5-before tests/integration/review.test.ts tests/unit/m5.test.ts tests/unit/m3-limits.test.ts`.
+That baseline produced 21 expected failures, 49 passes and the 3 file-link skips.
+Failures cover confirmed-blocker waiver, empty range, binary-only and visual
+coverage, zero criteria, report and SARIF write failures, each oversized input,
+linked repo persistence, check announcement/help, dirty-checkout warning, SARIF
+metadata, failed-check Status, JSON criteria, expired lock and visual cache
+writes. The existing binary-coverage assertion was updated to the new contract.

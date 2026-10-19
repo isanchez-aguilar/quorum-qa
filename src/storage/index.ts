@@ -3,17 +3,20 @@ import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import type { QuotaSnapshot } from '../catalog/groups.js';
 
-export async function atomicWrite(file: string, text: string): Promise<void> {
-  await assertRealParents(file);
+export async function atomicWrite(file: string, text: string, repoRoot = process.cwd()): Promise<void> {
+  await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${randomUUID()}.tmp`;
   try { await writeFile(temporary, text, { flag: 'wx' }); await rename(temporary, file); }
   finally { await rm(temporary, { force: true }); }
 }
 
-async function assertRealParents(file: string): Promise<void> {
+async function assertRealParents(file: string, repoRoot: string): Promise<void> {
+  const root = path.resolve(repoRoot);
   let current = path.dirname(path.resolve(file));
-  while (true) {
+  while (current !== root) {
+    const relative = path.relative(root, current);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
     try { if ((await lstat(current)).isSymbolicLink()) throw new Error(`Storage parent must not be a symlink or junction: ${current}`); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const parent = path.dirname(current);
@@ -22,15 +25,18 @@ async function assertRealParents(file: string): Promise<void> {
   }
 }
 
-export async function appendLedger(entries: readonly unknown[], file: string): Promise<void> {
+export async function appendLedger(entries: readonly unknown[], file: string, repoRoot = process.cwd()): Promise<void> {
   if (!entries.length) return;
-  await assertRealParents(file);
+  await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
   let lock;
   for (let attempt = 0; !lock; attempt++) {
     try { lock = await open(`${file}.lock`, 'wx'); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 100) throw error;
+      try {
+        if (Date.now() - (await lstat(`${file}.lock`)).mtimeMs > 10 * 60 * 1000) await rm(`${file}.lock`, { force: true });
+      } catch (statError) { if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError; }
       await new Promise(resolve => setTimeout(resolve, 10));
     }
   }
@@ -38,7 +44,7 @@ export async function appendLedger(entries: readonly unknown[], file: string): P
     let previous = '';
     try { previous = await readFile(file, 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    await atomicWrite(file, previous + entries.map(entry => JSON.stringify(entry) + '\n').join(''));
+    await atomicWrite(file, previous + entries.map(entry => JSON.stringify(entry) + '\n').join(''), repoRoot);
   } finally { await lock.close(); await rm(`${file}.lock`, { force: true }); }
 }
 
@@ -61,7 +67,7 @@ export function cacheKey(payload: string, prompt: string, ref: string): string {
   return createHash('sha256').update(JSON.stringify([payload, prompt, ref])).digest('hex');
 }
 
-export function diskCache(root: string, warn: (message: string) => void) {
+export function diskCache(root: string, warn: (message: string) => void, repoRoot = process.cwd()) {
   const pending = new Map<string, { rawOutput: string; model: string }>();
   const file = (key: string) => path.join(root, 'v1', key.slice(0, 2), `${key}.json`);
   return {
@@ -75,7 +81,7 @@ export function diskCache(root: string, warn: (message: string) => void) {
     stage(key: string, rawOutput: string, model: string) { pending.set(key, { rawOutput, model }); },
     async flush() {
       for (const [key, value] of pending) {
-        try { await atomicWrite(file(key), JSON.stringify({ version: 1, key, createdAt: new Date().toISOString(), ...value })); }
+        try { await atomicWrite(file(key), JSON.stringify({ version: 1, key, createdAt: new Date().toISOString(), ...value }), repoRoot); }
         catch (error) { warn(`Cache write failed: ${String(error)}`); }
       }
     },

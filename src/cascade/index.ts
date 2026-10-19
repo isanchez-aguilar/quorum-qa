@@ -159,7 +159,7 @@ export async function runCascade(
         provider: entry.provider, model: entry.id, family: entry.family,
         rawFindingsCount: 0, verifiedFindingsCount: 0, rejectedFindingsCount: 0, durationMs: 0,
         callsUsed: 1, timedOutCalls: 0, reproducedBlockersCount: 0, rejectionReasons: {} };
-      const key = purpose === 'review' ? cacheKey(prompt, prompt, ref) : undefined;
+      const key = purpose === 'review' && tier !== 'visual' ? cacheKey(prompt, prompt, ref) : undefined;
       if (key && options.cache) {
         const cached = await options.cache.read(key);
         if (cached !== undefined) {
@@ -311,11 +311,17 @@ export async function runCascade(
     const response = omitted ? null : await invoke('visual', prompt, 'review');
     const findings = response ? await readReview(response) : null;
     if (findings === null) { lost('visual review unavailable'); warn('Visual coverage INCOMPLETE: screenshots were not reviewed.'); }
-    else initial.push(...findings);
+    else {
+      initial.push(...findings);
+      coverage.reviewedFiles.push(...coverage.binaryFiles.filter(file => /\.(png|jpe?g|webp)$/i.test(file)));
+    }
   }
   coverage.skippedFiles = [...new Set(coverage.skippedFiles)];
   coverage.reviewedFiles = [...new Set(coverage.reviewedFiles)];
-  coverage.complete = !context.diffTruncated && !coverage.skippedFiles.length && !coverage.truncatedHunks.length && !coverage.lostFindings.length;
+  const coverageComplete = () => !(context.touchedFiles.length > 0 && !coverage.reviewedFiles.length)
+    && coverage.binaryFiles.every(file => coverage.reviewedFiles.includes(file))
+    && !context.diffTruncated && !coverage.skippedFiles.length && !coverage.truncatedHunks.length && !coverage.lostFindings.length;
+  coverage.complete = coverageComplete();
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
   for (const file of coverage.binaryFiles) warn(`${file}: binary file excluded from text review; visual review requires redesign mode with --images.`);
   for (const file of coverage.skippedFiles) warn(file + ': skipped review; budget, deadline, unavailable provider or no usable diff response.');
@@ -460,7 +466,7 @@ export async function runCascade(
     (node.unconfirmed || node.sources.every(source => source.family === 'local') ? unconfirmed : findings).push(node.finding);
   }
   // Confirmation can lose evidence after initial diff coverage was computed.
-  coverage.complete = !context.diffTruncated && !coverage.skippedFiles.length && !coverage.truncatedHunks.length && !coverage.lostFindings.length;
+  coverage.complete = coverageComplete();
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
   if (errors.length) {
     coverage.complete = false;

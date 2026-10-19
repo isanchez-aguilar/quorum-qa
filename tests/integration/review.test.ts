@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +37,9 @@ afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 function fake(responses: string[] = ['[]']) { return new FakeProvider('agy', 'google', runner, { flash: responses, pro: ['[]'] }); }
 async function review(provider = fake(), args: string[] = [], dependencies: CliDependencies = {}) {
   let out = ''; let err = '';
-  const code = await main(['review', '--spec', 'spec.md', '--diff', 'base...HEAD', '--out', '.quorum/report.md', '--json', ...args], {
+  const defaults = [['--spec', 'spec.md'], ['--diff', 'base...HEAD'], ['--out', '.quorum/report.md']]
+    .filter(([flag]) => !args.includes(flag!)).flat();
+  const code = await main(['review', ...defaults, '--json', ...args], {
     out: text => { out += text; }, err: text => { err += text; },
   }, { repoRoot: root, gitRunner: runner, providers: new Map([['agy', provider]]), catalog, ...dependencies });
   return { code, out, err, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
@@ -55,6 +57,9 @@ describe('M5 zero-quota review CLI', () => {
     const sarif = JSON.parse(await readFile(path.join(root, '.quorum/report.sarif'), 'utf8'));
     expect(sarif.version).toBe('2.1.0'); expect(sarif.runs).toHaveLength(1);
     expect(sarif.runs[0].tool.driver.rules).toHaveLength(3);
+    expect(sarif.runs[0].results).toHaveLength(1);
+    expect(sarif.runs[0].invocations).toEqual([{ executionSuccessful: true }]);
+    expect(sarif.runs[0].properties).toMatchObject({ coverage: { complete: true, skipped: 0, lost: 0 }, unconfirmedCount: 0 });
     for (const result of sarif.runs[0].results) {
       expect(['QRM001', 'QRM002', 'QRM003']).toContain(result.ruleId);
       expect(typeof result.message.text).toBe('string'); expect(result.locations[0].physicalLocation.region.startLine).toBeGreaterThan(0);
@@ -90,6 +95,8 @@ describe('M5 zero-quota review CLI', () => {
       expect(options?.cwd).not.toBe(root); return { stdout: 'failure tail', stderr: '', exitCode: 1 };
     };
     const provider = fake(); const first = await review(provider, [], { checkRunner });
+    expect(first.err).toContain("quorum: running 1 configured checks from the reviewed change in a disposable worktree; this executes the change's code (use --no-checks for untrusted changes)");
+    expect((await readFile(path.join(root, '.quorum/report.md'), 'utf8')).split('\n').find(line => line.startsWith('**Status:**'))).toContain('1 failed deterministic checks');
     expect(first.code).toBe(0); expect(checks[0]).toContain('base-check'); expect(provider.calls[0]?.prompt).toContain('failure tail');
     await review(fake(), ['--trust-head-config', '--no-cache'], { checkRunner }); expect(checks[1]).toContain('head-check');
     await review(fake(), ['--no-checks'], { checkRunner }); expect(checks).toHaveLength(2);
@@ -113,6 +120,7 @@ describe('M5 zero-quota review CLI', () => {
   it('verifies against HEAD rather than dirty user content, and never writes a dirty-run cache', async () => {
     await writeFile(path.join(root, 'sample.ts'), 'completely different user content\n');
     const result = await review(fake([JSON.stringify([finding()])]));
+    expect(result.result?.warnings.join()).toContain('only committed HEAD was reviewed');
     expect(result.result?.findings).toHaveLength(1); expect(result.code).toBe(0);
     await expect(readdir(path.join(root, '.quorum/cache/v1'))).rejects.toThrow();
   });
@@ -206,5 +214,69 @@ describe('M5 zero-quota review CLI', () => {
     for (const field of ['severity', 'origin', 'file', 'line', 'trigger', 'impact', 'evidence_quote', 'fix', 'confidence']) expect(visualPrompt).toContain(field);
     expect(await readFile(path.join(root, '.quorum/report.md'), 'utf8')).toContain('| Export CSV | no finding |');
     for (const image of paths) await expect(readFile(image)).rejects.toThrow();
+  });
+});
+
+describe('M5 review corrections', () => {
+  it('never waives a cross-family confirmed BLOCKER', async () => {
+    const provider = fake([JSON.stringify([finding({ severity: 'BLOCKER' })])]);
+    const confirm = new FakeProvider('codex', 'openai', runner, { codex: [JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote })] });
+    const result = await review(provider, ['--allow-unproven'], { providers: new Map([['agy', provider], ['codex', confirm]]) });
+    expect(result.result?.findings).toHaveLength(1); expect(result.code).toBe(1);
+  });
+  it('rejects an empty range before provider calls', async () => {
+    const provider = fake(); const result = await review(provider, ['--diff', 'HEAD...HEAD']);
+    expect(result.code).toBe(2); expect(result.err).toContain('nothing to review'); expect(provider.calls).toHaveLength(0);
+  });
+  it('reports binary-only coverage as incomplete', async () => {
+    await git('checkout', '-b', 'binary-change', 'base'); await writeFile(path.join(root, 'data.bin'), Buffer.from([0, 1, 2]));
+    await git('add', '.'); await git('commit', '-m', 'binary');
+    const result = await review(); expect(result.code).toBe(2); expect(result.result?.coverage.complete).toBe(false);
+  });
+  it('rejects feature mode without detectable criteria before calls', async () => {
+    await writeFile(path.join(root, 'spec.md'), '# Goals\n- plain list\n');
+    const provider = fake(); const result = await review(provider);
+    expect(result.code).toBe(2); expect(result.err).toContain('Markdown checkboxes'); expect(result.err).toContain('acceptance'); expect(provider.calls).toHaveLength(0);
+  });
+  it.each(['--out', '--sarif'])('preserves stdout and review exit code when %s cannot be written', async flag => {
+    await mkdir(path.join(root, 'destination'));
+    const result = await review(fake([JSON.stringify([finding({ severity: 'BLOCKER' })])]), [flag, 'destination']);
+    expect(result.code).toBe(1); expect(result.result?.unconfirmed).toHaveLength(1);
+    expect(result.err).toContain('write failed'); expect(result.result?.warnings.join()).toContain('write failed');
+  });
+  it.each(['spec', 'inventory', 'rules'])('rejects oversized --%s before calls', async flag => {
+    await writeFile(path.join(root, 'large.md'), 'x'.repeat(256 * 1024 + 1));
+    const provider = fake(); const result = await review(provider, [`--${flag}`, 'large.md']);
+    expect(result.code).toBe(2); expect(result.err).toContain('256 KiB'); expect(provider.calls).toHaveLength(0);
+  });
+  it.for(['spec', 'inventory', 'rules'])('rejects a symlink --%s', async (flag, ctx) => {
+    try { await symlink(path.join(root, 'spec.md'), path.join(root, 'link.md'), 'file'); }
+    catch (error) {
+      if (!['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      ctx.skip(`OS refused file symlink creation: ${String(error)}`); return;
+    }
+    const result = await review(fake(), [`--${flag}`, 'link.md']);
+    expect(result.code).toBe(2); expect(result.err).toContain('regular file');
+  });
+  it('reviews and persists reports through a repository junction or symlink', async ctx => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'quorum-link-'));
+    const link = path.join(parent, 'repo');
+    try {
+      try { await symlink(root, link, process.platform === 'win32' ? 'junction' : 'dir'); }
+      catch (error) {
+        if (!['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        ctx.skip(`OS refused directory link creation: ${String(error)}`); return;
+      }
+      const result = await review(fake(), [], { repoRoot: link });
+      expect(result.code).toBe(0); expect(result.result?.warnings.join()).not.toContain('write failed');
+      expect(await readFile(path.join(link, '.quorum/report.md'), 'utf8')).toContain('Quorum QA');
+    } finally { await rm(link, { force: true }); await rm(parent, { recursive: true, force: true }); }
+  });
+  it('documents check execution, waiver boundaries, range trust and all exits in help', async () => {
+    let out = ''; await main(['--help'], { out: text => { out += text; }, err() {} });
+    expect(out).toContain('use with untrusted changes');
+    expect(out).toContain('Confirmed BLOCKERs always fail');
+    expect(out).toContain('2 = incomplete coverage with no BLOCKER');
+    expect(out).toContain('merge-base of the range you chose');
   });
 });

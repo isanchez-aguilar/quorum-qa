@@ -1,4 +1,4 @@
-import { modeInstructions } from '../modes/index.js';
+import { acceptanceCriteria, modeInstructions } from '../modes/index.js';
 import { cleanDiff, diffSectionPath } from '../context/diff.js';
 import type { Finding, ReviewContext } from '../types/index.js';
 
@@ -78,8 +78,9 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; s
   const skipped = new Set<string>();
   const seen = new Set<string>();
   const truncatedHunks: ReviewCoverage['truncatedHunks'] = [];
-  const render = (diff: string, files: string[]) => REVIEW_INSTRUCTIONS + modeInstructions(context.mode, context.specContent) + JSON.stringify({
+  const render = (diff: string, files: string[]) => REVIEW_INSTRUCTIONS + modeInstructions(context.mode) + JSON.stringify({
     mode: context.mode, diff, touchedFiles: files,
+    criteria: context.mode === 'feature' ? acceptanceCriteria(context.specContent ?? '').map((criterion, index) => `AC${index + 1}: ${criterion}`) : undefined,
     checks: context.checksContext, spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent,
   });
   const fits = (diff: string, files: string[]) => render(diff, files).length <= MAX_PROMPT_CHARACTERS;

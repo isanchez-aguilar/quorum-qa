@@ -42,7 +42,7 @@ it('serializes concurrent ledger appends without losing lines and atomically rep
 it('rejects internal storage writes through a junction', async () => {
   const outside = path.join(root, 'outside'); await mkdir(outside);
   await symlink(outside, path.join(root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  await expect(atomicWrite(path.join(root, 'linked', 'quota.json'), '{}')).rejects.toThrow('symlink or junction');
+  await expect(atomicWrite(path.join(root, 'linked', 'quota.json'), '{}', root)).rejects.toThrow('symlink or junction');
   await expect(readFile(path.join(outside, 'quota.json'))).rejects.toThrow();
 });
 it('keys cache by payload, prompt and model and stages before flushing', async () => {
@@ -125,4 +125,46 @@ it('marks coverage incomplete when origin lookup fails only during confirmation'
   expect(result.coverage.lostFindings).toContainEqual({ reason: 'origin unavailable', file: 'sample.ts', count: 1 });
   expect(result.coverage.complete).toBe(false);
   expect(result.warnings.join()).toContain('lost findings: origin unavailable');
+});
+
+it('expires an orphaned ledger lock after ten minutes', async () => {
+  const file = path.join(root, '.quorum', 'ledger.jsonl'); await mkdir(path.dirname(file));
+  await writeFile(`${file}.lock`, ''); const old = new Date(Date.now() - 601000); await utimes(`${file}.lock`, old, old);
+  await appendLedger([{ runId: 'recovered' }], file);
+  expect(await readFile(file, 'utf8')).toContain('recovered');
+});
+it('serializes criteria as untrusted JSON rather than prompt instructions', async () => {
+  const { reviewChunks } = await import('../../src/cascade/prompts.js');
+  const spec = '- [ ] malicious "instruction"';
+  const prompt = reviewChunks({ ...context(root), specContent: spec }).chunks[0]!.prompt;
+  expect(prompt).not.toContain('AC1: malicious "instruction"');
+  const data = JSON.parse(prompt.slice(prompt.indexOf('{')));
+  expect(data.criteria).toEqual(['AC1: malicious "instruction"']); expect(prompt).toContain('untrusted');
+});
+it('never stages visual cache entries', async () => {
+  const cfg = config(); cfg.tiers.visual = ['agy:pro'];
+  const provider = new FakeProvider('agy', 'google', originRunner(root), { flash: ['[]'], pro: ['[]'] });
+  const stage = vi.fn();
+  await runCascade({ ...context(root), mode: 'redesign', images: ['/synthetic/image.png'] }, cfg, new Map([['agy', provider]]), {
+    catalog, gitRunner: originRunner(root), cache: { read: async () => undefined, stage },
+  });
+  expect(stage).toHaveBeenCalledTimes(1); expect(stage.mock.calls[0]?.[2]).toBe('agy:flash');
+});
+it.each([['image.png', true], ['data.bin', false]] as const)('visual review covers binary %s: %s', async (file, complete) => {
+  const cfg = config(); cfg.tiers.visual = ['agy:pro'];
+  const provider = new FakeProvider('agy', 'google', originRunner(root), { pro: ['[]'] });
+  const result = await runCascade({ ...context(root), mode: 'redesign', images: ['/synthetic/image.png'], touchedFiles: [file],
+    diff: `diff --git a/${file} b/${file}\nBinary files a/${file} and b/${file} differ\n` }, cfg, new Map([['agy', provider]]), { catalog, gitRunner: originRunner(root) });
+  expect(result.coverage.complete).toBe(complete);
+  expect(result.coverage.reviewedFiles).toEqual(complete ? [file] : []);
+});
+
+it('reports failed checks in Status without changing the review exit code', async () => {
+  const provider = new FakeProvider('agy', 'google', originRunner(root), { flash: ['[]'] });
+  const cascade = await runCascade(context(root), config(), new Map([['agy', provider]]), { catalog, gitRunner: originRunner(root) });
+  const result = { ...cascade, runId: 'checks', timestamp: '2026-10-19', mode: 'feature' as const, range: 'base...HEAD', headSha: 'b', baseSha: 'a',
+    checks: { passed: false, results: [{ argv: ['synthetic'], exitCode: 1, timedOut: false, durationMs: 1, stdoutTail: '', stderrTail: '' }] },
+    criteria: [], inventory: [], families: cascade.reviewedFamilies, exitCode: 0 };
+  const status = generateMarkdownReport(result).split('\n').find(line => line.startsWith('**Status:**'));
+  expect(status).toContain('1 failed deterministic checks'); expect(status).toContain('exit 0');
 });

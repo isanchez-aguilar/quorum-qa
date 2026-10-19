@@ -43,12 +43,13 @@ Options for review:
   --since <sha>              Re-review only the changes since this commit
   --dry-run                  Print the plan and spend nothing
   --reproduce                Try to reproduce BLOCKERs with a failing test
-  --allow-unproven           Unproven BLOCKERs do not fail the run
+  --allow-unproven           Waive unconfirmed non-local BLOCKERs (M6: unproven reproduction)
+                             Confirmed BLOCKERs always fail in M5
   --out <report.md>          Markdown output (default .quorum/reports/<runId>.md)
   --sarif <file>             SARIF 2.1.0 output
   --json                    Print the full review result
   --no-cache                Bypass cache reads and writes
-  --no-checks               Skip deterministic checks
+  --no-checks               Skip deterministic checks; use with untrusted changes
   --trust-head-config       Use committed HEAD config (own repos only)
 
 Options for doctor:
@@ -59,7 +60,13 @@ General:
   --help                     Print this help
   --version                  Print the version
 
-Exit codes: 0 no BLOCKER remains, 1 a BLOCKER remains, 2 tool or config error.
+--diff <sha>...HEAD trusts config at the merge-base of the range you chose.
+Checks execute the reviewed change's code in a disposable worktree.
+--spec, --inventory and --rules require regular non-symlink files, at most 256 KiB each.
+Feature specs accept Markdown checkboxes or a list under a heading containing "acceptance".
+
+Exit codes: 0 = complete coverage with no failing BLOCKER; 1 = a BLOCKER remains;
+2 = incomplete coverage with no BLOCKER, nothing to review, or tool/config/usage error.
 `;
 
 function packageVersion(): string {

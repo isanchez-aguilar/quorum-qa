@@ -170,7 +170,7 @@ it('separates binary files', async () => {
   const result = await runCascade(ctx, config(), new Map(), { catalog, gitRunner: originRunner(root) });
   expect(result.coverage.binaryFiles).toEqual(['image.png']);
   expect(result.coverage.reviewedFiles).toEqual([]);
-  expect(result.coverage.complete).toBe(true);
+  expect(result.coverage.complete).toBe(false);
 });
 it('decodes quoted UTF-8 paths', () => {
   const ctx = {...context(root), touchedFiles:['other.ts', 'café.txt'], diff: String.raw`diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"
