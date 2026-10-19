@@ -20,6 +20,7 @@ export interface ParsedFlags {
   since?: string;
   dryRun?: boolean;
   reproduce?: boolean;
+  yesRunUntrusted?: boolean;
   allowUnproven?: boolean;
   probe?: boolean;
   json?: boolean;
@@ -37,7 +38,7 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
+type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'yesRunUntrusted' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
 type ValueFlag = 'mode' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
@@ -45,6 +46,7 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   version: 'version',
   'dry-run': 'dryRun',
   reproduce: 'reproduce',
+  'yes-run-untrusted': 'yesRunUntrusted',
   'allow-unproven': 'allowUnproven',
   probe: 'probe',
   json: 'json',

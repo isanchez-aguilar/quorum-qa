@@ -53,6 +53,13 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function parseReproductionProposal(raw: string): ReproductionProposal {
+  const value = extractJson(raw, item => isRecord(item)
+    && ['path', 'content', 'expect'].every(key => typeof item[key] === 'string' && item[key].trim()));
+  const proposal = value as Record<string, string>;
+  return { path: proposal.path!, content: proposal.content!, expect: proposal.expect!, status: 'pending' };
+}
+
 function findingFrom(value: unknown, entry: CatalogEntry): Finding {
   if (!isRecord(value)) throw new Error('finding must be an object');
   const strings = ['file', 'trigger', 'impact', 'evidence_quote', 'fix'] as const;

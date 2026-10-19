@@ -57,6 +57,25 @@ describe('doctor with synthetic executables and injected runner', () => {
     const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root });
     expect(status(result, 'agy.permissions.read')).toBe('PASS');
   });
+  it('warns for configured adapter stubs while preserving the Qwen endpoint diagnostic', async () => {
+    const cfg = config();
+    cfg.tiers.review = ['claude:sonnet', 'agy:gemini-4-argon-high'];
+    cfg.tiers.triage.push('qwen:local');
+    cfg.qwen = { endpoint: 'http://127.0.0.1:8080/v1' };
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root });
+    for (const provider of ['claude', 'qwen']) {
+      expect(result.find(check => check.id === `${provider}.adapter`)).toMatchObject({ status: 'WARN', message: `${provider}: not implemented in v1` });
+    }
+    expect(status(result, 'qwen.endpoint')).toBe('PASS');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls.some(([file]) => /claude|qwen/i.test(path.basename(file)))).toBe(false);
+  });
+  it('does not report adapter stubs absent from all tiers', async () => {
+    const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root });
+    expect(result.some(check => check.id === 'claude.adapter' || check.id === 'qwen.adapter')).toBe(false);
+  });
   it('reports missing executables, checks, models, git and unknown quota without throwing', async () => {
     const result = await runDoctor(config(), { runner, env: { PATH: '' }, homedir: home, repoRoot: root });
     for (const id of ['git.repo', 'check.0', 'agy.path', 'agy.models', `agy.model.${model}`, 'codex.path']) expect(status(result, id)).toBe('FAIL');

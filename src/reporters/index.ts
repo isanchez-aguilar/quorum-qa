@@ -21,8 +21,18 @@ const details = (findings: Finding[]) => findings.length ? findings.map((f, i) =
   `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line} (${f.origin})`,
   `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${f.provider}:${f.model} (${f.family})`,
   `- **Impact:** ${cell(f.impact)}`, `- **Evidence Quote:** ${cell(f.evidence_quote)}`,
-  `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? '- **Reproduction Proof:** unproven (M6 not implemented).' : '',
+  `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? `- **Reproduction Proof:** ${f.reproduction?.status ?? 'unproven'} (${cell(f.reproduction?.failureReason ?? 'reproduction not requested')}).` : '',
 ].filter(Boolean).join('\n')).join('\n\n') : 'None.';
+
+function reproductionDetails(findings: Finding[]): string {
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return findings.filter(f => f.severity === 'BLOCKER' || f.reproduction?.status && f.reproduction.status !== 'pending').map(f => {
+    const proposal = f.reproduction;
+    return `### ${cell(f.file)}:${f.line}\n\nStatus: **${proposal?.status ?? 'unproven'}**\n\n`
+      + `Reason: ${cell(proposal?.failureReason ?? 'reproduction not requested')}\n\nProposed test: ${cell(proposal?.path || '(none)')}\n\n`
+      + (proposal?.content ? `<details>\n<summary>Proposed test content (untrusted)</summary>\n<pre><code>${escape(proposal.content)}</code></pre>\n</details>` : 'No proposed test.');
+  }).join('\n\n') || 'No BLOCKERs required reproduction.';
+}
 
 export function generateMarkdownReport(result: ReviewResult): string {
   const { coverage } = result;
@@ -51,6 +61,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     '## Optional Findings', details(result.findings.filter(f => f.severity === 'OPTIONAL')),
     '## Unconfirmed (local model only)', details(result.unconfirmed.filter(f => f.family === 'local')),
     '## Unconfirmed (other reviewers)', details(result.unconfirmed.filter(f => f.family !== 'local')),
+    '## Reproduction', reproductionDetails([...result.findings, ...result.unconfirmed]),
     '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',
     result.checks === null ? 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
       `- ${cell(check.argv.join(' '))}: ${check.exitCode === 0 && !check.timedOut ? 'passed' : 'FAILED'} (exit ${check.exitCode})\n\n${cell(check.stdoutTail + '\n' + check.stderrTail)}`).join('\n') : 'No checks configured.',
@@ -79,7 +90,8 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;
       return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, snippet: { text: f.evidence_quote } } } }],
-        properties: { origin: f.origin, confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix },
+        properties: { origin: f.origin, confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
+          ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },
       };
     }),

@@ -43,8 +43,9 @@ Options for review:
   --since <sha>              Re-review only the changes since this commit
   --dry-run                  Print the plan and spend nothing
   --reproduce                Try to reproduce BLOCKERs with a failing test
-  --allow-unproven           Waive unconfirmed non-local BLOCKERs (M6: unproven reproduction)
-                             Confirmed BLOCKERs always fail in M5
+  --allow-unproven           Waive unconfirmed non-local or explicitly unproven BLOCKERs
+                             Reproduced and rejected BLOCKERs still fail
+  --yes-run-untrusted        Suppress host fallback prompts; never grants host execution
   --out <report.md>          Markdown output (default .quorum/reports/<runId>.md)
   --sarif <file>             SARIF 2.1.0 output
   --json                    Print the full review result

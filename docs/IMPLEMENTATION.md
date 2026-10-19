@@ -1838,3 +1838,120 @@ coverage, zero criteria, report and SARIF write failures, each oversized input,
 linked repo persistence, check announcement/help, dirty-checkout warning, SARIF
 metadata, failed-check Status, JSON criteria, expired lock and visual cache
 writes. The existing binary-coverage assertion was updated to the new contract.
+
+## M6 as built
+
+Reproduction is opt-in through `--reproduce`. The cascade asks the confirm tier
+for a fresh proposal only after verification and cross-family confirmation,
+excluding local-only findings. Requests use the existing bounded untrusted-data
+prompt, filtered JSON extraction, quota routing, shared call budget, deadline,
+checkout guard and ledger. Proposal-supplied status is discarded. Three BLOCKERs
+are selected by descending confidence; eligible remainder are `unproven` with
+`reproduction cap`. No confirmation/proposal response is cached. Without the
+flag there are no proposal calls, test writes or runtime probes.
+
+- `src/reproduce/write.ts` supplies the dependency-free `**`, `*`, `?` matcher
+  and exclusive writer. `**` spans whole path components; brackets and braces
+  are literal. Paths reject absolute roots, traversal, NUL, colon and Windows
+  trailing-dot/space aliases. Parent directories are checked with `lstat` and
+  `realpath`, missing parents are created one at a time and checked again, and
+  `wx` prevents overwrite. The 64 KiB content limit counts UTF-8 bytes. As with
+  existing verifier guards, this does not promise protection against a separate
+  hostile host process racing parent replacement.
+- `src/reproduce/index.ts` reuses `createReviewWorktree` for isolated head/base
+  trees. No separate worktree implementation was added. Introduced findings use
+  `fileExistsAtCommit`; new code is unproven before execution. Existing code must
+  fail by a matching assertion at head and pass at base. Pre-existing findings
+  skip base. Cleanup is attempted even after the deadline. An invalid/existing
+  path is `rejected` and retains severity; only `not-reproduced` downgrades to
+  IMPORTANT. Missing infrastructure is `unproven`, retaining severity.
+- `src/reproduce/evaluate.ts` parses Vitest/Jest JSON into the existing TestReport.
+  Assertion matching is a nonempty literal substring of the first failure line,
+  never a provider regular expression. Import/compile/other-test failures cannot
+  prove a defect. Cache EROFS/EACCES, missing executable/report, preparation
+  failure and container timeout are infrastructure failures. Vitest's fixture
+  was checked against a real, trusted synthetic assertion using installed Vitest;
+  Jest uses a synthetic JSON fixture without installing or invoking Jest.
+- `src/reproduce/isolation.ts` resolves Docker then Podman and checks daemon
+  availability. The default Node image has an immutable digest constant and
+  update instructions. Docker Hub was inaccessible during implementation: the
+  published digest reference has not been independently verified against the
+  registry or pulled. Explicit `reproduce.image` remains supported.
+- Preparation builds `quorum-prep:<sha256(lockfile)>` from a temporary context
+  containing only a generated Dockerfile. It globally installs the exact
+  `packageManager`, initializes the dependency directory for UID 1000, and uses
+  the corresponding frozen lockfile command in `quorum-deps-<hash>`. Docker uses
+  network `default`; Podman uses `private`. Image labels and a readiness marker
+  prevent incomplete or incompatible dependency caches from being reused. A
+  cache mismatch fails unproven rather than silently reusing dependencies for a
+  different manager/image. Auxiliary containers are named and removed even on
+  failed preparation; timeouts kill them. No repository is copied into images.
+- Tests run with no network, UID/GID 1000, read-only root, tmpfs `/tmp`, a writable
+  worktree and read-only dependencies, cache environment pointing to `/tmp`,
+  1 GiB memory, 256 PIDs, 2 CPUs and no-new-privileges. The configured argv gets a
+  reporter output path inside `/tmp` and the proposed filename prefixed by `./`
+  so leading dashes cannot become options. A `node -e` argv wrapper spawns the
+  command without a shell, reads that report file and prints it after a fresh
+  UUID marker. No second shell command or persistent report bind mount is used.
+  Container kill and runner deadlines enforce the 120-second default and the
+  remaining run deadline. Every named container is force-removed on exit.
+- With no runtime, CI is unproven (`no container runtime`). A TTY may show the
+  proposed source and ask y/N before host execution; base needs its own consent.
+  `isolation: interactive` uses the same consent path. The brief's
+  `--yes-run-untrusted` wording is interpreted conservatively: it suppresses
+  fallback prompts, **never** authorizes execution on the host. Explicit per-test
+  consent is still mandatory, so suppressed/unavailable consent stays unproven.
+  Host reports use fresh temporary files and normalize absolute reporter paths.
+- Markdown includes a Reproduction section, status/reason/path and HTML-escaped
+  source inside a collapsible block, including downgraded findings. SARIF carries
+  `reproduction.status` (nested and dotted property). `--allow-unproven` waives
+  explicit unproven reproduction and existing non-local unconfirmed BLOCKERs;
+  reproduced/rejected BLOCKERs still exit 1. Unproven does not waive incomplete
+  coverage or tool errors.
+- Claude/Qwen are registered stubs: probe is unavailable, execution throws a
+  typed NotImplementedError classified as unavailable, and routing falls back.
+  Doctor emits WARN when configured, preserving the loopback Qwen endpoint check.
+  `scripts/smoke-review.md` contains a synthetic sample setup and exact manual
+  command bounded to six real calls. It was not executed.
+
+Tests cover safe writes/glob cases, report evaluation, exact fake-container argv,
+cache reuse/failures, timeout cleanup, cross-family eligibility, ordering/caps,
+shared budget, filtered proposals, consent and end-to-end `main()` exit codes.
+`tests/container/escape.test.ts` is explicitly slow and skips unless both
+`QUORUM_CONTAINER_TESTS=1` and a responding Docker daemon are present. Its
+synthetic test fails if an outside-root write or external socket succeeds; fake
+tests assert the mounts and network/root constraints. Default tests never start
+a container. The synthetic Vitest config redirects Vite cache to `/tmp`.
+
+Remaining verification: no real provider, smoke run, container, Jest invocation,
+Linux or macOS run was performed. The cache/volume initialization and Vite cache
+behavior in a real container remain assumptions. The root package.json has no
+packageManager; reproduction of this repository itself will be unproven until
+it pins one. The smoke fixture already pins one. External cross-family review
+was not run because provider CLIs were prohibited; separate read-only internal
+review found and corrected host report paths, deadline units, leading-dash
+filenames and preparation-container timeout cleanup. No new dependency, branch
+switch, commit or push was made.
+
+Final M6 validation on Windows: `pnpm.cmd typecheck` passed;
+`pnpm.cmd test` rebuilt the CLI and passed **758 tests**, with **6 skipped**,
+across 29 files. Skips are the explicit slow-container gate, four unavailable
+Windows file-symlink tests, and one inherited skip. Directory-junction tests
+passed. `git diff --check` passed (Git's LF/CRLF notices are not errors).
+The trusted standalone Vitest assertion probe exited 1 as expected and its JSON
+parsed as `assertion-failure-matching`. Automatic command review rejected
+cleanup of the ignored `.quorum/m6-parser-check` scratch with `blocked by policy`;
+that scratch remains, outside the delivery diff.
+
+Files changed in M6:
+
+- Runtime: `src/reproduce/{index,write,evaluate,isolation}.ts`,
+  `src/cascade/{index,parse,prompts}.ts`, `src/cli/{args,index,review}.ts`,
+  `src/providers/{types,claude,qwen}.ts`, `src/doctor/index.ts`,
+  `src/reporters/index.ts`.
+- Tests: `tests/unit/reproduce-{write,evaluate,isolation,cascade}.test.ts`,
+  `tests/unit/providers.test.ts`, `tests/integration/{reproduce,review,doctor}.test.ts`,
+  `tests/container/escape.test.ts`.
+- Fixtures: `tests/fixtures/reproduce/{vitest,jest}.json` and
+  `tests/fixtures/repro-repo/{package.json,pnpm-lock.yaml,vitest.config.ts,escape.test.js}`.
+- Documentation: this file and `scripts/smoke-review.md`.

@@ -140,11 +140,11 @@ describe('M5 zero-quota review CLI', () => {
     const code = await main(['review', '--spec', 'spec.md', '--since', since], { out() {}, err() {} }, { repoRoot: root, gitRunner: runner, checkRunner, providers: new Map([['agy', provider]]), catalog });
     expect(code).toBe(0); expect(checkRunner).not.toHaveBeenCalled();
   });
-  it('bypasses cached reviews with --no-cache and leaves reproduction unimplemented without calls', async () => {
+  it('bypasses cached reviews with --no-cache and spends no reproduction calls without blockers', async () => {
     const provider = fake(['[]', '[]']);
     expect((await review(provider)).code).toBe(0);
     expect((await review(provider, ['--no-cache'])).code).toBe(0); expect(provider.calls).toHaveLength(2);
-    const reproduce = await review(provider, ['--reproduce']); expect(reproduce.code).toBe(2); expect(reproduce.err).toContain('not implemented yet'); expect(provider.calls).toHaveLength(2);
+    const reproduce = await review(provider, ['--reproduce']); expect(reproduce.code).toBe(0); expect(reproduce.err).toBe(''); expect(provider.calls).toHaveLength(2);
   });
   it('rejects oversized images before inference', async () => {
     await mkdir(path.join(root, 'shots')); await writeFile(path.join(root, 'shots/huge.png'), Buffer.alloc(5 * 1024 * 1024 + 1));
@@ -275,7 +275,7 @@ describe('M5 review corrections', () => {
   it('documents check execution, waiver boundaries, range trust and all exits in help', async () => {
     let out = ''; await main(['--help'], { out: text => { out += text; }, err() {} });
     expect(out).toContain('use with untrusted changes');
-    expect(out).toContain('Confirmed BLOCKERs always fail');
+    expect(out).toContain('Reproduced and rejected BLOCKERs still fail');
     expect(out).toContain('2 = incomplete coverage with no BLOCKER');
     expect(out).toContain('merge-base of the range you chose');
   });

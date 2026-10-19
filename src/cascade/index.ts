@@ -3,7 +3,7 @@ import { cleanDiff, diffSectionPath } from '../context/diff.js';
 import { checkoutSnapshot, checkoutDifference, type CheckoutSnapshot } from '../worktree/checkout.js';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import type { CatalogEntry, CommandRunner, Finding, LedgerEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
+import type { CatalogEntry, CommandRunner, Finding, LedgerEntry, QuorumConfig, ReproductionProposal, ReviewContext, Tier } from '../types/index.js';
 import { DEFAULT_CATALOG, modelRef, parseModelRef } from '../catalog/index.js';
 import { quotaStatus, type QuotaSnapshot } from '../catalog/groups.js';
 import { resolveTier } from '../catalog/tiers.js';
@@ -13,17 +13,17 @@ import { dedupeFindings } from '../dedupe/index.js';
 import { clusterByProximity, combinedConfidence, mergeCluster, relatedAnnotations } from '../dedupe/cluster.js';
 import { ProviderError, type ProviderAdapter, type RawProviderResult } from '../providers/types.js';
 import { BUDGET_WARNING, RunBudget, type Clock } from './budget.js';
-import { extractJson, isRecord, parseFindings } from './parse.js';
+import { extractJson, isRecord, parseFindings, parseReproductionProposal } from './parse.js';
 import { runCommand } from '../process/runner.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
-import { boundedPrompt, promptFinding, REVIEW_INSTRUCTIONS } from './prompts.js';
+import { boundedPrompt, promptFinding, reproductionPrompt, REVIEW_INSTRUCTIONS } from './prompts.js';
 import { reviewChunks, type ReviewCoverage } from './prompts.js';
 
 export interface CascadeCall {
   provider: string;
   model: string;
   tier: Tier;
-  purpose: 'review' | 'confirm' | 'adjudicate';
+  purpose: 'review' | 'confirm' | 'adjudicate' | 'reproduce';
   promptHash: string;
   deadlineMs: number;
   status: 'ok' | 'quota' | 'timeout' | 'unavailable' | 'dirty' | 'invalid' | 'error';
@@ -58,6 +58,10 @@ interface Candidate {
   unconfirmed: boolean;
 }
 
+export type ReproduceFinding = (finding: Finding, proposal: ReproductionProposal, remainingMs: number) => Promise<{
+  status: 'reproduced' | 'not-reproduced' | 'rejected' | 'unproven'; reason?: string;
+}>;
+
 function rejection(ledger: LedgerDraft, reason: string): void {
   ledger.rejectedFindingsCount++;
   ledger.rejectionReasons[reason] = (ledger.rejectionReasons[reason] ?? 0) + 1;
@@ -80,7 +84,7 @@ export async function runCascade(
   context: ReviewContext,
   config: QuorumConfig,
   providers: ReadonlyMap<string, ProviderAdapter>,
-  options: { clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; cache?: ReviewCache } = {},
+  options: { clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
 ): Promise<CascadeResult> {
   const reviewedFamilies: import('../types/index.js').Family[] = [];
   let cacheHits = 0;
@@ -464,6 +468,46 @@ export async function runCascade(
   const unconfirmed: Finding[] = [];
   for (const node of nodes) {
     (node.unconfirmed || node.sources.every(source => source.family === 'local') ? unconfirmed : findings).push(node.finding);
+  }
+  if (options.reproduce && !errors.length) {
+    const blockers = nodes.filter(node => node.finding.severity === 'BLOCKER')
+      .sort((a, b) => b.finding.confidence - a.finding.confidence);
+    let selected = 0;
+    for (const node of blockers) {
+      const finding = node.finding;
+      const markUnproven = (reason: string) => {
+        finding.reproduction = { path: '', content: '', expect: '', status: 'unproven', failureReason: reason };
+      };
+      if (node.unconfirmed || new Set(node.sources.map(source => source.family)).size < 2
+        || node.sources.every(source => source.family === 'local') || !finding.verified) {
+        markUnproven('no cross-family confirmation'); continue;
+      }
+      if (selected++ >= 3) { markUnproven('reproduction cap'); continue; }
+      const attempted = new Set<string>();
+      let proposal: ReproductionProposal | undefined;
+      let acceptedResponse: CallResult | undefined;
+      while (!proposal) {
+        const response = await invoke('confirm', reproductionPrompt(finding, config.reproduce.testGlobs, hunkFor(context, finding)),
+          'reproduce', { attempted, excludeLocal: true });
+        if (!response) break;
+        try { proposal = parseReproductionProposal(response.result.rawOutput); acceptedResponse = response; }
+        catch { response.call.status = 'invalid'; warn(`${modelRef(response.entry)}: invalid reproduction proposal.`); }
+      }
+      if (!proposal) { markUnproven(budget.allowed ? 'no valid reproduction proposal' : 'reproduction budget exhausted'); continue; }
+      finding.reproduction = proposal;
+      if (budget.remainingMs <= 0) { proposal.status = 'unproven'; proposal.failureReason = 'run deadline'; continue; }
+      try {
+        const outcome = await options.reproduce(finding, proposal, budget.remainingMs);
+        proposal.status = outcome.status;
+        proposal.failureReason = outcome.reason;
+        if (outcome.status === 'not-reproduced') {
+          finding.severity = 'IMPORTANT';
+          finding.verification_note = [finding.verification_note, `Reproduction: ${outcome.reason ?? 'not reproduced'}`].filter(Boolean).join('; ');
+        }
+        if (outcome.status === 'reproduced' && acceptedResponse) acceptedResponse.ledger.reproducedBlockersCount++;
+      } catch (error) { proposal.status = 'unproven'; proposal.failureReason = `reproduction infrastructure: ${String(error)}`; }
+      try { await assertCheckoutUnchanged(); } catch { break; }
+    }
   }
   // Confirmation can lose evidence after initial diff coverage was computed.
   coverage.complete = coverageComplete();

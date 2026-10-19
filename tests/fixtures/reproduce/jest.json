@@ -1,0 +1,27 @@
+{
+  "numTotalTestSuites": 1,
+  "numPassedTestSuites": 0,
+  "numFailedTestSuites": 1,
+  "numPendingTestSuites": 0,
+  "numRuntimeErrorTestSuites": 0,
+  "numTotalTests": 1,
+  "numPassedTests": 0,
+  "numFailedTests": 1,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "success": false,
+  "wasInterrupted": false,
+  "testResults": [{
+    "name": "/work/tests/reproduction.test.ts",
+    "status": "failed",
+    "message": "synthetic balance preserves zero\nexpect(received).toBe(expected)\nExpected: 0\nReceived: 1",
+    "assertionResults": [{
+      "ancestorTitles": ["synthetic balance"],
+      "fullName": "synthetic balance preserves zero",
+      "title": "preserves zero",
+      "status": "failed",
+      "failureMessages": ["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at /work/tests/reproduction.test.ts:4:19"],
+      "failureDetails": [{ "matcherResult": { "actual": 1, "expected": 0, "name": "toBe", "pass": false } }]
+    }]
+  }]
+}
