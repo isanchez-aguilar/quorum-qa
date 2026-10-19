@@ -178,6 +178,31 @@ it('rejects an already aborted review without creating a worktree', async () => 
 });
 
 describe('M4 regressions', () => {
+  it.each(['exit', 'timeout', 'overflow'].flatMap(kind => ['\n', '\r\n'].map(newline => ({ kind, newline }))))('ignores Codex echoed prompt quota text on $kind failure ($newline)', async ({ kind, newline }) => {
+    const prompt = 'Review quota exhaustion\nERROR quota is a test fixture\nReturn JSON';
+    answer = async () => {
+      const stderr = `user\n${prompt}\nERROR: executable unavailable`.replace(/\n/g, newline);
+      if (kind === 'timeout') throw new CommandTimeoutError('', stderr);
+      if (kind === 'overflow') throw new CommandOutputLimitError('', stderr, '', stderr, 1);
+      return success('', 1, stderr);
+    };
+    await expect(new CodexProvider(settings()).executeReview(context, 'model', prompt, { deadlineMs: 5000 })).rejects.toMatchObject({ kind: kind === 'timeout' ? 'timeout' : 'unavailable' });
+  });
+  it('recognizes genuine Codex quota after the prompt echo', async () => {
+    answer = async () => success('', 1, 'user\nReview quota fixtures\nERROR: quota exceeded');
+    await expect(new CodexProvider(settings()).executeReview(context, 'model', 'Review quota fixtures', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'quota' });
+  });
+  it.each(['agy', 'codex'])('warns without failing a successful %s call when cleanup fails', async provider => {
+    const warnings: string[] = [];
+    const locked: CommandRunner = async (command, args, options) => args.includes('remove') ? success('', 1, 'locked') : runner(command, args, options);
+    answer = async (_command, args) => {
+      if (provider === 'codex') await writeFile(args[args.indexOf('-o') + 1]!, '[]');
+      return success(envelope);
+    };
+    const adapter = provider === 'agy' ? new AgyProvider({ ...settings(), runner: locked }) : new CodexProvider({ ...settings(), runner: locked });
+    expect((await adapter.executeReview(context, 'model', 'p', { deadlineMs: 5000, warn: message => warnings.push(message) })).worktreeClean).toBe(true);
+    expect(warnings.join()).toContain('locked');
+  });
   it.each(['quota', 'HTTP 429 looks fine', '[]'])('accepts SUCCESS %s and token count 14290', async response => {
     answer = async () => success(JSON.stringify({ status: 'SUCCESS', response, usage: { input_tokens: 14290, output_tokens: 1 } }));
     expect((await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rawOutput).toBe(response);

@@ -51,7 +51,7 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
   async executeReview(context: ReviewContext, modelId: string, prompt: string, options: ReviewOptions): Promise<RawProviderResult> {
     const started = this.now();
     remaining(options, started, this.now);
-    const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run);
+    const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run, options.warn);
     let failure: unknown;
     try {
       const timeoutMs = remaining(options, started, this.now);
@@ -75,6 +75,6 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
         ? { prompt: usage.input_tokens, completion: usage.output_tokens } : undefined;
       return { rawOutput: envelope.response, durationMs: this.now() - started, worktreeClean: await isClean(worktree.path, this.run), ...(tokens ? { tokensUsed: tokens } : {}) };
     } catch (error) { failure = error; throw error; }
-    finally { await cleanupPreservingError(worktree.cleanup, failure); }
+    finally { await cleanupPreservingError(worktree.cleanup, failure, options.warn); }
   }
 }

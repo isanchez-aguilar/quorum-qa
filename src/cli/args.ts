@@ -23,6 +23,11 @@ export interface ParsedFlags {
   allowUnproven?: boolean;
   probe?: boolean;
   json?: boolean;
+  out?: string;
+  sarif?: string;
+  noCache?: boolean;
+  noChecks?: boolean;
+  trustHeadConfig?: boolean;
 }
 
 export interface ParsedArgs {
@@ -32,8 +37,8 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'allowUnproven' | 'probe' | 'json';
-type ValueFlag = 'mode' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'author' | 'since';
+type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
+type ValueFlag = 'mode' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   help: 'help',
@@ -43,6 +48,9 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   'allow-unproven': 'allowUnproven',
   probe: 'probe',
   json: 'json',
+  'no-cache': 'noCache',
+  'no-checks': 'noChecks',
+  'trust-head-config': 'trustHeadConfig',
 };
 
 const VALUE_FLAGS: Record<string, ValueFlag> = {
@@ -54,6 +62,8 @@ const VALUE_FLAGS: Record<string, ValueFlag> = {
   rules: 'rules',
   author: 'author',
   since: 'since',
+  out: 'out',
+  sarif: 'sarif',
 };
 
 function has(table: Record<string, unknown>, key: string): boolean {

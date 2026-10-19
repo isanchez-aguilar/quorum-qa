@@ -73,11 +73,13 @@ export interface ReviewContext {
   mode: 'feature' | 'redesign';
   diff: string;
   baseCommit: string;
+  mergeBaseCommit?: string;
   requestedBaseCommit?: string;
   headCommit: string;
   worktreeRoot: string;
   touchedFiles: string[];
   specContent?: string;
+  checksContext?: string;
   inventoryContent?: string;
   images?: string[];
   rulesContent?: string;

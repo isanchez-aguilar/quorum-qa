@@ -9,11 +9,21 @@ export interface AdapterOptions extends Pick<ResolveOptions, 'env' | 'platform' 
 }
 export const quotaLanguage = (text: string): boolean => /RESOURCE_EXHAUSTED|\bquota\b|\b429\b|rate.?limit/i.test(text);
 
-export async function cleanupPreservingError(cleanup: () => Promise<void>, original: unknown): Promise<void> {
+export function codexDiagnostics(stderr: string, prompt = ''): string {
+  stderr = stderr.replace(/\r\n/g, '\n');
+  prompt = prompt.replace(/\r\n/g, '\n');
+  const echo = prompt ? stderr.lastIndexOf(prompt) : -1;
+  const withoutEcho = echo < 0 ? stderr : stderr.slice(0, echo) + stderr.slice(echo + prompt.length);
+  const tail = echo < 0 ? stderr : stderr.slice(echo + prompt.length);
+  return [...withoutEcho.split(/\r?\n/).filter(line => /^(ERROR|error:)/.test(line)), ...tail.split(/\r?\n/).slice(-20)].join('\n');
+}
+
+export async function cleanupPreservingError(cleanup: () => Promise<void>, original: unknown, warn: (message: string) => void = console.warn): Promise<void> {
   try { await cleanup(); }
   catch (error) {
-    if (!(original instanceof ProviderError)) throw error;
-    original.warnings.push(`Cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    const message = `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+    if (original instanceof ProviderError) original.warnings.push(message);
+    else warn(message);
   }
 }
 export function remaining(options: ReviewOptions, started: number, now: () => number): number {
@@ -40,10 +50,9 @@ export class ProviderCommands {
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       if ((error instanceof CommandTimeoutError || (error instanceof CommandOutputLimitError && error.exitCode !== 0))
-        && quotaLanguage(error.stderr)) throw new ProviderError('quota', name + ' quota exhausted or rate limited');
+        && quotaLanguage(name === 'codex' ? codexDiagnostics(error.stderr, stdin) : error.stderr)) throw new ProviderError('quota', name + ' quota exhausted or rate limited');
       if (error instanceof CommandTimeoutError) throw new ProviderError('timeout', `${name} timed out`);
       throw new ProviderError('unavailable', `${name} call failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
-

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ReviewContext } from '../types/index.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
-import { ProviderCommands, quotaLanguage, remaining, cleanupPreservingError } from './commands.js';
+import { ProviderCommands, quotaLanguage, remaining, cleanupPreservingError, codexDiagnostics } from './commands.js';
 import { ProviderError, type ProviderAdapter, type Quota, type RawProviderResult, type ReviewOptions } from './types.js';
 
 export class CodexProvider extends ProviderCommands implements ProviderAdapter {
@@ -17,7 +17,7 @@ export class CodexProvider extends ProviderCommands implements ProviderAdapter {
   async executeReview(context: ReviewContext, _modelId: string, prompt: string, options: ReviewOptions): Promise<RawProviderResult> {
     const started = this.now();
     remaining(options, started, this.now);
-    const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run);
+    const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run, options.warn);
     let directory: string | undefined;
     let failure: unknown;
     try {
@@ -30,7 +30,7 @@ export class CodexProvider extends ProviderCommands implements ProviderAdapter {
         let output = '';
         try { output = await readFile(outfile, 'utf8'); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-        if (result.exitCode !== 0 && quotaLanguage(result.stderr)) throw new ProviderError('quota', 'codex quota exhausted or rate limited');
+        if (result.exitCode !== 0 && quotaLanguage(codexDiagnostics(result.stderr, prompt))) throw new ProviderError('quota', 'codex quota exhausted or rate limited');
         const clean = await isClean(worktree.path, this.run);
         if (!clean) return { rawOutput: output, durationMs: this.now() - started, worktreeClean: false };
         if (result.exitCode === 0 && output.trim()) return { rawOutput: output, durationMs: this.now() - started, worktreeClean: true };
@@ -44,8 +44,8 @@ export class CodexProvider extends ProviderCommands implements ProviderAdapter {
       throw new ProviderError('unavailable', 'codex retry exhausted');
     } catch (error) { failure = error; throw error; }
     finally {
-      try { await cleanupPreservingError(async () => { if (directory) await rm(directory, { recursive: true, force: true }); }, failure); }
-      finally { await cleanupPreservingError(worktree.cleanup, failure); }
+      try { await cleanupPreservingError(async () => { if (directory) await rm(directory, { recursive: true, force: true }); }, failure, options.warn); }
+      finally { await cleanupPreservingError(worktree.cleanup, failure, options.warn); }
     }
   }
 }

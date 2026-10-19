@@ -267,7 +267,7 @@ describe('fake provider cascade', () => {
     expect(result.calls.length).toBeGreaterThan(size === 1 ? 0 : 1);
     const payloads = pool.get('agy')!.calls.map(call => {
       expect(call.prompt.length).toBeLessThanOrEqual(24000);
-      return JSON.parse(call.prompt.slice(call.prompt.indexOf('\n') + 1)) as { diff: string };
+      return JSON.parse(call.prompt.slice(call.prompt.indexOf('{'))) as { diff: string };
     });
     expect(payloads.every(payload => payload.diff?.includes('@@'))).toBe(true);
     if (size !== 1) expect(payloads.map(payload => payload.diff).join('')).toBe(ctx.diff);
@@ -310,7 +310,7 @@ describe('fake provider cascade', () => {
     expect(result.coverage.complete).toBe(maxCalls !== 1);
     expect(result.coverage.skippedFiles).toEqual(maxCalls === 1 ? ['sample.ts'] : []);
     pool.get('agy')!.calls.forEach((call, index) => {
-      const payload = JSON.parse(call.prompt.slice(call.prompt.indexOf('\n') + 1));
+      const payload = JSON.parse(call.prompt.slice(call.prompt.indexOf('{')));
       expect(payload.diff).toBe(header + hunks[index]);
     });
   });

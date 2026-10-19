@@ -16,3 +16,5 @@ export { CodexProvider } from './providers/codex.js';
 export { createReviewWorktree, isClean } from './worktree/index.js';
 export { runDoctor } from './doctor/index.js';
 export type { DoctorCheck, DoctorOptions } from './doctor/index.js';
+export { generateMarkdownReport, generateSarifReport } from './reporters/index.js';
+export type { ReviewResult } from './reporters/index.js';
