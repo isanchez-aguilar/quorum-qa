@@ -54,7 +54,17 @@ export const runCommand: CommandRunner = (command, args, options = {}) => new Pr
   let exceeded = false;
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
   let termination: Promise<void> = Promise.resolve();
+  let terminationDiagnostic = '';
+  const timeout = () => {
+    clearTimeout(timer);
+    clearTimeout(graceTimer);
+    child.stdout.destroy();
+    child.stderr.destroy();
+    reject(new CommandTimeoutError(byteTail(stdout.toString(), MAX_OUTPUT_BYTES),
+      byteTail(stderr.toString() + terminationDiagnostic, MAX_OUTPUT_BYTES)));
+  };
   const append = (previous: Buffer, chunk: Buffer) => Buffer.concat([previous, chunk]).subarray(-MAX_OUTPUT_BYTES);
   child.stdout.on('data', (chunk: Buffer) => {
     exceeded ||= stdoutHead.length + chunk.length > MAX_OUTPUT_BYTES;
@@ -67,11 +77,14 @@ export const runCommand: CommandRunner = (command, args, options = {}) => new Pr
     stderr = append(stderr, chunk);
   });
   child.stdin.on('error', () => { /* A command may exit before consuming its input. */ });
-  child.once('error', error => { clearTimeout(timer); reject(error); });
+  child.once('error', error => {
+    if (timedOut) timeout();
+    else { clearTimeout(timer); reject(error); }
+  });
   child.once('close', (code, signal) => {
     clearTimeout(timer);
     void termination.then(() => {
-      if (timedOut) reject(new CommandTimeoutError(byteTail(stdout.toString(), MAX_OUTPUT_BYTES), byteTail(stderr.toString(), MAX_OUTPUT_BYTES)));
+      if (timedOut) timeout();
       else if (exceeded) reject(new CommandOutputLimitError(bytePrefix(stdoutHead.toString(), MAX_OUTPUT_BYTES), bytePrefix(stderrHead.toString(), MAX_OUTPUT_BYTES),
         byteTail(stdout.toString(), MAX_OUTPUT_BYTES), byteTail(stderr.toString(), MAX_OUTPUT_BYTES), code ?? 1));
       else resolve({ stdout: stdout.toString(), stderr: stderr.toString(), exitCode: code ?? (signal ? 1 : 0) });
@@ -79,27 +92,24 @@ export const runCommand: CommandRunner = (command, args, options = {}) => new Pr
   });
   if (options.timeoutMs !== undefined) timer = setTimeout(() => {
     timedOut = true;
+    // exit can precede the deadline: an orphan may still own the inherited pipes.
+    // Bound the wait for close even if tree termination itself never completes.
+    graceTimer = setTimeout(timeout, 1000);
     if (!child.pid) return;
     if (process.platform === 'win32') {
-      termination = new Promise<void>((done, fail) => {
+      termination = new Promise<void>(done => {
         const killer = spawn(path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
           ['/PID', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' });
-        killer.once('error', error => { child.kill(); fail(error); });
-        killer.once('close', code => {
-          if (code !== 0 && child.exitCode === null) {
-            child.kill();
-            fail(new CommandTimeoutError(byteTail(stdout.toString(), MAX_OUTPUT_BYTES),
-              byteTail(stderr.toString() + `\nTaskkill failed (${code}); process tree termination could not be verified`, MAX_OUTPUT_BYTES)));
-            return;
-          }
+        const failed = (reason: string) => {
+          terminationDiagnostic = `\nTaskkill failed (${reason}); process tree termination could not be verified`;
+          child.kill();
           done();
+        };
+        killer.once('error', error => failed(error.message));
+        killer.once('close', code => {
+          if (code !== 0) failed(String(code));
+          else done();
         });
-      });
-      // Attach immediately: taskkill can fail before the target closes its pipes.
-      void termination.catch(error => {
-        child.stdout.destroy();
-        child.stderr.destroy();
-        reject(error);
       });
     } else {
       try { process.kill(-child.pid, 'SIGKILL'); } catch (error) {

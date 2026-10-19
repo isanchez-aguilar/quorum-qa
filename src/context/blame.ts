@@ -1,10 +1,11 @@
 import type { CommandRunner, Origin } from '../types/index.js';
-import { fileExistsAtCommit, git, revParse } from './git.js';
+import { fileExistsAtCommit, git, requireWorktreeRoot, revParse } from './git.js';
 
 export async function determineOrigin(
   file: string, line: number, baseSha: string, headSha: string, cwd: string, runner: CommandRunner,
 ): Promise<Origin> {
   if (!Number.isSafeInteger(line) || line < 1) throw new Error('Line must be a positive integer');
+  await requireWorktreeRoot(cwd, runner);
   const base = await revParse(baseSha, cwd, runner);
   const head = await revParse(headSha, cwd, runner);
   const blame = await git(['blame', '--porcelain', '-L', `${line},${line}`, head, '--', file], cwd, runner);

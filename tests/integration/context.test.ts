@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -56,6 +56,7 @@ describe.skipIf(!gitPath)('synthetic git context', () => {
     expect(context.diff).toContain('+introduced');
     expect(context.diff).not.toContain('+changed later');
     expect(context.baseCommit).toBe(base);
+    expect(context.requestedBaseCommit).toBe(base);
     expect(context.headCommit).toBe(head);
     expect(path.resolve(context.worktreeRoot)).toBe(path.resolve(cwd));
     expect(context.touchedFiles).toEqual(['deleted.txt', 'new file.txt', 'sample.txt']);
@@ -69,6 +70,48 @@ describe.skipIf(!gitPath)('synthetic git context', () => {
   });
   it('testBlame_IntroducedLine', async () => {
     expect(await determineOrigin('sample.txt', 3, base, head, cwd, runner)).toBe('introduced');
+  });
+  it('uses the merge base when the target branch has advanced', async () => {
+    const blobResult = await runner(gitPath!, ['hash-object', '-w', '--stdin'], { cwd, stdin: 'main-only content\n' });
+    expect(blobResult.exitCode).toBe(0);
+    const blob = blobResult.stdout.trim();
+    const index = path.join(cwd, '.git', 'synthetic-index');
+    const indexRunner: CommandRunner = (command, args, options) =>
+      runCommand(command, args, { ...options, env: { ...env, GIT_INDEX_FILE: index } });
+    expect((await indexRunner(gitPath!, ['read-tree', base], { cwd })).exitCode).toBe(0);
+    expect((await indexRunner(gitPath!, ['update-index', '--add', '--cacheinfo', `100644,${blob},main-only.txt`], { cwd })).exitCode).toBe(0);
+    const treeResult = await indexRunner(gitPath!, ['write-tree'], { cwd });
+    expect(treeResult.exitCode).toBe(0);
+    const mainTree = treeResult.stdout.trim();
+    const main = await git('commit-tree', mainTree, '-p', base, '-m', 'Main only file');
+    const context = await buildReviewContext({ base: main, head, cwd, mode: 'feature', runner });
+    expect(context.touchedFiles).not.toContain('main-only.txt');
+    expect(context.diff).not.toContain('main-only.txt');
+    expect(context.diff).not.toContain('main-only content');
+    expect(context.baseCommit).toBe(base);
+    expect(context.requestedBaseCommit).toBe(main);
+  });
+  it('ignores hostile global diff formatting', async () => {
+    const config = path.join(cwd, '.git', 'hostile.gitconfig');
+    await writeFile(config, '[color]\n ui = always\n[diff]\n noprefix = true\n renames = true\n[core]\n quotePath = true\n');
+    const hostileRunner: CommandRunner = (command, args, options) => runCommand(command, args,
+      { ...options, env: { ...env, GIT_CONFIG_GLOBAL: config } });
+    const diff = await diffRange(`${base}..${head}`, cwd, hostileRunner);
+    expect(diff).not.toContain('\u001b');
+    expect(diff).toContain('--- a/sample.txt');
+    expect(diff).toContain('+++ b/sample.txt');
+  });
+  it.each(['context', 'existence', 'blame', 'diff', 'files'])('rejects subdirectory cwd for %s', async helper => {
+    const subdir = path.join(cwd, 'subdir');
+    await mkdir(subdir, { recursive: true });
+    const calls = {
+      context: () => buildReviewContext({ base, head, cwd: subdir, mode: 'feature', runner }),
+      existence: () => fileExistsAtCommit(base, 'sample.txt', subdir, runner),
+      blame: () => determineOrigin('sample.txt', 1, base, head, subdir, runner),
+      diff: () => diffRange(`${base}..${head}`, subdir, runner),
+      files: () => changedFiles(`${base}..${head}`, subdir, runner),
+    };
+    await expect(calls[helper as keyof typeof calls]()).rejects.toThrow('cwd must be the repository root');
   });
   it('testBlame_PreexistingLine', async () => {
     expect(await determineOrigin('sample.txt', 1, base, head, cwd, runner)).toBe('pre-existing');

@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { runDeterministicChecks } from '../../src/checks/index.js';
 import { runCommand, CommandOutputLimitError, CommandTimeoutError, MAX_OUTPUT_BYTES } from '../../src/process/runner.js';
 import { resolveCommand } from '../../src/checks/resolver.js';
 
@@ -21,6 +22,39 @@ it('captures stdout, stderr and exit code', async () => {
 it('kills a sleeping process at the deadline', async () => {
   await expect(runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 200 }))
     .rejects.toBeInstanceOf(CommandTimeoutError);
+});
+
+it('settles within three seconds when an orphan retains the pipes', async () => {
+  const dir = await temporary();
+  const pidFile = path.join(dir, 'orphan.pid');
+  const script = `const child = require('node:child_process').spawn(process.execPath,
+    ['-e', 'setTimeout(() => {}, 6000)'],
+    { stdio: ['ignore', 'inherit', 'inherit'], detached: true });
+    require('node:fs').writeFileSync(process.argv[1], String(child.pid)); child.unref();`;
+  const start = performance.now();
+  try {
+    await expect(runCommand(process.execPath, ['-e', script, pidFile], { timeoutMs: 500 }))
+      .rejects.toBeInstanceOf(CommandTimeoutError);
+    expect(performance.now() - start).toBeLessThan(3000);
+  } finally {
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ }
+  }
+}, 10_000);
+
+it.skipIf(process.platform !== 'win32')('reports timeout when taskkill cannot spawn', async () => {
+  const dir = await temporary();
+  const env = { ...process.env };
+  vi.stubEnv('SystemRoot', path.join(dir, 'missing-windows'));
+  try {
+    const result = await runDeterministicChecks(
+      [[process.execPath, '-e', 'setTimeout(() => {}, 6000)']], dir,
+      (command, args, options) => runCommand(command, args, { ...options, env }), { timeoutMs: 200 });
+    expect(result.results[0]?.timedOut).toBe(true);
+    expect(result.results[0]?.stderrTail).toContain('process tree termination could not be verified');
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it('kills descendants as well as the parent', async () => {

@@ -1312,7 +1312,8 @@ Where this round departs from the request: the brief asked for an identifier sim
 M2 adds `src/checks/{resolver,index}.ts`, `src/context/{git,blame,index}.ts`,
 `src/process/runner.ts`, and four test files (`resolver`, `checks`, `context`,
 `runner`). The current M2 brief supersedes the older signatures in section 3.
-No M0/M1 source, types, tests, dependencies, PLAN.md or AGENTS.md were changed.
+M0/M1 behavior, tests, dependencies, PLAN.md and AGENTS.md are unchanged.
+The only shared type addition is optional `ReviewContext.requestedBaseCommit`.
 
 Decisions and deviations:
 
@@ -1325,9 +1326,11 @@ Decisions and deviations:
   cwd entry. Explicit absolute executable paths are allowed. Windows environment
   keys are case-insensitive. Shim paths, as well as arguments, reject expansion
   characters; NUL is rejected in addition to the specified metacharacters.
-- `buildReviewContext` compares the resolved base and head directly (`base..head`),
-  rather than silently replacing base with a merge base. The diff helper also
-  accepts `a...b`. Diff truncation includes its marker within 512 KiB. No AST
+- `buildReviewContext` resolves both refs, computes their merge base, and uses
+  `<mergeBase>..<head>` for both the diff and touched files. `baseCommit` is that
+  merge-base SHA; optional `requestedBaseCommit` preserves the original base SHA
+  without breaking existing M0/M1 consumers. The diff helper also accepts `a...b`.
+  Diff truncation includes its marker within 512 KiB. No AST
   extraction was added: it is outside the current brief and ReviewContext type.
 - Changed files use NUL-delimited status/path pairs with rename detection disabled;
   a rename is represented as deletion plus addition. Refs use a conservative plain
@@ -1335,6 +1338,9 @@ Decisions and deviations:
   Missing commits and blame errors fail explicitly. Blame validates the head line
   before treating a file absent at base as introduced; invalid lines do not receive
   an origin. This layer never emits improvement.
+- Context building, diff, changed-files, file existence and blame require `cwd`
+  to be the repository root, validated with `rev-parse --show-toplevel` and real
+  paths. Subdirectory callers receive an explicit error.
 - Capture retains at most 1 MiB each for the prefix and tail of each stream (up to
   4 MiB total retained bytes). `CommandOutputLimitError` exposes bounded output and
   the exit code. Checks use its tails; diffs use its marked prefix. Other Git
@@ -1346,10 +1352,29 @@ Decisions and deviations:
   Access denied. The real timeout tests verify parent and child PIDs disappear,
   but successful taskkill execution and the POSIX process-group branch remain
   unverified here. Direct termination alone is not a general tree-kill guarantee.
+  After the timeout deadline, the runner allows at most one second for exit and
+  pipe closure, then destroys stdout/stderr and rejects even if an orphan retains
+  the pipes. A taskkill spawn error also remains a `CommandTimeoutError`, so checks
+  retain `timedOut: true`; the termination diagnostic is included in stderr.
 - Tests create only synthetic temporary repositories with fixed identity/dates;
   Git integration skips only when git cannot be resolved on PATH. Windows shim
   quoting is tested both with injected win32 resolution and a real .cmd file.
-  Git's external diff and text conversion are disabled for diff extraction.
+  Every Git helper pins `color.ui=false` and `core.quotePath=false`. Both diff
+  operations explicitly set `--no-color --src-prefix=a/ --dst-prefix=b/`, disable
+  renames, external diff and text conversion, including under hostile global config.
+- Windows shims use `ComSpec` only when it is an absolute path to an existing
+  file. Otherwise they use `System32/cmd.exe` under an absolute `SystemRoot`, or
+  `C:\Windows` when `SystemRoot` is absent or relative.
 - Same-family read-only QA found and reproduced a UTF-8 prefix boundary overflow;
   it was fixed with a regression test. Cross-family review remains pending under
   this task's no-network restriction; no provider CLI was invoked.
+
+Known limits:
+
+- A renamed but unchanged file is classified `introduced`.
+- A line changed and then reverted inside the range is `introduced`.
+- A relative command containing a separator (for example `./gradlew`) reports
+  "not found on PATH".
+- User paths containing `& ! % ^` make a shim unusable (fail-closed).
+- Before M5, decide whether a reviewed repository's own `quorum.config.json` may
+  define checks: doing so would run commands from an untrusted PR.

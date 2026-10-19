@@ -71,6 +71,7 @@ export interface ReviewContext {
   mode: 'feature' | 'redesign';
   diff: string;
   baseCommit: string;
+  requestedBaseCommit?: string;
   headCommit: string;
   worktreeRoot: string;
   touchedFiles: string[];

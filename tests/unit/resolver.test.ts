@@ -8,6 +8,14 @@ const windows = {
 };
 
 describe('resolveCommand', () => {
+  it.each(['cmd.exe', '.\\cmd.exe', 'C:\\missing\\cmd.exe', ''])('ignores invalid ComSpec %j', COMSPEC => {
+    expect(resolveCommand('pnpm', [], { ...windows, env: { ...windows.env, COMSPEC } }).file)
+      .toBe('C:\\Windows\\System32\\cmd.exe');
+  });
+  it.each(['D:\\Windows', 'relative'])('uses only an absolute SystemRoot: %s', SystemRoot => {
+    expect(resolveCommand('pnpm', [], { ...windows, env: { ...windows.env, SystemRoot } }).file)
+      .toBe(SystemRoot === 'relative' ? 'C:\\Windows\\System32\\cmd.exe' : 'D:\\Windows\\System32\\cmd.exe');
+  });
   it('testResolver_PosixDirect', () => {
     expect(resolveCommand('git', ['status'], { platform: 'linux', cwd: '/repo',
       env: { PATH: '/usr/bin' }, exists: file => file === '/usr/bin/git' }))

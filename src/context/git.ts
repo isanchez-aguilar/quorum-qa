@@ -1,4 +1,5 @@
 import type { CommandRunner } from '../types/index.js';
+import { realpath } from 'node:fs/promises';
 import { resolveCommand } from '../checks/resolver.js';
 import { CommandOutputLimitError } from '../process/runner.js';
 
@@ -11,7 +12,7 @@ export function validateRef(ref: string, allowRange = true): void {
 }
 
 export async function git(args: string[], cwd: string, runner: CommandRunner) {
-  const resolved = resolveCommand('git', args, { cwd });
+  const resolved = resolveCommand('git', ['-c', 'color.ui=false', '-c', 'core.quotePath=false', ...args], { cwd });
   return runner(resolved.file, resolved.args, { cwd, timeoutMs: 30_000,
     windowsVerbatimArguments: resolved.windowsVerbatimArguments });
 }
@@ -35,8 +36,9 @@ export async function mergeBase(base: string, head: string, cwd: string, runner:
 
 export async function diffRange(range: string, cwd: string, runner: CommandRunner): Promise<string> {
   validateRef(range);
+  await requireWorktreeRoot(cwd, runner);
   try {
-    return await output(['diff', '--no-ext-diff', '--no-textconv', '--unified=3', range, '--'], cwd, runner);
+    return await output(['diff', ...DIFF_OPTIONS, '--unified=3', range, '--'], cwd, runner);
   } catch (error) {
     if (error instanceof CommandOutputLimitError && error.exitCode === 0) {
       return error.stdout + '\n[Quorum: command output truncated]\n';
@@ -47,7 +49,8 @@ export async function diffRange(range: string, cwd: string, runner: CommandRunne
 
 export async function changedFiles(range: string, cwd: string, runner: CommandRunner): Promise<Array<{ status: string; path: string }>> {
   validateRef(range);
-  const text = await output(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', '-z', range, '--'], cwd, runner);
+  await requireWorktreeRoot(cwd, runner);
+  const text = await output(['diff', ...DIFF_OPTIONS, '--name-status', '-z', range, '--'], cwd, runner);
   const fields = text.split('\0');
   fields.pop();
   if (fields.length % 2) throw new Error('Incomplete git changed-files output');
@@ -58,6 +61,7 @@ export async function changedFiles(range: string, cwd: string, runner: CommandRu
 
 export async function fileExistsAtCommit(commit: string, file: string, cwd: string, runner: CommandRunner): Promise<boolean> {
   validateRef(commit, false);
+  await requireWorktreeRoot(cwd, runner);
   // Resolve the commit first so a missing revision is not mistaken for a new file.
   const sha = await revParse(commit, cwd, runner);
   if (!file || file.includes('\0')) throw new Error('Invalid git path');
@@ -69,4 +73,12 @@ export async function fileExistsAtCommit(commit: string, file: string, cwd: stri
 
 export async function worktreeRoot(cwd: string, runner: CommandRunner): Promise<string> {
   return (await output(['rev-parse', '--show-toplevel'], cwd, runner)).trim();
+}
+
+const DIFF_OPTIONS = ['--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--no-renames', '--no-ext-diff', '--no-textconv'];
+
+export async function requireWorktreeRoot(cwd: string, runner: CommandRunner): Promise<string> {
+  const root = await worktreeRoot(cwd, runner);
+  if (await realpath(cwd) !== await realpath(root)) throw new Error('cwd must be the repository root');
+  return root;
 }

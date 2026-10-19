@@ -36,8 +36,11 @@ export function resolveCommand(command: string, args: string[], options: Resolve
       const character = part.match(/[&|<>^%!;"\r\n\0]/)?.[0];
       if (character) throw new Error(`Disallowed command metacharacter: ${character === '\r' ? 'CR' : character === '\n' ? 'LF' : character === '\0' ? 'NUL' : character}`);
     }
+    const comspec = value('ComSpec');
+    const systemRoot = value('SystemRoot');
     return {
-      file: value('ComSpec') ?? 'C:\\Windows\\System32\\cmd.exe',
+      file: comspec && paths.isAbsolute(comspec) && exists(comspec) ? comspec
+        : paths.join(systemRoot && paths.isAbsolute(systemRoot) ? systemRoot : 'C:\\Windows', 'System32', 'cmd.exe'),
       args: ['/d', '/s', '/c', `"${[file, ...args].map(part => `"${part}"`).join(' ')}"`],
       windowsVerbatimArguments: true,
     };
