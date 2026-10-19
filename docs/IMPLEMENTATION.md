@@ -1135,6 +1135,12 @@ Minimal pinned dependency list. Strict adherence to exact versions, favoring Nod
 
 Each assumption listed below represents an unverified CLI behavior or interface contract requiring an explicit probe:
 
+10. **`[ASSUMPTION 10]` Claude JSON result envelope — envelope settled, live review not yet.**
+    - **Recorded on 2026-10-19** (claude 2.1.285, two real calls): `{ "type": "result", "subtype": "success", "is_error": true, "terminal_reason": "api_error", "result": "Failed to authenticate: OAuth session expired and could not be refreshed", "usage": {...}, ... }`, with exit code 1. **`subtype` can be "success" while `is_error` is true**, so failure must be read from `is_error`, as the adapter does.
+    - The CLI login on Isaac's machine had expired, and clearing the inherited `CLAUDE_CODE_*` variables made no difference. The adapter and doctor now report this as "claude login expired or missing: run `claude` and sign in", with a regression test on the recorded shape.
+    - **Still unverified:** a successful Claude review, until the CLI login is renewed.
+    - Original note: The v1.x adapter accepts a string `result` with `subtype: "success"` and no `is_error: true`; usage token counts are optional. Explicit failures use `is_error`/`subtype`, while unknown shapes become parse failures and escalate under rule 4. Quota detection reads only stderr and error fields on failed calls, never answer text. Tests use synthetic envelopes. Settle this with one explicitly authorized `doctor --probe` call and a scrubbed recording; no such call was made during implementation.
+
 9. **`[ASSUMPTION 9]` default reproduction image digest — partly settled.** On 2026-10-19 Claude read the index digest from the registry with `docker buildx imagetools inspect node:22-bookworm-slim` (`sha256:c3de60bf…978392`). The constant in `src/reproduce/isolation.ts` now uses it; the digest Codex had pinned did not match the registry. Still open: actual container behaviour (volume seeding, the report wrapper, vitest under `--read-only`), because the Docker daemon was not running. Run `QUORUM_CONTAINER_TESTS=1 pnpm vitest run tests/container` with Docker Desktop started to settle it.
 
 1. **`[ASSUMPTION 1]` agy write and shell deny rule names:**
@@ -1143,7 +1149,7 @@ Each assumption listed below represents an unverified CLI behavior or interface 
    - *Cheapest Probe:* read agy's own docs on permissions; no inference needed.
 2. **`[ASSUMPTION 2]` claude CLI Headless Mode Flags:**
    - *Settled:* Codex's review confirmed `claude -p` and `--model` exist in the installed CLI. Use the aliases `sonnet` / `opus`, never a dated model id.
-   - *Still open:* the exact flag set that keeps it read-only (allowed tools only). Check with `claude --help`; no inference needed.
+   - *Settled for v1.x by Isaac's 2026-10-19 CLI facts:* Claude Code 2.1.285 supports `--restricted --strict-mcp-config --tools Read,Grep,Glob --permission-mode dontAsk`. Restricted mode ignores user/project/local settings and excludes command/code tools; strict MCP config skips MCP servers. Do not use `--bare`: it requires an API key instead of the user's OAuth login. Live behavior and the result envelope remain unverified by this implementation (see ASSUMPTION 10).
 3. **`[ASSUMPTION 3]` agy `/usage` Output Format:**
    - *Assumption:* `agy /usage` returns machine-readable text or JSON containing quota group percentages that can be parsed without inference cost.
    - *Cheapest Probe:* Run `agy /usage` in Git Bash with `MSYS_NO_PATHCONV=1` and record the stdout format.
@@ -1188,6 +1194,7 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 14. **M6 BLOCKER waiver:** `--allow-unproven` waives only BLOCKERs with fewer than two distinct model families among their independent sources plus confirmer, identically with or without `--reproduce`. A cross-family-confirmed BLOCKER stays exit 1 for every unproven reason (cap, budget, missing proposal/runtime, new code or infrastructure). Limits never relax this gate. `not-reproduced` downgrades to IMPORTANT; `reproduced` retains BLOCKER. This supersedes the broader waiver wording in decisions 4 and 12.
 15. **M6 informed host consent:** rename `--yes-run-untrusted` to `--no-host-prompt`; it automatically answers no (unproven), never authorizes execution. Before each revision's consent, show sanitized source, path and exact configured `testCommand` argv, explaining that the reviewed revision's package.json scripts, test config, setup files and dependencies also execute on the host. Strip ANSI, C0/C1 controls except newline/tab, and bidi controls. Pass only PATH plus SystemRoot/ComSpec/PATHEXT/TEMP/TMP on Windows, or HOME/TMPDIR/LANG on POSIX, never the full parent environment.
 16. **M6 installer hooks (for Isaac):** `--ignore-scripts` does not disable pnpm's `.pnpmfile.cjs`, or Yarn Berry's repository releases and plugins. Unless `reproduce.allowInstallScripts` is true, pnpm also receives `--ignore-pnpmfile`, and a Yarn `.yarnrc.yml` with top-level `yarnPath:` or `plugins:` is unproven with reason `yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)`. A minimal line scanner recognizes plain or quoted keys without a YAML dependency. Both cache keys include `.pnpmfile.cjs`, `.yarn/releases/**` and `.yarn/plugins/**`, using the same skip rules and a shared 500-file dependency metadata cap. The explicit opt-in allows these hooks as well as install scripts.
+17. **v1.x local-only coverage (2026-10-19, for Isaac):** A chunk reviewed successfully only by a local-family model is not fully reviewed: `coverage.complete` is false and the warning is `reviewed only by a local model: <files>`. As in rule 3b, a local model never stands alone, whether it found something or returned no findings. A run without BLOCKERs exits 2 when this leaves coverage incomplete. Finding-level confirmation does not replace a full review of the chunk.
 
 ---
 
@@ -2071,3 +2078,85 @@ With Docker Desktop running (engine 29.8.1, Linux), the opt-in container test an
   - **Cleanup:** no container was left behind, and the user's checkout was unchanged.
   - **Independence:** the Independence line now lists `google, openai`.
 - **ASSUMPTION 9 is settled:** the pinned digest pulls and runs, and the container path works end to end. Still not verified: Linux and macOS hosts, Podman, npm and Yarn repos, and monorepos.
+
+
+## v1.x adapters as built
+
+Implemented on 2026-10-19, replacing the M6 Claude/Qwen stubs. The CLI facts
+in Isaac's v1.x brief supersede the earlier tentative flags and optional-provider
+checks. No new dependencies, API-key configuration or credential storage were added.
+
+- Claude uses the exact recorded argv: claude -p --output-format json --model
+  <alias> --no-session-persistence --restricted --strict-mcp-config --tools
+  Read,Grep,Glob --permission-mode dontAsk. Prompts are stdin, cwd is a detached
+  review worktree, and the user's OAuth login remains available. Neither --bare
+  nor bypassPermissions is used. Restricted mode and strict MCP config protect
+  against untrusted repository settings/hooks and MCP configuration; live CLI
+  enforcement was not re-probed. The required flags are always present.
+- Claude shares the original review deadline across worktree preparation and
+  at most two attempts. Only nonzero exit plus empty stdout permits a retry,
+  and reserveRetry charges the shared M3 budget. The checkout guard runs after
+  every attempt, including errors. Dirty worktrees are discarded by the cascade;
+  cleanup preserves the primary failure. Quota remains unknown until a failed
+  call reports it in stderr, subtype or error/errors fields. Answer text never
+  determines quota. Optional finite, nonnegative usage counts become tokensUsed.
+- Unknown Claude envelopes return a non-JSON sentinel, so rule 4 escalates;
+  no nested answer can accidentally masquerade as an empty successful review.
+  Explicit CLI/error envelopes are unavailable (or quota) and tier fallback
+  applies. ASSUMPTION 10 remains open until a real result is recorded.
+- Qwen uses injected fetch (globalThis.fetch by default), no file tools and no
+  process execution. It sends the shared stable review prefix plus an explicit
+  diff-only/no-file-access instruction as the system message and the original
+  prompt as the user message. Chat requests use temperature 0, max_tokens 4096
+  and stream false. The optional config.qwen.model is a nonempty string; without
+  it, the first /models id is cached in the per-run adapter.
+- The shared loopback URL helper parses HTTP(S), accepts only 127.0.0.1, ::1
+  and localhost, rejects credentials, clears query/fragment and appends the
+  route. Redirects are errors. Models and completion bodies are read as streams
+  with a 1 MiB byte cap (including error bodies), and an AbortController covers
+  fetch plus body consumption and external cancellation. HTTP 429 always means
+  quota; other HTTP errors require quota language. Connection failures are
+  unavailable. Unknown successful chat envelopes/non-JSON escalate via rule 4.
+- Catalog aliases claude:sonnet and claude:opus keep anthropic/claude:anthropic.
+  Bare qwen resolves to the configured/discovered model, with local/qwen:local.
+  An optional resolveModel adapter hook resolves metadata before cache lookup;
+  discovery is bounded to the lesser of two seconds and remaining run time,
+  consumes no inference slot, and failure allows tier fallback. Actual model
+  identity is used by findings, ledger and cache keys. Dry-run performs no HTTP
+  and shows the configured model, or the unresolved qwen alias. Rule 3b still
+  keeps local-only findings in unconfirmed until the required review confirms.
+- Doctor runs claude --version and reports claude.path. With --probe, configured
+  Claude gets exactly one restricted stdin call in a disposable worktree to read
+  README.md's first line, without a retry or a prompt that forbids reading.
+  qwen.endpoint and qwen.model share one capped /models request; the configured
+  model must be listed, otherwise the first model is reported. The opt-in local
+  probe sends Reply with OK with a connectivity-specific system prompt, making
+  one completion call. Failures are FAIL when the provider appears in tiers,
+  otherwise WARN; unconfigured inference probes are skipped with WARN.
+- Runtime changes: src/providers/{claude,qwen,loopback,types}.ts;
+  src/{catalog,cascade}/index.ts; src/config/schema.ts; src/types/index.ts;
+  src/cli/review.ts; src/doctor/{index,checks}.ts. Tests replace stub expectations
+  and cover exact flags/stdin/cwd, retries, checkout/deadline handling, quota,
+  malformed envelopes, loopback, model selection, byte limits, cancellation,
+  cascade fallback/escalation, local quarantine, doctor and CLI/cache wiring.
+  docs/ROADMAP.md marks the first v1.x item done.
+
+Deviations/verification limits: external cross-family review and live probes were
+not run under the explicit prohibition on provider CLIs and real Qwen requests.
+An internal read-only review found no BLOCKER or IMPORTANT; it is the same model
+family and does not replace the external review. Linux/macOS and actual Claude
+OAuth/restricted-mode behavior remain unverified. All provider calls in tests use
+injected runners/fetch and synthetic data. No branch switch, commit, push or
+repository log file was made. Existing opt-in container tests remain disabled.
+
+Final Windows validation: pnpm.cmd typecheck passed; pnpm.cmd test rebuilt the CLI
+and passed 916 tests, with 6 skipped, across 32 files (65.20 seconds). Skips are
+the existing opt-in container gate, four unavailable Windows file-symlink cases
+and one inherited skip. git diff --check passed. The branch remains
+feat/v1x-claude-qwen, with all changes uncommitted.
+
+## v1.x on a real machine (2026-10-19)
+
+`quorum doctor --probe` was run on Isaac's machine with this branch: `qwen.endpoint` PASS, `qwen.model` PASS (`qwen3-coder-next`), and `qwen.probe` PASS. That probe is one real chat completion to the local server, which answered "OK". `claude.path` PASS. `claude.probe` FAIL, because the CLI login had expired (ASSUMPTION 10 has the recorded envelope). agy and codex probes PASS.
+
+**Not verified:** a full review through the Qwen adapter, and a successful Claude review.

@@ -1,41 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { FakeProvider } from '../../src/providers/fake.js';
-import { ClaudeProvider } from '../../src/providers/claude.js';
-import { QwenProvider } from '../../src/providers/qwen.js';
-import { NotImplementedError, ProviderError } from '../../src/providers/types.js';
-import type { ProviderAdapter } from '../../src/providers/types.js';
-import { runCascade } from '../../src/cascade/index.js';
-import { validateConfig } from '../../src/config/schema.js';
-import { context, FakeClock, originRunner } from '../fixtures/cascade.js';
-
-it.each([ClaudeProvider, QwenProvider])('%s is an unavailable stub without calling a process or endpoint', async Provider => {
-  const runner = vi.fn();
-  const adapter = new Provider({ runner });
-  expect(await adapter.probe('synthetic')).toEqual({ available: false, error: 'not implemented in v1' });
-  expect(await adapter.getQuota('synthetic')).toBe('unknown');
-  const result = adapter.executeReview(context('.'), 'synthetic', 'review', { deadlineMs: 1000 });
-  await expect(result).rejects.toBeInstanceOf(NotImplementedError);
-  await expect(result).rejects.toBeInstanceOf(ProviderError);
-  await expect(result).rejects.toMatchObject({ kind: 'unavailable', message: 'not implemented in v1', provider: adapter.name });
-  expect(runner).not.toHaveBeenCalled();
-});
-
-it('falls back from the Claude stub to the next configured review model', async () => {
-  const runner = originRunner(process.cwd());
-  const agy = new FakeProvider('agy', 'google', runner, {
-    'gemini-3.8-flash-medium': ['invalid JSON'],
-    'gemini-4-argon-high': ['[]'],
-  });
-  const claude = new ClaudeProvider({ runner });
-  const config = validateConfig({ checks: [], tiers: {
-    triage: ['agy:gemini-3.8-flash-medium'], review: ['claude:sonnet', 'agy:gemini-4-argon-high'], confirm: [], visual: [],
-  } });
-  const result = await runCascade(context(process.cwd()), config,
-    new Map<string, ProviderAdapter>([['claude', claude], ['agy', agy]]), { gitRunner: runner, clock: new FakeClock() });
-  expect(agy.calls.map(call => call.model)).toEqual(['gemini-3.8-flash-medium', 'gemini-4-argon-high']);
-  expect(result.errors).toEqual([]);
-  expect(result.calls.some(call => call.model === 'gemini-4-argon-high' && call.status === 'ok')).toBe(true);
-});
+import { context } from '../fixtures/cascade.js';
 
 it('scripts raw outputs by model without running the injected runner', async () => {
   const runner = vi.fn();
