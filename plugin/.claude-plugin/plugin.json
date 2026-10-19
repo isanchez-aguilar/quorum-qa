@@ -1,0 +1,8 @@
+{
+  "name": "quorum",
+  "version": "0.1.0",
+  "description": "Run Quorum, a multi-model code reviewer that reports only findings verified against the code, from a Claude Code session.",
+  "author": {
+    "name": "Isaac Sanchez Aguilar"
+  }
+}

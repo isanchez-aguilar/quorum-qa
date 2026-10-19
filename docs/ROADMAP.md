@@ -17,7 +17,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 ## v1.x: more reviewers, less spend
 - [x] Working claude and qwen adapters.
 - When a chunk was reviewed only by a local model, escalate it to a non-local reviewer within budget, instead of only marking coverage incomplete (decision 17). With Qwen first in `triage` every run exits 2 today, so keep a cloud model first.
-- A thin `/quorum` skill that runs the CLI from a Claude Code session, packaged with it as a plugin.
+- A thin `/quorum` skill that runs the CLI from a Claude Code session, packaged with it as a plugin. **Done:** `plugin/` and `.claude-plugin/marketplace.json`, validated with `claude plugin validate`.
 - **Jules as a cloud reproduction lane**, only once AGENTS.md has an explicit exception for it and the exact commit can be pinned. Its test is pulled without applying it, and re-run locally before it counts as evidence.
 - The cascade policy, configurable per focus (money, auth, a11y, copy).
 - Incremental re-review (`--since`) and the cache, both on by default.
