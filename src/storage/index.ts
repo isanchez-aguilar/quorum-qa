@@ -3,11 +3,73 @@ import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import type { QuotaSnapshot } from '../catalog/groups.js';
 
+// Windows reports a file that is being deleted, or held open by another process (an antivirus, the
+// indexer), as EPERM, EACCES or EBUSY for a short while; those are retried instead of losing the write.
+const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function removeWithRetry(file: string, deadline: number): Promise<void> {
+  for (;;) {
+    try { await rm(file, { force: true }); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (code === 'ENOENT') return;
+      if (!TRANSIENT.has(code) || Date.now() >= deadline) throw error;
+      await sleep(10);
+    }
+  }
+}
+
+async function retireStaleLock(file: string, deadline: number): Promise<void> {
+  if (Date.now() - (await lstat(file)).mtimeMs <= 10 * 60 * 1000) return;
+  // Serialize reclaimers, then inspect again: a delayed rename must not move a
+  // fresh owner's lock after another reclaimer has already retired the old one.
+  const guard = `${file}.reclaim`;
+  try { await mkdir(guard); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    // A reclaim takes milliseconds; a guard older than a minute was left by a crash. Retire it by
+    // renaming it to a unique name (only one process can win that rename), so the stale lock can
+    // still be broken instead of blocking the ledger forever.
+    const age = await lstat(guard).then(stat => Date.now() - stat.mtimeMs, () => 0);
+    if (age <= 60 * 1000) return;
+    const orphan = `${guard}.orphan-${randomUUID()}`;
+    try { await rename(guard, orphan); } catch { return; }
+    await rm(orphan, { recursive: true, force: true }).catch(() => undefined);
+    return retireStaleLock(file, deadline);
+  }
+  try {
+    if (Date.now() - (await lstat(file)).mtimeMs <= 10 * 60 * 1000) return;
+    const stale = `${file}.stale-${randomUUID()}`;
+    await rename(file, stale);
+    await removeWithRetry(stale, deadline);
+  } finally {
+    // The guard is an empty directory; rm needs recursive for directories.
+    for (;;) {
+      try { await rm(guard, { recursive: true, force: true }); break; }
+      catch (error) {
+        if (!TRANSIENT.has((error as NodeJS.ErrnoException).code ?? '') || Date.now() >= deadline) throw error;
+        await sleep(10);
+      }
+    }
+  }
+}
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(from, to); return; }
+    catch (error) {
+      if (!TRANSIENT.has((error as NodeJS.ErrnoException).code ?? '') || attempt >= 20) throw error;
+      await sleep(Math.min(200, 10 * 2 ** attempt));
+    }
+  }
+}
+
 export async function atomicWrite(file: string, text: string, repoRoot = process.cwd()): Promise<void> {
   await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${randomUUID()}.tmp`;
-  try { await writeFile(temporary, text, { flag: 'wx' }); await rename(temporary, file); }
+  try { await writeFile(temporary, text, { flag: 'wx' }); await renameWithRetry(temporary, file); }
   finally { await rm(temporary, { force: true }); }
 }
 
@@ -30,22 +92,49 @@ export async function appendLedger(entries: readonly unknown[], file: string, re
   await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
   let lock;
+  const lockPath = `${file}.lock`;
+  const owner = randomUUID();
+  const deadline = Date.now() + 10_000;
   for (let attempt = 0; !lock; attempt++) {
-    try { lock = await open(`${file}.lock`, 'wx'); }
+    try { lock = await open(lockPath, 'wx'); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 100) throw error;
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if ((code !== 'EEXIST' && !TRANSIENT.has(code)) || Date.now() > deadline) throw error;
       try {
-        if (Date.now() - (await lstat(`${file}.lock`)).mtimeMs > 10 * 60 * 1000) await rm(`${file}.lock`, { force: true });
-      } catch (statError) { if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError; }
-      await new Promise(resolve => setTimeout(resolve, 10));
+        await retireStaleLock(lockPath, deadline);
+      } catch (statError) {
+        const statCode = (statError as NodeJS.ErrnoException).code ?? '';
+        if ((statCode !== 'ENOENT' && !TRANSIENT.has(statCode)) || Date.now() >= deadline) throw statError;
+      }
+      await sleep(Math.min(100, 5 * 2 ** Math.min(attempt, 5)) + Math.random() * 10);
     }
   }
   try {
+    await lock.writeFile(owner, 'utf8');
     let previous = '';
     try { previous = await readFile(file, 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     await atomicWrite(file, previous + entries.map(entry => JSON.stringify(entry) + '\n').join(''), repoRoot);
-  } finally { await lock.close(); await rm(`${file}.lock`, { force: true }); }
+  } finally {
+    let cleanupError: unknown;
+    try { await lock.close(); } catch (error) { cleanupError = error; }
+    try {
+      const releaseDeadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          // Recheck ownership on every retry, including after a transient rm.
+          if (await readFile(lockPath, 'utf8') === owner) await rm(lockPath, { force: true });
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code ?? '';
+          if (code === 'ENOENT') break;
+          if (!TRANSIENT.has(code) || Date.now() >= releaseDeadline) throw error;
+          await sleep(10);
+        }
+      }
+    } catch (error) { cleanupError ??= error; }
+    if (cleanupError) throw cleanupError;
+  }
 }
 
 export async function readQuota(file: string): Promise<QuotaSnapshot> {

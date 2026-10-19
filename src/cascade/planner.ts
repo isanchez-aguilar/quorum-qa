@@ -11,6 +11,7 @@ export interface ExecutionPlan {
   context: ReviewContext;
   config: QuorumConfig;
   tiers: Record<Tier, CatalogEntry[]>;
+  routes: Record<string, CatalogEntry[]>;
   quotas: Array<{ group: string; remainingPercent: number | 'unknown'; timestamp?: string; status: 'unavailable' | 'eligible' | 'unchecked' }>;
   warnings: string[];
   payloadCharacters: number;
@@ -28,7 +29,15 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
     tiers[tier] = resolved.models;
     warnings.push(...resolved.warnings);
   }
-  const configured = new Set(Object.values(config.tiers).flat().map(ref => {
+  const routes = Object.fromEntries(Object.entries(config.escalate.routes ?? {}).map(([keyword, refs]) => {
+    const resolved = resolveTier('confirm', config, catalog, quotaSnapshot, {
+      refs, label: `route "${keyword}"`, authorFamily: context.authorFamily, nowMs, excludeLocal: true,
+    });
+    warnings.push(...resolved.warnings);
+    if (!resolved.models.length) warnings.push(`Confirmation route "${keyword}" unavailable; falling back to confirm tier.`);
+    return [keyword, resolved.models];
+  }));
+  const configured = new Set([...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()].map(ref => {
     const parsed = parseModelRef(ref, catalog);
     return `${parsed.provider}:${parsed.model}`;
   }));
@@ -46,7 +55,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
   const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));
-  return { nowMs, confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, quotas, warnings,
+  return { nowMs, confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, routes, quotas, warnings,
     chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls - confirmationReserve >= payload.chunks.length,
     payloadCharacters: payload.chunks.reduce((sum, chunk) => sum + chunk.prompt.length, 0) };
 }
@@ -74,7 +83,8 @@ export function formatDryRun(plan: ExecutionPlan): string {
     `    Payload size: ${plan.payloadCharacters} characters (not tokens)`,
     `    Review chunks: ${plan.chunkCount}; call budget ${plan.budgetCoversChunks ? 'covers' : 'does not cover'} initial triage (retries and escalation extra; time depends on providers)`,
     '  [Phase 3: Conditional Escalation Paths]',
-    `    Triggers: findings matching [${config.escalate.focus.join(', ')}] OR confidence < ${config.escalate.belowConfidence.toFixed(2)} OR BLOCKER`,
+    `    Triggers: findings matching [${[...new Set([...config.escalate.focus, ...Object.keys(plan.routes)])].join(', ')}] OR confidence < ${config.escalate.belowConfidence.toFixed(2)} OR BLOCKER`,
+    ...Object.entries(plan.routes).map(([keyword, entries]) => `    Route ${keyword}: ${entries.map(item => `${modelRef(item)} (${item.family})`).join(' -> ') || 'none available; fall back to confirm'}`),
     `    Confirm: ${names('confirm')}`, `    Local-only / parse failure / timeout -> review: ${names('review')}`,
     '    Possibly related, cross-family pairs -> confirm: same defect?',
     '  [Phase 4: Reproduction Lane]', '    Enabled: No (M6; requires opt-in)',

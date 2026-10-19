@@ -46,6 +46,38 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
 }
 
 describe('M5 zero-quota review CLI', () => {
+  it.each([
+    { limit: 12, localReview: false, code: 0, calls: 2 },
+    { limit: 1, localReview: false, code: 2, calls: 1 },
+    { limit: 12, localReview: true, code: 2, calls: 1 },
+  ])('escalates local-only chunks with CLI coverage and exit status: %j', async ({ limit, localReview, code, calls }) => {
+    await commitConfig({ ...config(), tiers: { triage: ['qwen'], review: [localReview ? 'qwen' : 'agy:pro'], confirm: [], visual: [] },
+      ...{ budget: { maxCalls: limit } } });
+    await git('add', '.'); await git('commit', '-m', 'synthetic local coverage config');
+    const agy = new FakeProvider('agy', 'google', runner, { pro: ['[]'] });
+    const qwen = new FakeProvider('qwen', 'local', runner, { qwen: ['[]'] });
+    const result = await review(agy, ['--trust-head-config'], { providers: new Map([['agy', agy], ['qwen', qwen]]) });
+    expect(result.code).toBe(code);
+    expect(result.result?.coverage.complete).toBe(code === 0);
+    expect(result.result?.calls).toHaveLength(calls);
+    expect(result.result?.warnings.some(warning => warning.includes('reviewed only by a local model:'))).toBe(code === 2);
+    if (code === 0) expect(agy.calls[0]?.prompt).toBe(qwen.calls[0]?.prompt);
+  });
+  it('preflights quota for route-only models and falls back without calling a depleted group', async () => {
+    const cfg = config();
+    Object.assign(cfg.escalate, { routes: { money: ['agy:opus'] } });
+    await commitConfig(cfg);
+    await git('add', '.'); await git('commit', '-m', 'synthetic route config');
+    const agy = new FakeProvider('agy', 'google', runner, { flash: [JSON.stringify([finding({ trigger: 'money input' })])] });
+    const getQuota = vi.spyOn(agy, 'getQuota').mockImplementation(async model => model === 'opus' ? { group: 'agy:anthropic', remainingPercent: 0 } : 'unknown');
+    const codex = new FakeProvider('codex', 'openai', runner, { codex: [JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote })] });
+    const result = await review(agy, ['--trust-head-config'], { providers: new Map([['agy', agy], ['codex', codex]]) });
+    expect(result.code).toBe(0);
+    expect(getQuota).toHaveBeenCalledWith('opus');
+    expect(agy.calls.map(call => call.model)).toEqual(['flash']);
+    expect(codex.calls).toHaveLength(1);
+    expect(result.result?.warnings.join(' ')).toMatch(/money.*fall.*confirm/i);
+  });
   it.each([undefined, 'configured-qwen'])('wires Qwen config and actual model identity through dry-run, reports, ledger and cache: %s', async model => {
     await commitConfig({ ...config(), tiers: { triage: ['qwen'], review: ['qwen'], confirm: [], visual: [] },
       ...{ qwen: { endpoint: 'http://localhost:1234/custom', ...(model ? { model } : {}) } } });

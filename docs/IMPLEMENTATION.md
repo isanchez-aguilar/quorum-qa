@@ -1194,7 +1194,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 14. **M6 BLOCKER waiver:** `--allow-unproven` waives only BLOCKERs with fewer than two distinct model families among their independent sources plus confirmer, identically with or without `--reproduce`. A cross-family-confirmed BLOCKER stays exit 1 for every unproven reason (cap, budget, missing proposal/runtime, new code or infrastructure). Limits never relax this gate. `not-reproduced` downgrades to IMPORTANT; `reproduced` retains BLOCKER. This supersedes the broader waiver wording in decisions 4 and 12.
 15. **M6 informed host consent:** rename `--yes-run-untrusted` to `--no-host-prompt`; it automatically answers no (unproven), never authorizes execution. Before each revision's consent, show sanitized source, path and exact configured `testCommand` argv, explaining that the reviewed revision's package.json scripts, test config, setup files and dependencies also execute on the host. Strip ANSI, C0/C1 controls except newline/tab, and bidi controls. Pass only PATH plus SystemRoot/ComSpec/PATHEXT/TEMP/TMP on Windows, or HOME/TMPDIR/LANG on POSIX, never the full parent environment.
 16. **M6 installer hooks (for Isaac):** `--ignore-scripts` does not disable pnpm's `.pnpmfile.cjs`, or Yarn Berry's repository releases and plugins. Unless `reproduce.allowInstallScripts` is true, pnpm also receives `--ignore-pnpmfile`, and a Yarn `.yarnrc.yml` with top-level `yarnPath:` or `plugins:` is unproven with reason `yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)`. A minimal line scanner recognizes plain or quoted keys without a YAML dependency. Both cache keys include `.pnpmfile.cjs`, `.yarn/releases/**` and `.yarn/plugins/**`, using the same skip rules and a shared 500-file dependency metadata cap. The explicit opt-in allows these hooks as well as install scripts.
-17. **v1.x local-only coverage (2026-10-19, for Isaac):** A chunk reviewed successfully only by a local-family model is not fully reviewed: `coverage.complete` is false and the warning is `reviewed only by a local model: <files>`. As in rule 3b, a local model never stands alone, whether it found something or returned no findings. A run without BLOCKERs exits 2 when this leaves coverage incomplete. Finding-level confirmation does not replace a full review of the chunk.
+17. **v1.x local-only coverage (2026-10-19, extended):** After triage, every chunk reviewed successfully only by a local-family model gets one escalation to the `review` tier, excluding local models and using its normal fallbacks. The full chunk is reviewed within the shared budget and confirmation reserve. A successful non-local review restores that chunk's coverage and its findings follow the normal flow; the original local findings still require rule 3b. If budget, quota or availability prevents this review, `coverage.complete` remains false with `reviewed only by a local model: <files>`, and a run without BLOCKERs exits 2. Finding-level confirmation never replaces a full review of the chunk, and recovering one chunk does not recover other chunks of the same file.
+18. **v1.x per-focus confirmation routes (2026-10-19):** Optional `escalate.routes` maps non-empty focus keywords to non-empty ordered model-ref lists. Keys are additional focus triggers, including keys absent from `escalate.focus`. Every ref is validated against the catalog before any call, like tier refs. Match case-insensitively using the existing substring rule; select the keyword with the earliest position in `file + '\n' + trigger + '\n' + impact`, breaking ties by configured key order. Its list replaces `confirm` for finding confirmation; no match uses `confirm`. Author-family filtering, preference for another source family, same-family independence warnings and exclusion of local confirmers still apply. Exhausted routes fall back to `confirm` with an explicit warning. Routes share quota groups, call/time budgets and the confirmation reserve with tiers. Rule 3b still requires `review`; adjudication and reproduction continue to use the `confirm` tier.
 
 ---
 
@@ -2160,3 +2161,95 @@ feat/v1x-claude-qwen, with all changes uncommitted.
 `quorum doctor --probe` was run on Isaac's machine with this branch: `qwen.endpoint` PASS, `qwen.model` PASS (`qwen3-coder-next`), and `qwen.probe` PASS. That probe is one real chat completion to the local server, which answered "OK". `claude.path` PASS. `claude.probe` FAIL, because the CLI login had expired (ASSUMPTION 10 has the recorded envelope). agy and codex probes PASS.
 
 **Not verified:** a full review through the Qwen adapter, and a successful Claude review.
+
+## v1.x routing as built
+
+Implemented on `feat/v1x-routing`, without new dependencies. Decisions 17 and 18
+above define the extended coverage rule and optional confirmation routes.
+
+- `escalate.routes` accepts arbitrary non-empty keywords and ordered, non-empty
+  lists of refs. Unknown configuration properties still fail with their path.
+  Catalog validation includes every route, even an unmatched one, before calls.
+- Selection uses the first case-insensitive substring occurrence in file,
+  trigger and impact, in that order; equal positions preserve configured key
+  order. Route keys themselves trigger escalation. No match uses `confirm`.
+  Rule 3b remains a separate required finding review for local sources.
+- Routes reuse tier resolution, author-family filtering, preference for another
+  finding family, quota groups, call/time limits and retries. Local models cannot
+  confirm. Same-family-only confirmation emits the independence warning. An
+  exhausted route warns and tries the normal confirm tier without resetting
+  attempts, quota or budget. Adjudication and reproduction keep their tier routes.
+- Confirmation independence warnings also apply when no route matches or a
+  route falls back to the confirm tier; the tier name labels those warnings.
+  For a local finding requiring both review and confirmation, the second call
+  prefers a family outside **all** existing sources (local and the review
+  confirmer). A money route of Argon then Codex therefore selects Codex after
+  Argon reviewed the local finding; an Argon-only route warns.
+- Ledger locks contain a unique UUID owner token. Expired locks are renamed to
+  unique `.stale-<uuid>` paths before deletion, never deleted at the shared path.
+  A short-lived `.lock.reclaim` directory serializes stale-lock inspections and
+  renames, with a second age check inside it: rename alone cannot prevent a
+  delayed reclaimer from moving a newly acquired lock. Release checks the token
+  on every attempt and runs even if closing the handle fails. Transient Windows
+  inspection/deletion errors retry within ten seconds; atomic replacement still
+  retries transient rename errors. The reclaim directory is removed in `finally`.
+  Abrupt process termination during reclamation can leave that directory behind;
+  reclamation then fails closed at the deadline rather than stealing a lock.
+  Removing such an orphan requires establishing that no reclaimer is active.
+- Each successfully parsed local-only chunk gets a full non-local review pass,
+  with review-tier fallback. Its findings join the normal verifier/confirmation
+  flow while the original local findings retain rule 3b. Only unresolved chunks
+  retain the local-only coverage warning; coverage is tracked per chunk even
+  when a file spans multiple chunks. Review calls preserve the existing
+  confirmation reserve while escalation candidates remain.
+- Dry-run displays routes and their quota groups without calls. CLI quota
+  preflight and doctor also include models configured only in routes.
+- Regression tests use only synthetic fixtures, fake providers, injected
+  runners/fetch and clocks. Before implementation, the focused routing suite
+  reported 29 failures and 5 passing controls; integration regressions separately
+  reproduced the local-only exit-2 behavior and missing route preflight/doctor
+  handling. Tests also cover budgets, independence, fallback and rule 3b.
+
+Verification limits: no provider CLI, real Qwen request or cross-provider review
+was run under the explicit task prohibition. Internal QA is from the same model
+family and does not replace cross-provider review. Linux/macOS and live provider
+behavior remain unverified. No branch switch, commit, push or repository log was
+created. Container tests remain opt-in and are disabled for this validation.
+
+Final Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test` rebuilt
+the CLI and passed **971 tests**, with **6 existing skips**, across 35 files
+(62.07 seconds, `QUORUM_CONTAINER_TESTS=0`). `git diff --check` passed.
+The first full run exposed two reproduction fixtures that lacked the new full
+chunk-review response; adding that response and asserting the three-call flow
+kept decision 14's cross-family BLOCKER exit 1 intact. Four additional QA cases
+failed on isolated HEAD sources and passed after implementation, covering
+multiple chunks in one file and retry accounting against the reserve. Internal
+read-only QA reported no remaining findings.
+
+Files changed: `src/cascade/{index,planner}.ts`, `src/catalog/tiers.ts`,
+`src/config/schema.ts`, `src/types/index.ts`, `src/cli/review.ts`,
+`src/doctor/index.ts`; `tests/unit/{routing,routing-qa,cascade,qwen}.test.ts`,
+`tests/integration/{review,doctor,reproduce}.test.ts`; and
+`docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`. The planner/doctor quota wiring and
+configuration example are supporting changes for routes. No functional
+deviation from the brief is intended; cross-provider review was omitted as
+required by the prohibition above.
+
+Post-Gemini regression fixes: `tests/unit/storage-lock.test.ts` adds 11 cases
+using wrappers around real filesystem functions: two synchronized stale readers
+(the second resumes after fresh acquisition), transient open/rename errors,
+EPERM/EACCES/EBUSY on stale inspection and deletion, EBUSY on release, failing
+close, and replacement ownership. `tests/unit/routing-independence.test.ts`
+adds four cases for unmatched routes, route fallback, and the two local money
+confirmation routes above. All **15 tests failed against the pre-fix HEAD
+sources** and pass with the fixes. The pre-fix sources were restored temporarily
+in the same checkout for validation, then the fixes restored in `finally`; no
+branch switch, provider call, log file, commit or push was used.
+
+Post-fix Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+(`QUORUM_CONTAINER_TESTS=0`) rebuilt the CLI and passed **987 tests**, with
+**6 skips**, across **37 files** (66.76 seconds). The focused command was
+`pnpm.cmd exec vitest run tests/unit/storage-lock.test.ts tests/unit/routing-independence.test.ts`.
+`git diff --check` passed. Changed files for this follow-up are
+`src/storage/index.ts`, `src/cascade/index.ts`, the two regression test files
+above, and this document. Provider review and Linux/macOS remain unverified.

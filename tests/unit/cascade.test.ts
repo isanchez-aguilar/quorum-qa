@@ -99,8 +99,8 @@ describe('fake provider cascade', () => {
     expect(only.findings).toEqual([]);
     expect(only.unconfirmed).toHaveLength(1);
     expect(only.warnings.join(' ')).toContain('local model only');
-    const confirmed = await runCascade(context(root), cfg, providers({ qwen: { qwen: [JSON.stringify([finding()])] }, agy: { pro: [yes()] } }), { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
-    expect(confirmed.calls.map(call => call.tier)).toEqual(['triage', 'review']);
+    const confirmed = await runCascade(context(root), cfg, providers({ qwen: { qwen: [JSON.stringify([finding()])] }, agy: { pro: ['[]', yes()] } }), { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
+    expect(confirmed.calls.map(call => call.tier)).toEqual(['triage', 'review', 'review']);
     expect(confirmed.findings).toHaveLength(1);
     expect(confirmed.unconfirmed).toEqual([]);
   });
@@ -226,9 +226,9 @@ describe('fake provider cascade', () => {
   });
   it.each([true, false])('local money BLOCKER requires both tiers: %s', async available => {
     const cfg = config({ tiers: { triage: ['qwen'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
-    const pool = providers({ qwen: { qwen: [JSON.stringify([finding({ severity: 'BLOCKER', trigger: 'money rounding' })])] }, agy: { pro: [yes()] }, ...(available ? { codex: { codex: [yes()] } } : {}) });
+    const pool = providers({ qwen: { qwen: [JSON.stringify([finding({ severity: 'BLOCKER', trigger: 'money rounding' })])] }, agy: { pro: ['[]', yes()] }, ...(available ? { codex: { codex: [yes()] } } : {}) });
     const result = await runCascade(context(root), cfg, pool, { gitRunner: originRunner(root), catalog, clock: new FakeClock() });
-    expect(result.calls.map(call => call.tier)).toEqual(available ? ['triage', 'review', 'confirm'] : ['triage', 'review']);
+    expect(result.calls.map(call => call.tier)).toEqual(available ? ['triage', 'review', 'review', 'confirm'] : ['triage', 'review', 'review']);
     expect(result.findings).toHaveLength(available ? 1 : 0);
     expect(result.unconfirmed).toHaveLength(available ? 0 : 1);
     if (available) expect(result.findings[0]?.confidence).toBe(0.9);

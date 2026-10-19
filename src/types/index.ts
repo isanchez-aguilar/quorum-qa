@@ -96,6 +96,7 @@ export interface QuorumConfig {
   author?: string;
   tiers: Record<Tier, string[]>;
   escalate: {
+    routes?: Record<string, string[]>;
     focus: string[];
     belowConfidence: number;
   };

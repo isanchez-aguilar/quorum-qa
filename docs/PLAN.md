@@ -176,6 +176,27 @@ Guardrails (lessons from running Jules by hand, and from the review of this plan
 
 Each check is an argv array, not a string, so a config can't chain commands. Quorum runs it with `spawn` and no shell. **Windows:** tools like `pnpm` are `.cmd` shims, and Node can't spawn those without a shell. The runner resolves the program through `PATH` and `PATHEXT`. For a `.cmd` or `.bat` it runs `cmd.exe /d /s /c` with every argument quoted. It refuses any argument that contains cmd metacharacters (`& | < > ^ % !`, quotes or newlines). M2 tests this resolver.
 
+Optional per-focus confirmation routes can be added to `escalate`:
+
+```json
+{
+  "focus": ["money", "auth", "permissions"],
+  "belowConfidence": 0.7,
+  "routes": {
+    "money": ["codex", "claude:opus"],
+    "a11y": ["agy:gemini-4-argon-high"],
+    "copy": ["agy:gemini-3.8-flash-high"]
+  }
+}
+```
+
+Route keys also trigger escalation. The earliest case-insensitive substring in
+the finding's file, trigger, then impact selects the route (configuration order
+breaks ties). Without a match, or if the route is exhausted, confirmation uses
+the `confirm` tier; exhaustion emits a warning. Routes use the same family rules,
+quota groups and budget as tiers. A locally reviewed chunk also receives a full
+non-local `review` pass within budget before its coverage can be complete.
+
 ## Review modes
 
 | Mode | v1? | What it does |
