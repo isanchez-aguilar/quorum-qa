@@ -62,7 +62,7 @@ export function parseTestReport(raw: unknown, worktreeRoot = '/work'): TestRepor
       if (test.status === 'failed') {
         const messages = (assertion.failureMessages as string[]).map(cleanMessage);
         for (const message of messages) {
-          if (infrastructureReason(message)) report.suiteErrors.push(message);
+          if (failureKind(message, assertion.failureDetails) !== 'assertion' && infrastructureReason(message)) report.suiteErrors.push(message);
         }
         const message = messages[0] ?? '';
         const kinds = messages.map(item => failureKind(item, assertion.failureDetails));
@@ -98,14 +98,15 @@ export function passedAtBase(report: TestReport, testFile: string): boolean {
 }
 
 export function infrastructureReason(output: string): string | undefined {
-  if (/worker[^\r\n]*(?:crash|exit|died)|out of memory|\b(?:ENOSPC|EMFILE|ENOMEM|SIG[A-Z0-9]+)\b|\bkilled\b|\bsignal\b/i.test(output)) return 'test infrastructure failure';
+  if (/worker[^\r\n]*(?:crash|exit|died)|out of memory|\b(?:ENOSPC|EMFILE|ENOMEM)\b|\bprocess (?:was )?killed\b|\bexited with signal\b|\bterminated by signal\b/i.test(output)
+    || /\b(?:SIGKILL|SIGSEGV|SIGTERM|SIGABRT|SIGBUS|SIGILL|SIGFPE)\b/.test(output)) return 'test infrastructure failure';
   if (/\b(?:EROFS|EACCES)\b[^\r\n]*(?:cache|node_modules|\.vite)|(?:cache|node_modules|\.vite)[^\r\n]*\b(?:EROFS|EACCES)\b/i.test(output)) return 'cache is not writable';
   if (/\bcommand not found\b|\bexecutable file not found\b|\bspawn [^\r\n]+ ENOENT\b/i.test(output)) return 'command not found';
   return undefined;
 }
 
 export function infrastructureFailure(report: TestReport | null, diagnostic = '', testFile?: string): string | undefined {
-  const reason = infrastructureReason([diagnostic, ...(report?.suiteErrors ?? []), ...(report?.tests.map(test => test.message ?? '') ?? [])].join('\n'));
+  const reason = infrastructureReason([diagnostic, ...(report?.suiteErrors ?? [])].join('\n'));
   if (reason) return reason;
   if (report === null) return 'missing test report';
   if (testFile !== undefined && report.suiteFiles?.length && !report.suiteFiles.some(file => normalizeFile(file) === normalizeFile(testFile))) {

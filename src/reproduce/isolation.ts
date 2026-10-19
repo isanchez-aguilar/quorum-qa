@@ -47,16 +47,15 @@ const PREPARATION_LIMITS = ['--security-opt', 'no-new-privileges', '--cap-drop',
 // Walking includes workspaces regardless of which manager/glob syntax they use.
 export async function dependencyKey(root: string, lockfile: string, manager: string, version: string, image: string, scripts: boolean): Promise<string> {
   const inputs: string[] = [];
-  let manifests = 0;
   let directories = 0;
   async function walk(relative = '', inPatches = false): Promise<void> {
     if (++directories > 10000) throw new Error('dependency metadata directory cap exceeded');
     for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
       if (entry.name === 'node_modules' || entry.name === '.git') continue;
       const name = relative ? `${relative}/${entry.name}` : entry.name;
-      const patches = inPatches || entry.name === 'patches';
+      const patches = inPatches || entry.name === 'patches' || name === '.yarn/releases' || name === '.yarn/plugins';
       const selected = inPatches || entry.name === 'package.json'
-        || !relative && [lockfile, '.npmrc', '.yarnrc.yml', 'pnpm-workspace.yaml'].includes(entry.name);
+        || !relative && [lockfile, '.npmrc', '.yarnrc.yml', '.pnpmfile.cjs', 'pnpm-workspace.yaml'].includes(entry.name);
       if (entry.isSymbolicLink()) {
         if (selected || patches) throw new Error('symlink dependency metadata');
         continue;
@@ -64,7 +63,7 @@ export async function dependencyKey(root: string, lockfile: string, manager: str
       if (entry.isDirectory()) { await walk(name, patches); continue; }
       if (selected) {
         if (!entry.isFile()) throw new Error('invalid dependency metadata');
-        if (entry.name === 'package.json' && ++manifests > 500) throw new Error('package.json cap exceeded (500)');
+        if (inputs.length >= 500) throw new Error('dependency metadata file cap exceeded (500)');
         inputs.push(name);
       }
     }
@@ -162,6 +161,16 @@ export async function runIsolatedTest(
     const managerName = manager[1]!;
     const lockfile = managerName === 'pnpm' ? 'pnpm-lock.yaml' : managerName === 'npm' ? 'package-lock.json' : 'yarn.lock';
     await regularFile(root, lockfile);
+    if (managerName === 'yarn' && !config.allowInstallScripts) {
+      const yarnConfig = await regularFile(root, '.yarnrc.yml').catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+        throw error;
+      });
+      // A bounded line scanner, not a YAML evaluator: only top-level keys.
+      if (yarnConfig.replace(/^\uFEFF/, '').split(/\r?\n/).some(line => /^(?:yarnPath|plugins|"(?:yarnPath|plugins)"|'(?:yarnPath|plugins)')[ \t]*:/.test(line))) {
+        return failure('yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)');
+      }
+    }
     let image = config.image ?? DEFAULT_REPRODUCE_IMAGE;
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$/.test(image)) return failure('preparation failed: invalid image reference');
     if (!/@sha256:[a-f0-9]{64}$/.test(image)) {
@@ -208,6 +217,7 @@ export async function runIsolatedTest(
       const command = managerName === 'pnpm' ? ['pnpm', 'install', '--frozen-lockfile']
         : managerName === 'npm' ? ['npm', 'ci'] : ['yarn', 'install', '--immutable'];
       if (!config.allowInstallScripts) command.push(managerName === 'yarn' ? '--mode=skip-build' : '--ignore-scripts');
+      if (managerName === 'pnpm' && !config.allowInstallScripts) command.push('--ignore-pnpmfile');
       const prepare = await runAuxiliary(['--rm', '--network', networkOn, '--user', '1000:1000',
         ...PREPARATION_LIMITS, '--workdir', '/work', ...preparationMounts, ...CACHE_ENV,
         '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', preparedImage, ...command]);

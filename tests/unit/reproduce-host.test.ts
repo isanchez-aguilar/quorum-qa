@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { hostEnvironment, sanitizeHostDisplay } from '../../src/reproduce/index.js';
 
+it('strips zero-width and Unicode line separators while preserving newline and tab', () => {
+  expect(sanitizeHostDisplay('a\u200b\u200c\u200d\u2060\ufeff\u2028\u2029b\n\tc')).toBe('ab\n\tc');
+});
+
 describe('informed host execution', () => {
   it('strips ANSI, C0/C1 and bidi controls but preserves newline and tab', () => {
     const controls = Array.from({ length: 160 }, (_, i) => i)

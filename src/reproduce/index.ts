@@ -30,7 +30,7 @@ export type ReproductionOutcome = {
 };
 
 export function sanitizeHostDisplay(text: string): string {
-  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
+  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/g, '');
 }
 
 export function hostEnvironment(platform = process.platform, source = process.env): NodeJS.ProcessEnv {

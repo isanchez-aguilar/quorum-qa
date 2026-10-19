@@ -119,6 +119,24 @@ describe('evaluation', () => {
 });
 
 describe('infrastructure classification', () => {
+  it.each(['signature accepted for tampered payload', 'user was signed out', 'expected signal to abort', 'process was killed', 'Process exited with signal SIGKILL', 'out of memory'])
+  ('does not classify assertion text as infrastructure: %s', async text => {
+    const raw = await fixture('vitest');
+    const message = `AssertionError: ${text}`;
+    raw.testResults[0].assertionResults[0].failureMessages = [message];
+    const parsed = parseTestReport(raw)!;
+    expect(infrastructureFailure(parsed)).toBeUndefined();
+    expect(evaluateReproduction(parsed, testFile, text)).toBe('assertion-failure-matching');
+    expect(infrastructureFailure(report([test({ message })]))).toBeUndefined();
+  });
+  it.each(['signature accepted for tampered payload', 'user was signed out', 'expected signal to abort', 'killed', 'sigkill', 'SIGKILLING'])
+  ('does not infer infrastructure from ordinary suite text: %s', message => {
+    expect(infrastructureFailure({ ...report(), suiteErrors: [message] })).toBeUndefined();
+  });
+  it.each(['Worker terminated due to reaching memory limit: JS heap out of memory', 'Process exited with signal SIGKILL', 'process was killed', 'terminated by signal', 'SIGSEGV', 'SIGTERM', 'SIGABRT', 'SIGBUS', 'SIGILL', 'SIGFPE'])
+  ('recognizes suite infrastructure: %s', message => {
+    expect(infrastructureFailure({ ...report(), suiteErrors: [message] })).toBe('test infrastructure failure');
+  });
   it('keeps missing or skipped targets unproven even alongside unrelated suite errors', () => {
     const missing = parseTestReport({ testResults: [{ name: '/work/other.test.ts', message: 'SyntaxError: invalid', assertionResults: [] }] })!;
     expect(infrastructureFailure(missing, '', testFile)).toBe('target test missing from report');

@@ -1187,6 +1187,7 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 13. **M6 install scripts and preparation:** install scripts default off: `pnpm install --frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts`, or `yarn install --immutable --mode=skip-build`. Validated `reproduce.allowInstallScripts: true` explicitly enables them and is disclosed in the report. Preparation has network access to fetch packages, runs as UID/GID 1000 with no-new-privileges, all capabilities dropped, 2 GiB memory, 512 PIDs, 2 CPUs, a read-only root and tmpfs `/tmp`. The worktree bind is read-only; the dependency volume is the only writable persistent mount.
 14. **M6 BLOCKER waiver:** `--allow-unproven` waives only BLOCKERs with fewer than two distinct model families among their independent sources plus confirmer, identically with or without `--reproduce`. A cross-family-confirmed BLOCKER stays exit 1 for every unproven reason (cap, budget, missing proposal/runtime, new code or infrastructure). Limits never relax this gate. `not-reproduced` downgrades to IMPORTANT; `reproduced` retains BLOCKER. This supersedes the broader waiver wording in decisions 4 and 12.
 15. **M6 informed host consent:** rename `--yes-run-untrusted` to `--no-host-prompt`; it automatically answers no (unproven), never authorizes execution. Before each revision's consent, show sanitized source, path and exact configured `testCommand` argv, explaining that the reviewed revision's package.json scripts, test config, setup files and dependencies also execute on the host. Strip ANSI, C0/C1 controls except newline/tab, and bidi controls. Pass only PATH plus SystemRoot/ComSpec/PATHEXT/TEMP/TMP on Windows, or HOME/TMPDIR/LANG on POSIX, never the full parent environment.
+16. **M6 installer hooks (for Isaac):** `--ignore-scripts` does not disable pnpm's `.pnpmfile.cjs`, or Yarn Berry's repository releases and plugins. Unless `reproduce.allowInstallScripts` is true, pnpm also receives `--ignore-pnpmfile`, and a Yarn `.yarnrc.yml` with top-level `yarnPath:` or `plugins:` is unproven with reason `yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)`. A minimal line scanner recognizes plain or quoted keys without a YAML dependency. Both cache keys include `.pnpmfile.cjs`, `.yarn/releases/**` and `.yarn/plugins/**`, using the same skip rules and a shared 500-file dependency metadata cap. The explicit opt-in allows these hooks as well as install scripts.
 
 ---
 
@@ -1887,14 +1888,25 @@ flag there are no proposal calls, test writes or runtime probes.
   `reproduce.allowInstallScripts: true` opt-in enables them and appears in report
   warnings. Preparation uses the commands and hardening recorded in section 12.
   Network is on (Docker `default`, Podman `private`) to fetch packages.
+- **Decision 16:** pnpm also uses `--ignore-pnpmfile` by default. Yarn configuration
+  with top-level `yarnPath` or `plugins` keys is unproven before preparation;
+  `allowInstallScripts: true` explicitly permits those repository hooks. The
+  scanner handles plain and quoted keys, ignoring comments and nested keys.
 - Both `quorum-prep:<hash>` and `quorum-deps-<hash>` use SHA-256 over the
   lockfile, every package.json (repository walk skips node_modules and .git,
-  maximum 500 manifests), .npmrc, .yarnrc.yml, pnpm-workspace.yaml, every patches/
+  maximum 500 selected files total), .npmrc, .yarnrc.yml, .pnpmfile.cjs,
+  .yarn/releases/**, .yarn/plugins/**, pnpm-workspace.yaml, every patches/
   directory's contents, manager/version, image digest and scripts mode. Paths
   and raw bytes are hashed in sorted order. Tagged custom images are resolved
   to a digest before deriving the key. Head and base compute their own keys;
   identical input sets share a cache, changed manifests do not. Metadata symlinks,
   oversized files and discovery limits fail unproven rather than using partial keys.
+- Infrastructure classification excludes assertion messages. Signals use exact,
+  case-sensitive names (SIGKILL, SIGSEGV, SIGTERM, SIGABRT, SIGBUS, SIGILL,
+  SIGFPE), or process termination phrases in suite errors and diagnostics.
+  Ordinary words such as signature, signed, signal and killed are not evidence.
+- Host display sanitization also removes U+200B–200D, U+2060, U+FEFF,
+  U+2028 and U+2029, preserving ordinary newlines and tabs.
 - The generated Dockerfile-only context installs the pinned manager and initializes
   the volume for UID 1000; no repository data is copied into the image. Image labels
   and .quorum-ready record the full key. An orphan or incompatible marker causes

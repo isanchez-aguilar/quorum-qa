@@ -28,6 +28,42 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
+it.each(['yarnPath: .yarn/releases/yarn.cjs', 'plugins:\n  - path: .yarn/plugins/plugin.cjs', '"yarnPath": local.cjs', "'plugins': []"])
+('rejects repository Yarn code without opt-in: %s', async contents => {
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.0.0' }));
+  await writeFile(path.join(root, 'yarn.lock'), lock);
+  await writeFile(path.join(root, '.yarnrc.yml'), contents);
+  const runner = vi.fn<CommandRunner>(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+  const result = await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver });
+  expect(result).toMatchObject({ report: null, reason: 'yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)' });
+  expect(runner.mock.calls.some(([, args]) => args[0] === 'run' || args[0] === 'build')).toBe(false);
+  runner.mockClear();
+  await runIsolatedTest(root, 'src/repro.test.ts', { ...config, allowInstallScripts: true }, runner, { resolveOptions: resolver });
+  expect(runner.mock.calls.some(([, args]) => args.includes(REPORT_WRAPPER))).toBe(true);
+});
+
+it.each(['.yarn/plugins', '.yarn/releases'])('caps repository code files and skips ignored directories in %s', async directory => {
+  const key = () => dependencyKey(root, 'pnpm-lock.yaml', 'pnpm', '10.0.0', DEFAULT_REPRODUCE_IMAGE, false);
+  await mkdir(path.join(root, directory), { recursive: true });
+  const first = await key();
+  for (const ignored of ['node_modules', '.git']) {
+    await mkdir(path.join(root, directory, ignored));
+    await writeFile(path.join(root, directory, ignored, 'ignored.cjs'), 'ignored');
+  }
+  expect(await key()).toBe(first);
+  await Promise.all(Array.from({ length: 501 }, (_, i) => writeFile(path.join(root, directory, `${i}.cjs`), 'synthetic')));
+  await expect(key()).rejects.toThrow('500');
+});
+
+it('ignores comments and nested Yarn keys in the top-level scanner', async () => {
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.0.0' }));
+  await writeFile(path.join(root, 'yarn.lock'), lock);
+  await writeFile(path.join(root, '.yarnrc.yml'), '# yarnPath: ignored.cjs\n# plugins: []\nother:\n  yarnPath: nested\n  plugins: []\n');
+  const runner = vi.fn<CommandRunner>(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+  await runIsolatedTest(root, 'src/repro.test.ts', config, runner, { resolveOptions: resolver });
+  expect(runner.mock.calls.some(([, args]) => args.includes(REPORT_WRAPPER))).toBe(true);
+});
+
 function fake(options: { cached?: boolean; diagnostic?: string; missingReport?: boolean; installFailure?: boolean; timeout?: boolean } = {}) {
   return vi.fn<CommandRunner>(async (_command, args) => {
     if (args[0] === 'image') return { stdout: options.cached ? identity : '', stderr: '', exitCode: options.cached ? 0 : 1 };
@@ -62,7 +98,7 @@ it('builds from a Dockerfile-only context and installs the pinned manager with f
   expect(prep).toEqual(['run', '--name', prep[2]!, '--rm', '--network', 'default', '--user', '1000:1000', '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL', '--memory', '2g', '--pids-limit', '512', '--cpus', '2', '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
     '--mount', `type=bind,src=${root},dst=/work,readonly`, '--mount', `type=volume,src=quorum-deps-${hash},dst=/work/node_modules`,
     '--env', 'XDG_CACHE_HOME=/tmp', '--env', 'npm_config_cache=/tmp', '--env', 'TMPDIR=/tmp',
-    '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', `quorum-prep:${hash}`, 'pnpm', 'install', '--frozen-lockfile', '--ignore-scripts']);
+    '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', `quorum-prep:${hash}`, 'pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--ignore-pnpmfile']);
 });
 
 it('runs only the proposed test with exact isolated argv and the JSON report in tmpfs', async () => {
@@ -232,6 +268,7 @@ it.each([false, true])('hardens preparation and controls install scripts (%s)', 
   await runIsolatedTest(root, 'src/repro.test.ts', { ...config, allowInstallScripts }, runner, { resolveOptions: resolver });
   const prep = runner.mock.calls.find(([, args]) => args.includes('--frozen-lockfile'))![1];
   expect(prep.includes('--ignore-scripts')).toBe(!allowInstallScripts);
+  expect(prep.includes('--ignore-pnpmfile')).toBe(!allowInstallScripts);
   for (const pair of [['--security-opt', 'no-new-privileges'], ['--cap-drop', 'ALL'], ['--memory', '2g'], ['--pids-limit', '512'], ['--cpus', '2'], ['--tmpfs', '/tmp']]) {
     expect(prep[prep.indexOf(pair[0]!) + 1]).toBe(pair[1]);
   }
@@ -268,7 +305,7 @@ it('refuses a node_modules symlink or Windows junction before mounting', async (
   expect(runner.mock.calls.some(([, args]) => args[0] === 'run')).toBe(false);
 });
 
-it.each(['packages/a/package.json', '.npmrc', '.yarnrc.yml', 'pnpm-workspace.yaml', 'patches/a.patch', 'packages/a/patches/b.patch', 'pnpm-lock.yaml'])
+it.each(['.pnpmfile.cjs', '.yarn/plugins/nested/plugin.cjs', '.yarn/releases/yarn.cjs', 'packages/a/package.json', '.npmrc', '.yarnrc.yml', 'pnpm-workspace.yaml', 'patches/a.patch', 'packages/a/patches/b.patch', 'pnpm-lock.yaml'])
 ('invalidates both image and volume when %s changes', async file => {
   const runner = fake();
   await mkdir(path.dirname(path.join(root, file)), { recursive: true });
