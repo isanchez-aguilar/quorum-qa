@@ -4,6 +4,18 @@ import { catalog, finding } from '../fixtures/cascade.js';
 
 const entry = catalog[0]!;
 
+it.each(['I reviewed file [1] carefully.', '{}'])('skips non-payload prefix %s', prefix => {
+  expect(parseFindings(prefix + JSON.stringify([finding()]), entry).findings).toHaveLength(1);
+});
+it('treats all invalid entries as parse failure', () => {
+  expect(parseFindings('[{}]', entry).error).toBeDefined();
+});
+it('caps response findings at 100', () => {
+  const result = parseFindings(JSON.stringify(Array.from({ length: 500 }, () => finding())), entry);
+  expect(result.findings).toHaveLength(100);
+  expect(result.dropped.filter(item => item.reason === 'too many findings')).toHaveLength(400);
+});
+
 describe('provider JSON parsing', () => {
   it.each([
     (json: string) => `Here is my review: ${json} End.`,
@@ -13,9 +25,9 @@ describe('provider JSON parsing', () => {
     expect(parseFindings(wrap(JSON.stringify([finding()])), entry).findings).toHaveLength(1);
   });
 
-  it('accepts a single object, a findings envelope and escaped delimiters', () => {
+  it('accepts a findings envelope and escaped delimiters', () => {
     const item = finding({ trigger: 'An input contains "] } \\"' });
-    for (const value of [item, { findings: [item] }]) {
+    for (const value of [[item], { findings: [item] }]) {
       expect(parseFindings(JSON.stringify(value), entry).findings[0]?.trigger).toBe(item.trigger);
     }
   });

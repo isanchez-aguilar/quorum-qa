@@ -1421,7 +1421,7 @@ Decisions and ambiguities:
   review; confirmation can try another model within the remaining budget.
 - JSON extraction scans balanced candidates in one pass (including bracketed
   prose), understands escaped strings, and caps raw text at 1 MiB characters.
-  Arrays, single findings and `{ "findings": [...] }` envelopes are accepted.
+  Arrays of objects and `{ "findings": [...] }` envelopes are accepted.
   Invalid entries are dropped individually. Model verification flags, identity,
   related annotations and reproduction status are never trusted. An incomplete
   outer JSON candidate is a parse failure, rather than a salvaged inner finding.
@@ -1442,10 +1442,72 @@ Decisions and ambiguities:
   tier paths, quota reading times, payload character count and budget. Context
   carries spec content rather than a spec path, so it says content was supplied;
   it prints the resolved head SHA rather than inventing a ref name. Quota times
-  are shown with the documented 15-minute staleness guidance, not refreshed.
+  are shown with a six-hour expiry; older readings are unknown, not refreshed.
   CLI wiring, full mode prompts, reproduction and ledger persistence remain in
   their later milestones.
 
 Cross-family external review remains unavailable under the task's no-network
 and no-provider-CLI restriction; the available independent review is read-only
 within the same model family.
+
+
+### M3 independent-review fixes (f19c474)
+
+These decisions supersede the original M3 notes above:
+
+- **Decision A:** rule 3b is a minimum. A local finding must pass review, and
+  rules 1/2/3 additionally require confirm. A missing required confirmation
+  leaves it unconfirmed; rejection discards it.
+- **Decision B:** a prompted confirmation is not independent corroboration.
+  Its confidence contributes only to the maximum source confidence. The family
+  boost is computed exclusively from independent triage/review sources merged
+  by strong dedupe or a positive same-defect adjudication. Confirmations never
+  create an independent source, including confirmations issued by review.
+- All four tiers and the author alias are validated before the first call.
+- Parsing skips balanced prose such as [1] and {} until an object-array or
+  findings envelope appears. Empty arrays are valid; a nonempty payload with
+  no valid entries triggers rule 4. Single bare findings are no longer payloads;
+  confirmation candidates are wrapped in arrays internally.
+- MAX_FINDINGS_PER_RESPONSE is 100. Entries after that position are dropped as
+  "too many findings". At most 20 related pairs are adjudicated per run.
+  Verification checks the call/time budget between entries, so a response that
+  consumes the last call is parsed but no new verification starts. Adjudication
+  checks budget/deadline in its loops. Previously verified findings are retained.
+- Confirmation evidence must verify in the same file within ten lines of the
+  original verified line. A distant real quote is invalid confirmation.
+- Deadline expiration has its own flag; an adapter timeout does not set it.
+  The budget warning is emitted for a skipped call or a deadline-killed call,
+  not merely because a normally completed run used its final permitted call.
+- Origin uses the separately injected gitRunner, defaulting to Quorum's
+  runCommand, never the adapter runner. Quota older than six hours (or with an
+  invalid timestamp) is unknown and cannot block a group. Untimestamped numeric
+  readings retain the existing behavior for callers without ledger timestamps.
+- Adjudicated merges retain the absorbed trigger and impact in verification_note.
+  Confirm and adjudication prompts explicitly label findings and hunks untrusted.
+  Every prompt is capped at 24,000 serialized characters: hunk/diff first, then
+  long fields, with a visible truncation marker. Reproduction proposals are
+  omitted entirely from confirm/adjudication prompts. If even shortened fields
+  cannot fit (huge collections), a marked omitted-payload envelope preserves the
+  hard cap. Planner tests assert the injected runner and no longer spy on unrelated
+  child_process exports.
+
+Regression verification: the single completed old-source run had 24 failures and
+45 passes across parser, cascade, limits and pipeline tests. New failing cases:
+[1]/{} prefixes; all-invalid entries; 100-entry cap; local money BLOCKER with and
+without confirm; invalid review/confirm/visual refs before calls; no spurious
+budget warning; distant confirmation; 500-entry Git work bound (the old version
+hit the test's then-default five-second timeout); deadline between verifications;
+20-pair cap; absorbed descriptions; explicit timeout flag; stale quota; review
+prompt cap; actual confirm/adjudication prompt cap and reproduction omission.
+Updated confidence and call-budget expectations also failed on the old sources.
+Invalid triage and author tests already passed on the old version.
+
+Validation workflow deviation: git stash was attempted once but could not create
+index.lock in the parent worktree metadata directory (outside the writable root).
+Instead, modified source bytes were saved in memory, replaced with git show HEAD
+versions for the baseline, and restored in finally. The first subprocess attempt
+stopped before tests because Windows PowerShell rejected pnpm.ps1; explicit
+pnpm.cmd ran the one completed baseline. No index, branch, commit or push changed.
+The full final typecheck/test results are reported at delivery. External review
+remains unperformed under the explicit no-provider-CLI/no-network restriction;
+Linux and macOS are not verified. No dependencies were added.

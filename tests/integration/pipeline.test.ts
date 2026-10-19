@@ -59,11 +59,11 @@ describe.skipIf(!gitPath)('M3 synthetic git pipeline', () => {
       decision: 'confirm', evidence_quote: finding().evidence_quote, fix: 'Validate input before compute',
     })] });
     const config = validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
-    const result = await runCascade(context, config, new Map([['agy', agy], ['codex', codex]]), { catalog, clock: new FakeClock() });
+    const result = await runCascade(context, config, new Map([['agy', agy], ['codex', codex]]), { gitRunner: runner, catalog, clock: new FakeClock() });
     expect(context.diff).toContain('+export const value = compute(input);');
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject({ file: 'sample.ts', line: 1, origin: 'introduced', verified: true,
-      fix: 'Validate input before compute', confidence: 0.75 });
+      fix: 'Validate input before compute', confidence: 0.5 });
     expect(result.unconfirmed).toEqual([]);
     expect(result.ledgerDraft[0]).toMatchObject({ rawFindingsCount: 2, verifiedFindingsCount: 1, rejectedFindingsCount: 1 });
     expect(result.calls.map(call => call.tier)).toEqual(['triage', 'confirm']);

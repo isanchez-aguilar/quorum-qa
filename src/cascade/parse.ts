@@ -7,7 +7,9 @@ export interface ParseResult {
   error?: string;
 }
 
-export function extractJson(raw: string): unknown {
+export const MAX_FINDINGS_PER_RESPONSE = 100;
+
+export function extractJson(raw: string, accept: (value: unknown) => boolean = () => true): unknown {
   if (raw.length > 1_048_576) throw new Error('Provider output exceeds 1 MiB character limit');
   let start = -1;
   const stack: string[] = [];
@@ -33,7 +35,11 @@ export function extractJson(raw: string): unknown {
         stack.length = 0;
         start = -1;
       } else if (!stack.length) {
-        try { return JSON.parse(raw.slice(start, index + 1)) as unknown; } catch {
+        try {
+          const value: unknown = JSON.parse(raw.slice(start, index + 1));
+          if (accept(value)) return value;
+          start = -1;
+        } catch {
           // Balanced prose such as [review complete] is not a JSON payload.
           start = -1;
         }
@@ -77,16 +83,18 @@ function findingFrom(value: unknown, entry: CatalogEntry): Finding {
 
 export function parseFindings(raw: string, entry: CatalogEntry): ParseResult {
   let value: unknown;
-  try { value = extractJson(raw); } catch (error) {
+  try { value = extractJson(raw, item => Array.isArray(item) ? item.every(isRecord)
+    : isRecord(item) && Array.isArray(item.findings)); } catch (error) {
     return { findings: [], dropped: [], rawCount: 0, error: error instanceof Error ? error.message : String(error) };
   }
   const entries = Array.isArray(value) ? value : isRecord(value) && Array.isArray(value.findings) ? value.findings : [value];
   const findings: Finding[] = [];
   const dropped: ParseResult['dropped'] = [];
   entries.forEach((item, index) => {
+    if (index >= MAX_FINDINGS_PER_RESPONSE) { dropped.push({ index, reason: 'too many findings' }); return; }
     try { findings.push(findingFrom(item, entry)); } catch (error) {
       dropped.push({ index, reason: error instanceof Error ? error.message : String(error) });
     }
   });
-  return { findings, dropped, rawCount: entries.length };
+  return { findings, dropped, rawCount: entries.length, ...(entries.length && !findings.length ? { error: 'All findings were invalid' } : {}) };
 }

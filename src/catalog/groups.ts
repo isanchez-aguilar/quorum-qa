@@ -6,7 +6,9 @@ export interface QuotaReading {
 }
 export type QuotaSnapshot = Readonly<Record<string, QuotaReading>>;
 
-export function quotaStatus(entry: CatalogEntry, snapshot: QuotaSnapshot, floor: number): 'unavailable' | 'eligible' | 'unchecked' {
+export function quotaStatus(entry: CatalogEntry, snapshot: QuotaSnapshot, floor: number, nowMs = Date.now()): 'unavailable' | 'eligible' | 'unchecked' {
+  const timestamp = snapshot[entry.quotaGroup]?.timestamp;
+  if (timestamp !== undefined && (!Number.isFinite(Date.parse(timestamp)) || nowMs - Date.parse(timestamp) > 6 * 60 * 60_000)) return 'unchecked';
   const value = snapshot[entry.quotaGroup]?.remainingPercent;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) return 'unchecked';
   return value <= floor ? 'unavailable' : 'eligible';

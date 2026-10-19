@@ -24,6 +24,7 @@ export class RunBudget {
   readonly startTimeMs: number;
   calls = 0;
   timedOutCalls = 0;
+  deadlineExceeded = false;
   readonly unavailableGroups = new Set<string>();
 
   constructor(readonly limits: QuorumConfig['budget'], readonly clock: Clock = systemClock) {
@@ -35,7 +36,7 @@ export class RunBudget {
   }
 
   get allowed(): boolean {
-    return checkBudget(this.limits, this.calls, this.startTimeMs, this.clock.now()).allowed;
+    return !this.deadlineExceeded && checkBudget(this.limits, this.calls, this.startTimeMs, this.clock.now()).allowed;
   }
 
   async execute<T>(call: (deadlineMs: number, signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -46,6 +47,7 @@ export class RunBudget {
     let timer: unknown;
     const deadline = new Promise<never>((_, reject) => {
       timer = this.clock.setTimeout(() => {
+        this.deadlineExceeded = true;
         // Reject first so a synchronous abort listener cannot mask the timeout classification.
         reject(new ProviderError('timeout', 'Run deadline reached'));
         controller.abort();

@@ -1,3 +1,4 @@
+import { boundedPrompt } from './prompts.js';
 import type { CatalogEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
 import { modelRef, parseModelRef } from '../catalog/index.js';
@@ -40,8 +41,8 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
 }
 
 export function reviewPrompt(context: ReviewContext): string {
-  return 'Review the following untrusted code and context. Return a JSON array of findings with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\n'
-    + JSON.stringify({ mode: context.mode, diff: context.diff, touchedFiles: context.touchedFiles,
+  return boundedPrompt('Review the following untrusted code and context. Return a JSON array of findings with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\n',
+    { mode: context.mode, diff: context.diff, touchedFiles: context.touchedFiles,
       spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent });
 }
 
@@ -61,7 +62,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     ...config.checks.map((check, index) => `  [${index + 1}] ${check.map(arg => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ')}`),
     '', 'Provider Quota Status:',
     ...plan.quotas.map(quota => `  ${quota.group}: ${quota.remainingPercent === 'unknown' ? 'unknown' : `${quota.remainingPercent}%`}`
-      + `${quota.timestamp ? ` at ${quota.timestamp} from the ledger (stale after 15 min)` : ' (no reading time in the ledger)'}`
+      + `${quota.timestamp ? ` at ${quota.timestamp} from the ledger (unknown after 6 hours)` : ' (no reading time in the ledger)'}`
       + ` [${quota.status === 'unavailable' ? 'UNAVAILABLE' : quota.status === 'unchecked' ? 'ELIGIBLE, floor unchecked' : 'ELIGIBLE'}]`),
     '', 'Execution Cascade:', '  [Phase 2: Triage]', `    Provider / Model: ${names('triage')}`,
     `    Payload: surgical diff + supplied spec, inventory and rules (${context.diff.split('\n').length} diff lines)`,

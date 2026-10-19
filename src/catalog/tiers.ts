@@ -8,6 +8,7 @@ export function resolveTier(tier: Tier, config: QuorumConfig, catalog: readonly 
   available?: (entry: CatalogEntry) => boolean;
   authorFamily?: Family;
   excludeLocal?: boolean;
+  nowMs?: number;
 } = {}): { models: CatalogEntry[]; warnings: string[] } {
   const warnings: string[] = [];
   const models: CatalogEntry[] = [];
@@ -15,7 +16,7 @@ export function resolveTier(tier: Tier, config: QuorumConfig, catalog: readonly 
     const parsed = parseModelRef(ref, catalog);
     const entry = catalog.find(item => item.provider === parsed.provider && item.id === parsed.model)!;
     if (models.includes(entry) || options.unavailableGroups?.has(entry.quotaGroup)
-      || quotaStatus(entry, snapshot, config.budget.quotaFloorPercent) === 'unavailable'
+      || quotaStatus(entry, snapshot, config.budget.quotaFloorPercent, options.nowMs) === 'unavailable'
       || (options.available && !options.available(entry)) || (options.excludeLocal && entry.family === 'local')) continue;
     models.push(entry);
   }
