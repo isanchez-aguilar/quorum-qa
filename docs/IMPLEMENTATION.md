@@ -1173,6 +1173,14 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 5. **`.quorum/`:** M0 adds it to `.gitignore`, and Quorum never commits it.
 6. **`doctor` and agy settings:** it only prints the rules to add. It never writes the user's settings, and it has no interactive "apply" prompt.
 
+**Added 2026-10-19 (Isaac asked Claude to take the decisions):**
+
+7. **Checks of a reviewed repo:** Quorum reads `quorum.config.json` from the **merge-base commit** (`git show <mergeBase>:quorum.config.json`), never from the head of the change, so an untrusted PR can't add commands to run. `--trust-head-config` uses the head's config, for the user's own repos. M5 implements it.
+8. **Budget bounds:** `maxCalls` <= 200 and `maxMinutes` <= 240. The `triage` and `review` tiers must be non-empty (implemented in M3).
+9. **Jules for building Quorum:** skipped while session creation keeps failing (a 400, then a hang, on 2026-10-19). The provider order goes on to Codex.
+10. **Local CI barrier:** `relaykit ci-local` always runs `node --test`, so it can't run this vitest suite. Until Relaykit runs the repo's own test script, the barrier before a push is `pnpm typecheck` + `pnpm test`. Linux and macOS are reported as not verified.
+11. **Packaging:** Quorum stays a CLI. In v1.x a thin `/quorum` skill calls it, and the two ship together as a Claude Code plugin (see ROADMAP).
+
 ---
 
 ## Review corrections
@@ -1378,3 +1386,208 @@ Known limits:
 - User paths containing `& ! % ^` make a shim unusable (fail-closed).
 - Before M5, decide whether a reviewed repository's own `quorum.config.json` may
   define checks: doing so would run commands from an untrusted PR.
+
+## M3 as built
+
+M3 adds the provider contract and scripted FakeProvider, catalog and quota groups,
+budget, parser, planner, cascade and library barrel. Tests use synthetic data and
+FakeProvider only; the integration pipeline creates its own Git repository. No
+provider CLI, network request, ledger write or check command is started by M3.
+M0-M2 implementations and tests are unchanged except the requested config bounds
+and non-empty triage/review validation (and the matching config tests).
+
+Decisions and ambiguities:
+
+- The current brief supersedes the older section 3 signatures: `runCascade`
+  returns findings, unconfirmed findings, related pairs, warnings, call records
+  and per-call ledger drafts. M5 supplies run IDs/timestamps and persistence.
+  Drafts retain counted parse, verification, dirty-worktree and confirmation
+  rejection reasons. No reproduction is run or claimed in this milestone.
+- `src/providers/types.ts` owns the raw adapter contract; the shared types module
+  re-exports it. The older `ProviderResult` shape remains available for source
+  compatibility but is not an adapter result. Catalog entries now require a
+  provider. Bare `codex` and `qwen` use those strings as their model IDs; bare
+  `claude` aliases `claude:sonnet`. Unknown catalog models fail explicitly.
+- The catalog is the PLAN table's seed, including older Flash variants. M4 can
+  replace it with discovery. Routing follows configured tier order, never adds
+  Fable implicitly, and shares quota by group. Both planning and execution use
+  only the supplied snapshot; missing/invalid readings remain eligible with
+  `floor unchecked`. No quota/probe endpoint is called. M4 owns live preflight.
+- Every inference, fallback and adjudication shares the call/time budget. An
+  injected clock makes deadline tests deterministic. Adapters receive remaining
+  milliseconds and an optional AbortSignal; the deadline aborts even a pending
+  FakeProvider. Real process-tree termination remains the M2 runner/M4 adapter's
+  responsibility. A timeout before the overall deadline escalates triage to
+  review; confirmation can try another model within the remaining budget.
+- JSON extraction scans balanced candidates in one pass (including bracketed
+  prose), understands escaped strings, and caps raw text at 1 MiB characters.
+  Arrays of objects and `{ "findings": [...] }` envelopes are accepted.
+  Invalid entries are dropped individually. Model verification flags, identity,
+  related annotations and reproduction status are never trusted. An incomplete
+  outer JSON candidate is a parse failure, rather than a salvaged inner finding.
+- Confirmation JSON is `{ "decision": "confirm" | "reject", "evidence_quote":
+  "..." }`; confirm requires real evidence and may correct line, confidence,
+  trigger, impact, fix and reproduction proposal. It cannot change the target
+  file or severity. Same-defect adjudication uses `{ "same": true | false }`.
+  Both include only the relevant hunk and finding(s); review receives the diff
+  and supplied context. Missing hunks fall back to the verified quote.
+- Verification and origin run before dedupe, including confirmation evidence.
+  Final confirmed evidence comes from the confirming reviewer. Original source
+  findings remain available internally when deduping/adjudicating, so a merged
+  representative never loses family provenance or gets its boost added twice.
+  Unavailable confirmation puts the original verified finding in `unconfirmed`;
+  local-only sources can never enter final findings. Unresolved related pairs
+  remain separate and annotated without any additional confidence boost.
+- Dry-run is a pure plan formatter, with configured checks, eligible/fallback
+  tier paths, quota reading times, payload character count and budget. Context
+  carries spec content rather than a spec path, so it says content was supplied;
+  it prints the resolved head SHA rather than inventing a ref name. Quota times
+  are shown with a six-hour expiry; older readings are unknown, not refreshed.
+  CLI wiring, full mode prompts, reproduction and ledger persistence remain in
+  their later milestones.
+
+Cross-family external review remains unavailable under the task's no-network
+and no-provider-CLI restriction; the available independent review is read-only
+within the same model family.
+
+
+### M3 independent-review fixes (f19c474)
+
+These decisions supersede the original M3 notes above:
+
+- **Decision A:** rule 3b is a minimum. A local finding must pass review, and
+  rules 1/2/3 additionally require confirm. A missing required confirmation
+  leaves it unconfirmed; rejection discards it.
+- **Decision B:** a prompted confirmation is not independent corroboration.
+  Its confidence contributes only to the maximum source confidence. The family
+  boost is computed exclusively from independent triage/review sources merged
+  by strong dedupe or a positive same-defect adjudication. Confirmations never
+  create an independent source, including confirmations issued by review.
+- All four tiers and the author alias are validated before the first call.
+- Parsing skips balanced prose such as [1] and {} until an object-array or
+  findings envelope appears. Empty arrays are valid; a nonempty payload with
+  no valid entries triggers rule 4. Single bare findings are no longer payloads;
+  confirmation candidates are wrapped in arrays internally.
+- MAX_FINDINGS_PER_RESPONSE is 100. Entries after that position are dropped as
+  "too many findings". At most 20 related pairs are adjudicated per run.
+  Verification checks the call/time budget between entries, so a response that
+  consumes the last call is parsed but no new verification starts. Adjudication
+  checks budget/deadline in its loops. Previously verified findings are retained.
+- Confirmation evidence must verify in the same file within ten lines of the
+  original verified line. A distant real quote is invalid confirmation.
+- Deadline expiration has its own flag; an adapter timeout does not set it.
+  The budget warning is emitted for a skipped call or a deadline-killed call,
+  not merely because a normally completed run used its final permitted call.
+- Origin uses the separately injected gitRunner, defaulting to Quorum's
+  runCommand, never the adapter runner. Quota older than six hours (or with an
+  invalid timestamp) is unknown and cannot block a group. Untimestamped numeric
+  readings retain the existing behavior for callers without ledger timestamps.
+- Adjudicated merges retain the absorbed trigger and impact in verification_note.
+  Confirm and adjudication prompts explicitly label findings and hunks untrusted.
+  Every prompt is capped at 24,000 serialized characters. Review prompts use the
+  coverage-aware chunking described below. Confirm/adjudication prompts shrink
+  hunks first, then long fields, with a visible marker; reproduction proposals
+  are omitted. Their last-resort omitted-payload envelope retains the hard cap.
+  Planner tests mock child_process at module level and assert that neither spawn
+  nor execFile runs.
+
+Regression verification: the single completed old-source run had 24 failures and
+45 passes across parser, cascade, limits and pipeline tests. New failing cases:
+[1]/{} prefixes; all-invalid entries; 100-entry cap; local money BLOCKER with and
+without confirm; invalid review/confirm/visual refs before calls; no spurious
+budget warning; distant confirmation; 500-entry Git work bound (the old version
+hit the test's then-default five-second timeout); deadline between verifications;
+20-pair cap; absorbed descriptions; explicit timeout flag; stale quota; review
+prompt cap; actual confirm/adjudication prompt cap and reproduction omission.
+Updated confidence and call-budget expectations also failed on the old sources.
+Invalid triage and author tests already passed on the old version.
+
+Validation workflow deviation: git stash was attempted once but could not create
+index.lock in the parent worktree metadata directory (outside the writable root).
+Instead, modified source bytes were saved in memory, replaced with git show HEAD
+versions for the baseline, and restored in finally. The first subprocess attempt
+stopped before tests because Windows PowerShell rejected pnpm.ps1; explicit
+pnpm.cmd ran the one completed baseline. No index, branch, commit or push changed.
+The full final typecheck/test results are reported at delivery. External review
+remains unperformed under the explicit no-provider-CLI/no-network restriction;
+Linux and macOS are not verified. No dependencies were added.
+
+### M3 re-review fixes, round 2
+
+Review payloads are packed by complete file diff in diff order, measuring the
+serialized prompt (including JSON escapes and instructions) against 24,000
+characters. Only an oversized file is split at hunk boundaries, retaining its
+file header. Only an oversized individual hunk is cut, with a visible marker
+and a one-based hunk index. Supplied spec, inventory and rules are preserved;
+if they leave no room for diff content, the file is skipped without a model call.
+Missing diff sections are also skipped. Each chunk gets its own triage call and
+review fallback, sharing the run budget with retries, confirmation and adjudication.
+
+CascadeResult.coverage contains:
+
+- reviewedFiles: unique files with at least one successfully parsed review chunk.
+- skippedFiles: unique files with any missing, unsendable or unsuccessful chunk,
+  including budget/deadline skips. A partially reviewed file can be in both lists.
+- truncatedHunks: { file, hunk } entries for cuts made by the prompt builder.
+- complete: false if any file was skipped or any hunk was cut. This describes
+  diff review coverage; verification and confirmation outcomes remain in the
+  ledger, unconfirmed list and warnings.
+
+Each skipped file and each cut hunk generates a warning naming the file. The
+planner uses the same chunk builder, reports chunk count and total serialized
+characters, and estimates whether maxCalls covers initial triage. Retries and
+escalation need extra calls; provider latency determines time feasibility.
+Quota freshness and tier resolution both use the planner's injected clock.
+
+Local verification never consumes provider-call slots: it continues after the
+last allowed call. Findings left when time runs out are counted as rejections
+with reason "run deadline", and emit the budget warning. Relocated confirmation
+rejections no longer also count as verified. The 20-pair adjudication cap reports
+the exact number of remaining eligible pairs. Confirmation and adjudication
+JSON extraction skips unrelated JSON values such as prose [1].
+
+Regression evidence: running the three updated unit-test files against HEAD's
+original cascade sources produced 18 failures and 33 passes. Failures covered
+last-slot verification, deadline rejection/accounting and warning, confirmation
+and adjudication [1] prefixes, relocated-confirmation ledger counts, 100,000+
+characters across files, insufficient call budget, 3,000 files, oversized hunk
+cuts, no-room payloads, hunk-boundary splitting with full/partial budgets,
+missing/unsuccessful chunks, planner clock/chunk estimate, and the 25-pair
+unadjudicated warning. One direct builder test fails because the old sources lack
+the new builder; the cascade no-room test separately proves the behavioral bug.
+The no-process guard was mutation-tested by temporarily inserting a spawn call:
+the mocked call made the planner test fail, without starting a process. Original
+source bytes were restored in finally after both experiments.
+
+Validation: pnpm typecheck and pnpm test pass (455 passed, 1 skipped across
+17 test files). No provider CLI, network, dependency installation, branch switch,
+commit or push was used. Independent provider review was not run because this
+round explicitly forbids provider CLIs and network.
+
+### M3 re-review fixes, round 3 (f241a27)
+
+- Coverage is complete only when all touched text files were fully sent and no
+  findings were lost to limits. Binary sections without hunks are the explicit
+  exception: listed in coverage.binaryFiles, never reviewedFiles, with a note
+  that visual review belongs to M5 redesign mode.
+- M2 sets optional ReviewContext.diffTruncated for either its 512 KiB cap or
+  command-output truncation. M3 strips both markers before creating prompts,
+  records the last section's cut hunk and warns; the flag also prevents complete
+  coverage even when a caller has already removed the marker.
+- coverage.lostFindings groups reason, optional file and count for run-deadline
+  losses, the 100-findings response limit and invalid responses after exhausted
+  review retries. Each group emits a warning and prevents complete coverage.
+  For unparseable output the unknown finding count is represented by the number
+  of discarded responses, not an invented count of findings. A successful
+  replacement review recovers an invalid response; verification rejections and
+  explicit confirmation rejections remain deliberate filtering.
+- Review chunks and confirmation hunks share the Git path parser. It reads
+  diff headers, handles the trailing tab on path lines, and decodes C escapes
+  and octal UTF-8 bytes. Tests include real Git paths with spaces and Unicode.
+- Initial review calls (including retries) preserve max(1, floor(maxCalls / 3))
+  calls once findings require escalation. With no escalation candidates the
+  reserve is released. Unsent files are skipped and coverage is incomplete.
+  Dry-run shows the reserve and evaluates chunk capacity after reserving it.
+- Round 3 validation uses only synthetic Git repositories and FakeProvider;
+  external cross-family review was not run under the explicit no-provider and
+  no-network instructions. No dependency, commit or branch change is needed.

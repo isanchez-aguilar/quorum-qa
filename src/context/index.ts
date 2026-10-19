@@ -1,3 +1,4 @@
+import { cleanDiff } from './diff.js';
 import type { CommandRunner, ReviewContext } from '../types/index.js';
 import { changedFiles, diffRange, mergeBase, requireWorktreeRoot, revParse } from './git.js';
 
@@ -17,6 +18,6 @@ export async function buildReviewContext({ base, head, cwd, mode, runner }: {
   while (end > 0 && (raw[end]! & 0xc0) === 0x80) end--;
   const diff = raw.length > MAX_DIFF_BYTES
     ? raw.subarray(0, end).toString('utf8') + DIFF_TRUNCATION_MARKER : raw.toString('utf8');
-  return { mode, diff, baseCommit, requestedBaseCommit, headCommit, worktreeRoot: root,
+  return { mode, diff, diffTruncated: raw.length > MAX_DIFF_BYTES || cleanDiff(diff).truncated, baseCommit, requestedBaseCommit, headCommit, worktreeRoot: root,
     touchedFiles: (await changedFiles(range, root, runner)).map(file => file.path) };
 }

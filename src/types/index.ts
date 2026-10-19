@@ -29,6 +29,7 @@ export interface Finding {
 
 export interface CatalogEntry {
   id: string;
+  provider: string;
   family: Family;
   defaultTier: Tier;
   quotaGroup: string;
@@ -68,6 +69,7 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  diffTruncated?: boolean;
   mode: 'feature' | 'redesign';
   diff: string;
   baseCommit: string;
@@ -170,22 +172,4 @@ export interface TestReport {
   suiteErrors: string[];
 }
 
-export interface ProviderAdapter {
-  readonly name: string;
-  readonly defaultFamily: Family;
-  readonly run: CommandRunner;
-
-  probe(modelId: string): Promise<{ available: boolean; error?: string }>;
-
-  getQuota(modelId: string): Promise<{
-    group: string;
-    remainingPercent: number;
-    resetTime?: string;
-  }>;
-
-  executeReview(
-    context: ReviewContext,
-    modelId: string,
-    prompt: string,
-  ): Promise<ProviderResult>;
-}
+export type { ProviderAdapter } from '../providers/types.js';

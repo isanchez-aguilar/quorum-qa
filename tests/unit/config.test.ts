@@ -149,8 +149,8 @@ describe('validateConfig', () => {
       expect.arrayContaining([
         'base must be a non-empty string',
         'escalate.belowConfidence must be a number between 0 and 1',
-        'budget.maxCalls must be an integer of at least 1',
-        'budget.maxMinutes must be a number greater than 0',
+        'budget.maxCalls must be an integer between 1 and 200',
+        'budget.maxMinutes must be a number between 0 and 240',
         'budget.quotaFloorPercent must be a number between 0 and 100',
         'reproduce.isolation must be "container" or "interactive"',
         'reproduce.testCommand must be a non-empty array of non-empty strings',
@@ -163,6 +163,17 @@ describe('validateConfig', () => {
     expect(issuesOf({ checks: [['npm', 'test']], jules: { enabled: true } })).toEqual([
       'jules.repo is required when jules.enabled is true',
     ]);
+  });
+
+  it('bounds M3 budgets and requires usable triage and review tiers', () => {
+    for (const budget of [{ maxCalls: 201 }, { maxMinutes: 241 }, { maxMinutes: 0 }]) {
+      expect(() => validateConfig({ checks: [], budget })).toThrow(ConfigError);
+    }
+    for (const tier of ['triage', 'review']) {
+      expect(() => validateConfig({ checks: [], tiers: { [tier]: [] } })).toThrow(/non-empty array/);
+    }
+    expect(validateConfig({ checks: [], budget: { maxCalls: 200, maxMinutes: 240 },
+      tiers: { confirm: [], visual: [] } }).budget.maxCalls).toBe(200);
   });
 
   it('keeps reproduce.image and timeoutSeconds only when given', () => {
