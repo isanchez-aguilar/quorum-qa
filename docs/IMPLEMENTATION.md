@@ -2430,3 +2430,24 @@ The user supplied these observations from subsequent real-service probes; implem
 Decision 21 records the resulting changes. Regression tests use synthetic stderr, injected command runners and mocked HTTP only. No live provider or local Qwen was called; no dependencies or logs were added, and no commit, push or branch switch was performed. Cross-provider review was not run because the task explicitly prohibits the provider CLIs.
 
 Validation for decision 21: the focused regression run failed on 22 tests before the fixes; a separate cascade regression also demonstrated duplicate denied-command warnings before its fix. The focused adapter/parser/config/prompt suite then passed all 203 tests. Final `pnpm typecheck` passed; `pnpm test` passed all 41 files (1,161 passed, 6 environment-gated tests skipped). `git diff --check` passed. Validation ran on Windows; Linux/macOS and live-provider behavior were not rerun.
+
+### Third real self-review (2026-10-19, after decision 21)
+
+The same `bughunt` run on the same branch diff, after the agy/Qwen fixes.
+
+**Result:** exit 0, coverage COMPLETE, nothing skipped or lost, 9 minutes. 12 `gemini-3.8-flash-low` calls, most between 9 and 44 s (one took 177 s).
+
+| | 1st run | 2nd run | 3rd run |
+|---|---|---|---|
+| Exit | 2 | 2 | 0 |
+| Coverage | 2/10 files | 4/18 files | complete |
+| Checks | failed (no deps) | pass | pass |
+| Lost findings | 4 | 16 | 0 |
+| Time | 20 min (cap) | 11.5 min | 9 min |
+
+**Its one finding was a false positive, analysed by Claude.**
+- **The finding:** `src/providers/qwen.ts:87`, IMPORTANT, confidence 0.95, from Flash-low. It claimed `this.models![0]` throws when the list is uninitialized.
+- **Why it's wrong:** JavaScript evaluates `(await this.listModels()).includes(...)` callee first, so `listModels()` has filled `this.models` before the argument runs.
+- **What it says about the design:** the quote was real, so the verifier accepted it, but the verifier can't judge the reasoning (a documented limit). Because the finding was IMPORTANT, high-confidence and outside the focus areas, no rule escalated it, so a single cheap model's claim reached the report unconfirmed.
+- **Recorded as a v2 roadmap item:** "confirm single-source IMPORTANT findings from the triage tier when budget allows".
+- The code was simplified anyway, to read the returned list.

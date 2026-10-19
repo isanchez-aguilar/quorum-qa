@@ -25,6 +25,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 - [x] A pluggable context provider: opt-in CodeGraph touched symbols and callers supplement the plain diff (decision 19).
 
 ## v2: more modes
+- **Precision:** confirm single-source IMPORTANT findings from the triage tier when budget allows. A real self-review reported a confident false positive from Flash-low that no rule escalated.
 - **refactor:** the tests at base and at head, a diff of the public API surface, mutation testing on the touched code, and the blast radius.
 - [x] **bughunt:** pre-existing bugs near the diff, reported separately, with bounded HEAD windows and independent BLOCKER confirmation.
 - **contract:** code compared against business-rules docs and against UI copy.
