@@ -168,3 +168,11 @@ it('reports failed checks in Status without changing the review exit code', asyn
   const status = generateMarkdownReport(result).split('\n').find(line => line.startsWith('**Status:**'));
   expect(status).toContain('1 failed deterministic checks'); expect(status).toContain('exit 0');
 });
+it('keeps every line when many writers append at once', async () => {
+  // A one-in-eleven failure under full-suite load showed the old one-second lock wait was too short.
+  const file = path.join(root, 'stress.jsonl');
+  await Promise.all(Array.from({ length: 40 }, (_, id) => appendLedger([{ id }], file)));
+  const ids = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line).id as number);
+  expect(ids).toHaveLength(40);
+  expect(new Set(ids).size).toBe(40);
+});

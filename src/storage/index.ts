@@ -3,11 +3,26 @@ import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import type { QuotaSnapshot } from '../catalog/groups.js';
 
+// Windows reports a file that is being deleted, or held open by another process (an antivirus, the
+// indexer), as EPERM, EACCES or EBUSY for a short while; those are retried instead of losing the write.
+const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(from, to); return; }
+    catch (error) {
+      if (!TRANSIENT.has((error as NodeJS.ErrnoException).code ?? '') || attempt >= 20) throw error;
+      await sleep(Math.min(200, 10 * 2 ** attempt));
+    }
+  }
+}
+
 export async function atomicWrite(file: string, text: string, repoRoot = process.cwd()): Promise<void> {
   await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${randomUUID()}.tmp`;
-  try { await writeFile(temporary, text, { flag: 'wx' }); await rename(temporary, file); }
+  try { await writeFile(temporary, text, { flag: 'wx' }); await renameWithRetry(temporary, file); }
   finally { await rm(temporary, { force: true }); }
 }
 
@@ -30,14 +45,16 @@ export async function appendLedger(entries: readonly unknown[], file: string, re
   await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
   let lock;
+  const deadline = Date.now() + 10_000;
   for (let attempt = 0; !lock; attempt++) {
     try { lock = await open(`${file}.lock`, 'wx'); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 100) throw error;
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if ((code !== 'EEXIST' && !TRANSIENT.has(code)) || Date.now() > deadline) throw error;
       try {
         if (Date.now() - (await lstat(`${file}.lock`)).mtimeMs > 10 * 60 * 1000) await rm(`${file}.lock`, { force: true });
       } catch (statError) { if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError; }
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await sleep(Math.min(100, 5 * 2 ** Math.min(attempt, 5)) + Math.random() * 10);
     }
   }
   try {
