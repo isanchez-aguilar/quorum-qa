@@ -84,7 +84,12 @@ export class QwenProvider extends ProviderCommands implements ProviderAdapter {
     return this.qwenOptions.model ?? (await this.listModels(options))[0]!;
   }
   async probe(modelId: string) {
-    try { return { available: (await this.listModels()).includes(this.qwenOptions.model ?? (modelId === 'qwen' ? this.models![0]! : modelId)) }; }
+    try {
+      // Use the returned list rather than this.models, so the result never depends on evaluation order.
+      const models = await this.listModels();
+      const wanted = this.qwenOptions.model ?? (modelId === 'qwen' ? models[0] : modelId);
+      return { available: wanted !== undefined && models.includes(wanted) };
+    }
     catch (error) { return { available: false, error: String(error) }; }
   }
   async getQuota(_modelId: string): Promise<Quota> { return 'unknown'; }
