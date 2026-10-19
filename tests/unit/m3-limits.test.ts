@@ -218,3 +218,21 @@ it('sends the actual hunk when a finding path has spaces', async () => {
   await runCascade(ctx, config(), new Map([['agy',fake], ['codex',codex]]), {catalog, gitRunner:originRunner(root)});
   expect(codex.calls[0]?.prompt).toContain('@@ -1 +1,2 @@');
 });
+
+it('records a finding lost because git cannot tell its origin', async () => {
+  const gitRunner = vi.fn(async () => ({ stdout: '', stderr: 'fatal: shallow clone', exitCode: 128 }));
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding()])] });
+  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, gitRunner });
+  expect(result.findings).toEqual([]);
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.lostFindings).toContainEqual({ reason: 'origin unavailable', file: 'sample.ts', count: 1 });
+  expect(result.warnings.some(warning => warning.includes('could not tell its origin'))).toBe(true);
+});
+
+it('records malformed findings as lost', async () => {
+  const { fix: _fix, ...withoutFix } = finding();
+  const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding(), withoutFix])] });
+  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog });
+  expect(result.coverage.complete).toBe(false);
+  expect(result.coverage.lostFindings).toContainEqual({ reason: 'malformed finding', count: 1 });
+});

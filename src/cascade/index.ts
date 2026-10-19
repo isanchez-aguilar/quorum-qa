@@ -181,7 +181,10 @@ export async function runCascade(
       corrected.origin = finding.origin === 'improvement' && finding.severity === 'OPTIONAL' ? 'improvement'
         : await determineOrigin(corrected.file, corrected.line, context.baseCommit, context.headCommit, context.worktreeRoot, gitRunner);
     } catch (error) {
-      rejection(response.ledger, `origin unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      rejection(response.ledger, `origin unavailable: ${message}`);
+      lost('origin unavailable', corrected.file);
+      warn(`${corrected.file}: a verified finding was dropped because git could not tell its origin (${message})`);
       return null;
     }
     response.ledger.verifiedFindingsCount++;
@@ -195,6 +198,7 @@ export async function runCascade(
     for (const dropped of parsed.dropped) {
       rejection(response.ledger, `parse: ${dropped.reason}`);
       if (dropped.reason === 'too many findings') lost('too many findings');
+      else lost('malformed finding');
     }
     if (parsed.error) {
       response.call.status = 'invalid';
