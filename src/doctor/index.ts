@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { homedir as userHome } from 'node:os';
 import { resolveCommand } from '../checks/resolver.js';
 import { runCommand } from '../process/runner.js';
@@ -14,6 +16,10 @@ export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
   const results: DoctorCheck[] = [];
+  if (config?.checks.length && !config.setup?.length && existsSync(path.join(context.repoRoot, 'package.json'))) {
+    results.push({ id: 'checks.setup', status: 'WARN', message: 'checks run in a fresh worktree without node_modules',
+      fix: 'Configure setup argv commands to install dependencies before checks.' });
+  }
   const indexFound = await hasCodeGraphIndex(context.repoRoot);
   if (config?.context?.provider === 'codegraph') {
     const provider = new CodeGraphContextProvider({ env: context.env });

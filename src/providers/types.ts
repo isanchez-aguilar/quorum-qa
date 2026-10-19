@@ -10,7 +10,10 @@ export interface RawProviderResult {
   error?: string;
 }
 
+export type ReviewPurpose = 'review' | 'confirm' | 'adjudicate' | 'reproduce';
+
 export interface ReviewOptions {
+  purpose?: ReviewPurpose;
   deadlineMs: number;
   warn?: (message: string) => void;
   assertCheckoutUnchanged?: () => Promise<void>;

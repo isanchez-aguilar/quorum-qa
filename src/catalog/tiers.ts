@@ -17,9 +17,17 @@ export function resolveTier(tier: Tier, config: QuorumConfig, catalog: readonly 
   for (const ref of options.refs ?? config.tiers[tier]) {
     const parsed = parseModelRef(ref, catalog);
     const entry = catalog.find(item => item.provider === parsed.provider && item.id === parsed.model)!;
-    if (models.includes(entry) || options.unavailableGroups?.has(entry.quotaGroup)
-      || quotaStatus(entry, snapshot, config.budget.quotaFloorPercent, options.nowMs) === 'unavailable'
-      || (options.available && !options.available(entry)) || (options.excludeLocal && entry.family === 'local')) continue;
+    if (options.unavailableGroups?.has(entry.quotaGroup)) {
+      const message = `${entry.quotaGroup}: quota exhausted earlier in this run, skipped`;
+      if (!warnings.includes(message)) warnings.push(message);
+      continue;
+    }
+    if (quotaStatus(entry, snapshot, config.budget.quotaFloorPercent, options.nowMs) === 'unavailable') {
+      const message = `${entry.quotaGroup}: quota below floor (${snapshot[entry.quotaGroup]!.remainingPercent}%), skipped`;
+      if (!warnings.includes(message)) warnings.push(message);
+      continue;
+    }
+    if (models.includes(entry) || (options.available && !options.available(entry)) || (options.excludeLocal && entry.family === 'local')) continue;
     models.push(entry);
   }
   const author = config.author ? resolveAuthorFamily(config.author) : options.authorFamily;

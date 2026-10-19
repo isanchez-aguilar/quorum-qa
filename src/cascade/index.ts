@@ -121,6 +121,11 @@ export async function runCascade(
     }
   };
   const warn = (message: string) => { if (!warnings.includes(message)) warnings.push(message); };
+  // Report configured quota skips even if successful triage never enters a later tier.
+  for (const refs of [...Object.values(config.tiers), ...Object.values(config.escalate.routes ?? {})]) {
+    resolveTier('review', config, catalog, snapshot, { refs, nowMs: budget.clock.now(), unavailableGroups: budget.unavailableGroups })
+      .warnings.filter(message => message.includes(': quota ')).forEach(warn);
+  }
   const calls: CascadeCall[] = [];
   const ledgerDraft: LedgerDraft[] = [];
   const unavailable = new Set<string>();
@@ -207,7 +212,7 @@ export async function runCascade(
         if (!baseline) await assertCheckoutUnchanged();
         const result = await budget.execute((deadlineMs, signal) => {
           call.deadlineMs = deadlineMs;
-          return adapter.executeReview(tier === 'visual' ? context : { ...context, images: undefined }, entry.id, prompt, { deadlineMs, signal, warn, assertCheckoutUnchanged, reserveRetry: () => {
+          return adapter.executeReview(tier === 'visual' ? context : { ...context, images: undefined }, entry.id, prompt, { deadlineMs, signal, purpose, warn, assertCheckoutUnchanged, reserveRetry: () => {
             if (!budget.allowed) { warn(BUDGET_WARNING); return false; }
             if (purpose === 'review' && initial.some(needsEscalation) && budget.calls >= triageLimit) return false;
             budget.calls++;

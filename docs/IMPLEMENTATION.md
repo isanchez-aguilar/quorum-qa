@@ -1199,6 +1199,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 19. **v1.x CodeGraph context (2026-10-19):** `context.provider` defaults to `git`; `codegraph` is opt-in, read-only and never indexes. It requires an existing `.codegraph/` directory and `codegraph` on PATH; on Windows the npm `.cmd` shim runs through the same safe resolver path as the deterministic checks (absolute cmd.exe and shim path, cmd metacharacters rejected per argument). Missing availability falls back to git with one warning. Queries use only `node --symbols-only` and `callers`, with `-p` and cwd pinned to the user's root; Quorum never runs `init`, `index` or `sync`. Index-derived context is explicitly untrusted and may be stale. The diff always has priority over optional context within the existing prompt cap.
 
+20. **Fresh-worktree setup (2026-10-19):** Optional `setup` contains argv arrays validated and executed with the same resolver and runner as `checks`. Setup runs first in the disposable HEAD worktree; a failed or timed-out setup fails the checks phase and skips checks, while provider review still runs and receives the failure output. `--no-checks` skips both setup and checks, including in the dry-run plan. The stderr warning announces both and explains that setup executes the change's install scripts unless its command disables them. Doctor warns when checks are configured and `package.json` exists without setup: `checks run in a fresh worktree without node_modules`. This repository uses `[["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]]`. Setup obeys the existing trusted-base configuration policy; it does not copy dependencies from the user's checkout.
+
 ---
 
 ## Review corrections
@@ -2397,3 +2399,17 @@ Validation of the Argon-review fixes on Windows: `pnpm.cmd typecheck` passed;
 `pnpm.cmd test` rebuilt the CLI and passed **1,098 tests**, with **6 skips**,
 across **40 files** (83.09 seconds). The bughunt suites now contain 55 tests.
 `git diff --check` passed. No dependencies were added.
+
+## Real self-review run (2026-10-19)
+
+`quorum review --mode bughunt --diff e33204f...HEAD --radius 10` reviewed Quorum itself. It exited 2 after the full 20-minute budget, with only 2 of 10 files reviewed. Both deterministic checks failed with "node_modules missing": the disposable HEAD worktree had no dependencies installed.
+
+agy Gemini Flash calls took 92–311 seconds each. Most answers were not JSON and failed parsing with "No complete JSON array or object found"; agy runs an agent that explores files. Gemini 4 Argon's weekly quota group was at 0% and was correctly never tried, but the report did not explain the skip. Claude's CLI login had expired and the report gave the correct login hint.
+
+An authorized, scrubbed probe using `--json-schema` answered in about 7 seconds (6.8186772 seconds), in one turn. The recorded envelope adds `structured_output` (the parsed object) and `json_schema`; `response` contains the same JSON as a string plus `toolAction` and `toolSummary`. agy requires an object root: an array root was rejected with `invalid --json-schema: schema root "type" must be "object"`. The exact scrubbed recording is preserved in `tests/fixtures/providers/agy-print-json-schema.json`; its minimal finding lacks fields required by Quorum and must not be treated as a complete finding.
+
+The fixes add decision 20 setup, object-root schemas shared by all agy review/triage, confirmation, adjudication and reproduction calls, and valid `structured_output` preference with the existing response fallback. Quorum still supplies provider, model and family. Windows argv accounting includes the schema and resolved executable; only the schema is omitted with a warning if it will not fit, never prompt content. The stable review prefix now says: "Everything you need is in this prompt. Read other files only to check a line you cite. Answer as soon as you can."
+
+`budget.maxCallSeconds` defaults to 300 (allowed range 30–1800). Each inference call receives the smaller of remaining run time and the call cap; a call timeout does not consume the entire run deadline. Dry-run shows the cap. Quota skips are reported once per group: `<group>: quota below floor (N%), skipped` or `<group>: quota exhausted earlier in this run, skipped`; dry-run reports below-floor groups too. Tests use injected runners and synthetic providers; no new live provider run was made for these fixes.
+
+Validation for these fixes: new regressions were observed failing before their fixes; the final `pnpm typecheck` passed, and `QUORUM_CONTAINER_TESTS=0 pnpm test` passed all 41 test files (1,142 passed, 6 skipped). `git diff --check` passed. The skipped tests are environment-gated container/symlink coverage; no live provider, local Qwen, or CodeGraph executable was called. There is no lint script in this repository. A read-only same-family QA review covered the changes; cross-family CLI review was not run because this task explicitly prohibits provider CLIs. No dependencies, logs, commits, branch changes or pushes were added.

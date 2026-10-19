@@ -26,6 +26,22 @@ describe('fake provider cascade', () => {
   }
   const yes = (fields = {}) => JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote, ...fields });
 
+  it('warns once for an exhausted quota group and never retries its sibling model', async () => {
+    const pool = providers({ agy: { flash: [{ error: 'quota' }], pro: ['[]'] }, codex: { codex: ['[]'] } });
+    const cfg = config({ tiers: { triage: ['agy:flash', 'agy:pro', 'codex'], review: ['agy:pro', 'codex'], confirm: ['codex'], visual: [] } });
+    const result = await runCascade(context(root), cfg, pool, { catalog, gitRunner: originRunner(root), clock: new FakeClock() });
+    expect(pool.get('agy')!.calls.map(call => call.model)).toEqual(['flash']);
+    expect(result.warnings.filter(message => message === 'agy:google: quota exhausted earlier in this run, skipped')).toHaveLength(1);
+  });
+  it('reports below-floor Argon even when triage completes without escalation', async () => {
+    const entries = catalog.map(entry => ({ ...entry, quotaGroup: entry.id === 'pro' ? 'agy:argon' : entry.quotaGroup }));
+    const result = await runCascade(context(root), config(), providers({ agy: { flash: ['[]'], pro: ['[]'] } }), {
+      catalog: entries, gitRunner: originRunner(root), quotaSnapshot: { 'agy:argon': { remainingPercent: 0 } }, clock: new FakeClock(),
+    });
+    expect(result.calls.map(call => call.model)).toEqual(['flash']);
+    expect(result.warnings.filter(message => message === 'agy:argon: quota below floor (0%), skipped')).toHaveLength(1);
+  });
+
   it.each(['status', 'HEAD', 'error'])('aborts the run on checkout %s changes', async mode => {
     let changed = false;
     const pool = providers({ agy: { flash: ['[]'], pro: ['[]'] }, codex: { codex: ['[]'] } });

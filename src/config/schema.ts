@@ -36,7 +36,7 @@ export function resolveAuthorFamily(author: string): Family {
   );
 }
 
-export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'author'>> {
+export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author'>> {
   return {
     context: { provider: 'git' },
     base: 'origin/main',
@@ -47,7 +47,7 @@ export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'author'
       visual: ['agy:gemini-4-argon-high'],
     },
     escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
-    budget: { maxCalls: 12, maxMinutes: 20, quotaFloorPercent: 15 },
+    budget: { maxCalls: 12, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
     reproduce: {
       allowInstallScripts: false,
       isolation: 'container',
@@ -146,19 +146,19 @@ class Reader {
   }
 }
 
-function readChecks(raw: unknown, issues: string[]): string[][] {
+function readChecks(raw: unknown, issues: string[], name = 'checks'): string[][] {
   if (raw === undefined) {
-    issues.push('checks is required: an array of argv arrays, e.g. [["pnpm", "test"]]');
+    issues.push(`${name} is required: an array of argv arrays, e.g. [["pnpm", "test"]]`);
     return [];
   }
   if (!Array.isArray(raw) || !raw.every((check) => Array.isArray(check))) {
-    issues.push('checks must be an array of string arrays, e.g. [["pnpm", "test"]]');
+    issues.push(`${name} must be an array of string arrays, e.g. [["pnpm", "test"]]`);
     return [];
   }
   const checks: string[][] = [];
   raw.forEach((check, index) => {
     if (!isStringArray(check) || check.length === 0) {
-      issues.push(`checks[${index}] must be a non-empty array of non-empty strings`);
+      issues.push(`${name}[${index}] must be a non-empty array of non-empty strings`);
     } else {
       checks.push([...check]);
     }
@@ -177,6 +177,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   const top = r.object(raw, '', [
     'base',
     'checks',
+    'setup',
     'author',
     'tiers',
     'escalate',
@@ -188,6 +189,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   ]) as Obj;
 
   const checks = readChecks(top.checks, r.issues);
+  const setup = top.setup === undefined ? undefined : readChecks(top.setup, r.issues, 'setup');
   const contextRaw = r.object(top.context, 'context', ['provider']) ?? {};
   let contextProvider = defaults.context.provider;
   if (contextRaw.provider !== undefined) {
@@ -240,8 +242,9 @@ export function validateConfig(raw: unknown): QuorumConfig {
   }
 
   const budgetRaw =
-    r.object(top.budget, 'budget', ['maxCalls', 'maxMinutes', 'quotaFloorPercent']) ?? {};
+    r.object(top.budget, 'budget', ['maxCalls', 'maxMinutes', 'maxCallSeconds', 'quotaFloorPercent']) ?? {};
   const budget = {
+    maxCallSeconds: r.number(budgetRaw.maxCallSeconds, 'budget.maxCallSeconds', defaults.budget.maxCallSeconds!, { min: 30, max: 1800 }),
     maxCalls: r.number(budgetRaw.maxCalls, 'budget.maxCalls', defaults.budget.maxCalls, {
       min: 1,
       max: 200,
@@ -341,6 +344,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     context: { provider: contextProvider },
     base,
     checks,
+    ...(setup === undefined ? {} : { setup }),
     tiers,
     escalate,
     budget,

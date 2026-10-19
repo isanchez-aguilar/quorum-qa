@@ -56,7 +56,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
   const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));
-  return { nowMs, confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, routes, quotas, warnings,
+  return { nowMs, confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, routes, quotas, warnings: [...new Set(warnings)],
     chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls - confirmationReserve >= payload.chunks.length,
     payloadCharacters: payload.chunks.reduce((sum, chunk) => sum + chunk.prompt.length, 0) };
 }
@@ -74,6 +74,8 @@ export function formatDryRun(plan: ExecutionPlan): string {
     `  Context Provider: ${context.contextProvider?.requested ?? config.context?.provider ?? 'git'} (${context.contextProvider ? context.contextProvider.available ? 'available' : 'unavailable; using git' : (config.context?.provider ?? 'git') === 'git' ? 'available' : 'availability not checked'})`,
     `  Author Family: ${author ?? 'unknown'}`, `  Files Changed: ${context.touchedFiles.length} files (+${added}, -${removed} lines)`,
     `  Independence Rule: ${!author ? 'author unknown' : plan.warnings.some(item => item.startsWith('Independence')) ? 'cannot be met in every tier (see warnings)' : 'enforced'}`,
+    '', 'Setup (before checks):',
+    ...(config.setup ?? []).map(command => '  ' + command.map(arg => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ')),
     '', 'Deterministic Pre-flight Checks (Phase 1):',
     ...config.checks.map((check, index) => `  [${index + 1}] ${check.map(arg => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ')}`),
     '', 'Provider Quota Status:',
@@ -94,7 +96,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     '  [Phase 4: Reproduction Lane]', '    Enabled: No (M6; requires opt-in)',
     '', 'Budget Ceilings:', `    Max API Calls: ${config.budget.maxCalls}`,
     `    Confirmation reserve: ${plan.confirmationReserve} calls (released when no findings need escalation)`,
-    `    Max Run Time: ${config.budget.maxMinutes} minutes`, `    Quota Floor: ${config.budget.quotaFloorPercent}%`,
+    `    Max Run Time: ${config.budget.maxMinutes} minutes`, `    Max Call Time: ${config.budget.maxCallSeconds ?? 300} seconds`, `    Quota Floor: ${config.budget.quotaFloorPercent}%`,
     ...plan.warnings.map(warning => `Warning: ${warning}`), '', 'Nothing was called: dry-run spends no quota.',
   ].join('\n');
 }

@@ -6,6 +6,8 @@ import { AgyProvider, parseAgyQuota } from '../../src/providers/agy.js';
 import { CodexProvider } from '../../src/providers/codex.js';
 import { DEFAULT_CATALOG } from '../../src/catalog/index.js';
 import { agyQuotaGroup } from '../../src/catalog/agy-groups.js';
+import { extractJson, isRecord, parseFindings, parseReproductionProposal } from '../../src/cascade/parse.js';
+import { AGY_SCHEMAS, validStructuredOutput } from '../../src/providers/schemas.js';
 import { CommandTimeoutError, CommandOutputLimitError } from '../../src/process/runner.js';
 import type { CommandRunner, ReviewContext } from '../../src/types/index.js';
 
@@ -31,12 +33,79 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 const providerCalls = () => calls.filter(call => !/git(?:\.exe)?$/i.test(call.command));
 
+describe('structured agy answers', () => {
+  const valid = { severity: 'IMPORTANT', origin: 'introduced', file: 'a.ts', line: 1,
+    trigger: 'input', impact: 'failure', evidence_quote: 'return a/b', fix: 'guard', confidence: .8 };
+  it.each(['review', 'confirm', 'adjudicate', 'reproduce'] as const)('passes an object schema for %s and prefers valid structured output', async purpose => {
+    const structured = purpose === 'review' ? { findings: [valid] } : purpose === 'confirm' ? { decision: 'reject' }
+      : purpose === 'adjudicate' ? { same: true } : { path: 'a.test.ts', content: 'test', expect: 'failure' };
+    answer = async () => success(JSON.stringify({ status: 'SUCCESS', structured_output: structured, response: 'not JSON' }));
+    const result = await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000, purpose });
+    expect(JSON.parse(result.rawOutput)).toEqual(structured);
+    const args = providerCalls()[0]!.args;
+    expect(args).toContain('--json-schema');
+    const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]!);
+    expect(schema).toEqual(AGY_SCHEMAS[purpose]);
+    expect(schema.type).toBe('object');
+    expect(schema.required).toContain(Object.keys(structured)[0]);
+    if (purpose === 'review') expect(Object.keys(schema.properties.findings.items.properties)).toEqual(Object.keys(valid));
+    if (purpose === 'review') expect(parseFindings(result.rawOutput, DEFAULT_CATALOG[0]!).findings).toHaveLength(1);
+    if (purpose === 'confirm') expect(extractJson(result.rawOutput, value => isRecord(value) && value.decision === 'reject')).toEqual(structured);
+    if (purpose === 'adjudicate') expect(extractJson(result.rawOutput, value => isRecord(value) && typeof value.same === 'boolean')).toEqual(structured);
+    if (purpose === 'reproduce') expect(parseReproductionProposal(result.rawOutput)).toMatchObject(structured);
+  });
+  it('retains the recorded partial probe fixture and falls back without inventing fields', async () => {
+    const fixture = await readFile(new URL('../fixtures/providers/agy-print-json-schema.json', import.meta.url), 'utf8');
+    const recorded = JSON.parse(fixture);
+    expect(recorded.num_turns).toBe(1);
+    expect(recorded.duration_seconds).toBeLessThan(7);
+    expect(validStructuredOutput(recorded.structured_output, 'review')).toBe(false);
+    answer = async () => success(fixture);
+    const result = await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 });
+    expect(result.rawOutput).toBe(recorded.response);
+    expect(parseFindings(result.rawOutput, DEFAULT_CATALOG[0]!).error).toBe('All findings were invalid');
+  });
+  it('never trusts provider metadata in structured findings', async () => {
+    answer = async () => success(JSON.stringify({ status: 'SUCCESS', structured_output: { findings: [{ ...valid, provider: 'spoof', model: 'spoof', family: 'local' }] } }));
+    const result = await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 });
+    const entry = DEFAULT_CATALOG.find(item => item.provider === 'agy')!;
+    expect(parseFindings(result.rawOutput, entry).findings[0]).toMatchObject({ provider: entry.provider, model: entry.id, family: entry.family });
+  });
+  it.each([
+    { purpose: 'confirm', invalid: { decision: 'confirm' }, fallback: { decision: 'reject' } },
+    { purpose: 'confirm', invalid: { decision: 'confirm', evidence_quote: ' ' }, fallback: { decision: 'reject' } },
+    { purpose: 'confirm', invalid: { decision: 'confirm', evidence_quote: 'code', reproduction: {} }, fallback: { decision: 'reject' } },
+    { purpose: 'adjudicate', invalid: { same: 'true' }, fallback: { same: false } },
+    { purpose: 'reproduce', invalid: { path: 'test', content: '', expect: 'x' }, fallback: { path: 'test', content: 'test', expect: 'x' } },
+  ] as const)('falls back for invalid $purpose payload', async ({ purpose, invalid, fallback }) => {
+    answer = async () => success(JSON.stringify({ status: 'SUCCESS', structured_output: invalid, response: JSON.stringify(fallback) }));
+    const result = await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000, purpose });
+    expect(JSON.parse(result.rawOutput)).toEqual(fallback);
+  });
+  it.each([null, [], {}, { findings: [{ file: 'missing fields' }] }])('falls back from invalid structured output %j', async structured_output => {
+    answer = async () => success(JSON.stringify({ status: 'SUCCESS', structured_output, response: '[]' }));
+    expect((await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rawOutput).toBe('[]');
+  });
+  it('falls back when an extra reproduction field fails the finding parser', async () => {
+    answer = async () => success(JSON.stringify({ status: 'SUCCESS', structured_output: { findings: [{ ...valid, reproduction: {} }] }, response: '[]' }));
+    expect((await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rawOutput).toBe('[]');
+  });
+  it.each([0, 1000])('drops only schema when Windows argv with resolved path is too long (%s)', async extra => {
+    const warnings: string[] = []; const prompt = 'x'.repeat(29400 - extra);
+    await new AgyProvider({ ...settings(), platform: 'win32', env: { PATH: 'C:\\' + 'a'.repeat(extra), PATHEXT: '.EXE' } })
+      .executeReview(context, 'model', prompt, { deadlineMs: 5000, warn: message => warnings.push(message) });
+    expect(providerCalls()[0]!.args).toContain('--print=' + prompt);
+    expect(providerCalls()[0]!.args).not.toContain('--json-schema');
+    expect(warnings.join()).toMatch(/schema.*Windows/);
+  });
+});
+
 describe('agy adapter', () => {
   it('uses recorded response, tokens, worktree cwd, argument prompt and bounded timeout', async () => {
     const result = await new AgyProvider({ ...settings(), now: () => 100 }).executeReview(context, 'gemini-3.8-flash-medium', 'read only', { deadlineMs: 4200 });
     expect(result).toMatchObject({ rawOutput: '[]\n', worktreeClean: true, tokensUsed: { prompt: 12774, completion: 1 } });
     const call = providerCalls()[0]!;
-    expect(call.args).toEqual(['--model', 'gemini-3.8-flash-medium', '--sandbox', '--output-format', 'json', '--print-timeout', '4s', '--print=read only']);
+    expect(call.args).toEqual(['--model', 'gemini-3.8-flash-medium', '--sandbox', '--output-format', 'json', '--print-timeout', '4s', '--print=read only', '--json-schema', expect.any(String)]);
     expect(call.options?.cwd).toContain(path.join('.quorum', 'worktrees'));
     expect(call.options?.stdin).toBeUndefined();
     expect(call.options?.timeoutMs).toBe(4200);

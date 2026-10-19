@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main, type CliDependencies } from '../../src/cli/index.js';
-import { runCommand } from '../../src/process/runner.js';
+import { CommandTimeoutError, runCommand } from '../../src/process/runner.js';
 import { FakeProvider } from '../../src/providers/fake.js';
 import { CodeGraphContextProvider } from '../../src/context/codegraph.js';
 import type { CommandRunner } from '../../src/types/index.js';
@@ -47,6 +47,31 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
 }
 
 describe('M5 zero-quota review CLI', () => {
+  it.each(['success', 'failure', 'timeout', 'skip', 'dry-skip'])('runs setup before checks in the head worktree: %s', async state => {
+    await commitConfig({ ...config([[process.execPath, '--version']]), ...{ setup: [[process.execPath, '--help']] } });
+    await git('add', '.'); await git('commit', '-m', 'synthetic setup config');
+    const checkRunner = vi.fn<CommandRunner>(async (_file, args, opts) => {
+      expect(opts?.cwd).toContain(path.join('.quorum', 'worktrees'));
+      expect(await readFile(path.join(opts!.cwd!, 'sample.ts'), 'utf8')).toBe(source);
+      if (state === 'timeout') throw new CommandTimeoutError('', 'synthetic setup timeout');
+      return { exitCode: state === 'failure' && args.includes('--help') ? 1 : 0, stdout: '', stderr: 'synthetic setup output' };
+    });
+    const provider = fake();
+    const result = await review(provider, ['--trust-head-config', ...(state.includes('skip') ? ['--no-checks'] : []), ...(state === 'dry-skip' ? ['--dry-run'] : [])], { checkRunner });
+    expect(result.code).toBe(0);
+    if (state.includes('skip')) {
+      expect(checkRunner).not.toHaveBeenCalled();
+      if (state === 'dry-skip') expect(result.out).not.toContain('--help');
+      else expect(result.result?.checks).toBeNull();
+    } else {
+      expect(checkRunner.mock.calls.map(call => call[1][0])).toEqual(state === 'success' ? ['--help', '--version'] : ['--help']);
+      expect(result.result?.checks?.passed).toBe(state === 'success');
+      expect(result.err).toContain('install scripts');
+      expect(provider.calls.length).toBeGreaterThan(0);
+      if (state === 'failure') expect(provider.calls[0]?.prompt).toContain('synthetic setup output');
+      if (state === 'timeout') expect(result.result?.checks?.results[0]?.timedOut).toBe(true);
+    }
+  });
   async function contextSetup(index = true, executable = true) {
     await commitConfig({ ...config(), ...{ context: { provider: 'codegraph' } } });
     await git('add', '.'); await git('commit', '-m', 'synthetic context config');
@@ -238,7 +263,7 @@ describe('M5 zero-quota review CLI', () => {
       expect(options?.cwd).not.toBe(root); return { stdout: 'failure tail', stderr: '', exitCode: 1 };
     };
     const provider = fake(); const first = await review(provider, [], { checkRunner });
-    expect(first.err).toContain("quorum: running 1 configured checks from the reviewed change in a disposable worktree; this executes the change's code (use --no-checks for untrusted changes)");
+    expect(first.err).toContain("quorum: running 0 setup commands and 1 configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)");
     expect((await readFile(path.join(root, '.quorum/report.md'), 'utf8')).split('\n').find(line => line.startsWith('**Status:**'))).toContain('1 failed deterministic checks');
     expect(first.code).toBe(0); expect(checks[0]).toContain('base-check'); expect(provider.calls[0]?.prompt).toContain('failure tail');
     await review(fake(), ['--trust-head-config', '--no-cache'], { checkRunner }); expect(checks[1]).toContain('head-check');

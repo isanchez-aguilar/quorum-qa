@@ -167,7 +167,7 @@ Guardrails (lessons from running Jules by hand, and from the review of this plan
     "visual":  ["agy:gemini-4-argon-high"]
   },
   "escalate": { "focus": ["money", "auth", "permissions"], "belowConfidence": 0.7 },
-  "budget": { "maxCalls": 12, "maxMinutes": 20, "quotaFloorPercent": 15 },
+  "budget": { "maxCalls": 12, "maxMinutes": 20, "maxCallSeconds": 300, "quotaFloorPercent": 15 },
   "reproduce": { "isolation": "container", "allowInstallScripts": false, "testGlobs": ["**/*.test.*", "**/*.spec.*"], "testCommand": ["pnpm", "vitest", "run", "--reporter=json"] },
   "jules": { "enabled": false, "repo": "owner/name", "maxSessionsPerRun": 3 },
   "qwen": { "endpoint": "http://127.0.0.1:8080/v1" }

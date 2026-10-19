@@ -85,7 +85,7 @@ it('marks deadline timeout explicitly even if the clock has not advanced', async
   const clock = new FakeClock();
   let fire: (() => void) | undefined;
   clock.setTimeout = callback => { fire = callback; return 1; };
-  const budget = new RunBudget(config().budget, clock);
+  const budget = new RunBudget({ ...config().budget, maxMinutes: 1 }, clock);
   const pending = budget.execute(() => new Promise(() => {}));
   const rejection = expect(pending).rejects.toThrow('Run deadline reached');
   fire!();

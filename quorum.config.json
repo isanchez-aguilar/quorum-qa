@@ -1,4 +1,5 @@
 {
+  "setup": [["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]],
   "checks": [["pnpm", "typecheck"], ["pnpm", "test"]],
   "tiers": {
     "triage": ["agy:gemini-3.8-flash-medium", "qwen"],
