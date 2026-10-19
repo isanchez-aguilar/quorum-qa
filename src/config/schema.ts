@@ -205,7 +205,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   const tiersRaw = r.object(top.tiers, 'tiers', TIERS);
   if (tiersRaw) {
     for (const tier of TIERS) {
-      tiers[tier] = r.stringArray(tiersRaw[tier], `tiers.${tier}`, defaults.tiers[tier], true);
+      tiers[tier] = r.stringArray(tiersRaw[tier], `tiers.${tier}`, defaults.tiers[tier], tier !== 'triage' && tier !== 'review');
     }
   }
 
@@ -225,10 +225,12 @@ export function validateConfig(raw: unknown): QuorumConfig {
   const budget = {
     maxCalls: r.number(budgetRaw.maxCalls, 'budget.maxCalls', defaults.budget.maxCalls, {
       min: 1,
+      max: 200,
       integer: true,
     }),
     maxMinutes: r.number(budgetRaw.maxMinutes, 'budget.maxMinutes', defaults.budget.maxMinutes, {
       min: 0,
+      max: 240,
       minExclusive: true,
     }),
     quotaFloorPercent: r.number(

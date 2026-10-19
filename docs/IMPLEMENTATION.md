@@ -1173,6 +1173,14 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 5. **`.quorum/`:** M0 adds it to `.gitignore`, and Quorum never commits it.
 6. **`doctor` and agy settings:** it only prints the rules to add. It never writes the user's settings, and it has no interactive "apply" prompt.
 
+**Added 2026-10-19 (Isaac asked Claude to take the decisions):**
+
+7. **Checks of a reviewed repo:** Quorum reads `quorum.config.json` from the **merge-base commit** (`git show <mergeBase>:quorum.config.json`), never from the head of the change, so an untrusted PR can't add commands to run. `--trust-head-config` uses the head's config, for the user's own repos. M5 implements it.
+8. **Budget bounds:** `maxCalls` <= 200 and `maxMinutes` <= 240. The `triage` and `review` tiers must be non-empty (implemented in M3).
+9. **Jules for building Quorum:** skipped while session creation keeps failing (a 400, then a hang, on 2026-10-19). The provider order goes on to Codex.
+10. **Local CI barrier:** `relaykit ci-local` always runs `node --test`, so it can't run this vitest suite. Until Relaykit runs the repo's own test script, the barrier before a push is `pnpm typecheck` + `pnpm test`. Linux and macOS are reported as not verified.
+11. **Packaging:** Quorum stays a CLI. In v1.x a thin `/quorum` skill calls it, and the two ship together as a Claude Code plugin (see ROADMAP).
+
 ---
 
 ## Review corrections
@@ -1378,3 +1386,66 @@ Known limits:
 - User paths containing `& ! % ^` make a shim unusable (fail-closed).
 - Before M5, decide whether a reviewed repository's own `quorum.config.json` may
   define checks: doing so would run commands from an untrusted PR.
+
+## M3 as built
+
+M3 adds the provider contract and scripted FakeProvider, catalog and quota groups,
+budget, parser, planner, cascade and library barrel. Tests use synthetic data and
+FakeProvider only; the integration pipeline creates its own Git repository. No
+provider CLI, network request, ledger write or check command is started by M3.
+M0-M2 implementations and tests are unchanged except the requested config bounds
+and non-empty triage/review validation (and the matching config tests).
+
+Decisions and ambiguities:
+
+- The current brief supersedes the older section 3 signatures: `runCascade`
+  returns findings, unconfirmed findings, related pairs, warnings, call records
+  and per-call ledger drafts. M5 supplies run IDs/timestamps and persistence.
+  Drafts retain counted parse, verification, dirty-worktree and confirmation
+  rejection reasons. No reproduction is run or claimed in this milestone.
+- `src/providers/types.ts` owns the raw adapter contract; the shared types module
+  re-exports it. The older `ProviderResult` shape remains available for source
+  compatibility but is not an adapter result. Catalog entries now require a
+  provider. Bare `codex` and `qwen` use those strings as their model IDs; bare
+  `claude` aliases `claude:sonnet`. Unknown catalog models fail explicitly.
+- The catalog is the PLAN table's seed, including older Flash variants. M4 can
+  replace it with discovery. Routing follows configured tier order, never adds
+  Fable implicitly, and shares quota by group. Both planning and execution use
+  only the supplied snapshot; missing/invalid readings remain eligible with
+  `floor unchecked`. No quota/probe endpoint is called. M4 owns live preflight.
+- Every inference, fallback and adjudication shares the call/time budget. An
+  injected clock makes deadline tests deterministic. Adapters receive remaining
+  milliseconds and an optional AbortSignal; the deadline aborts even a pending
+  FakeProvider. Real process-tree termination remains the M2 runner/M4 adapter's
+  responsibility. A timeout before the overall deadline escalates triage to
+  review; confirmation can try another model within the remaining budget.
+- JSON extraction scans balanced candidates in one pass (including bracketed
+  prose), understands escaped strings, and caps raw text at 1 MiB characters.
+  Arrays, single findings and `{ "findings": [...] }` envelopes are accepted.
+  Invalid entries are dropped individually. Model verification flags, identity,
+  related annotations and reproduction status are never trusted. An incomplete
+  outer JSON candidate is a parse failure, rather than a salvaged inner finding.
+- Confirmation JSON is `{ "decision": "confirm" | "reject", "evidence_quote":
+  "..." }`; confirm requires real evidence and may correct line, confidence,
+  trigger, impact, fix and reproduction proposal. It cannot change the target
+  file or severity. Same-defect adjudication uses `{ "same": true | false }`.
+  Both include only the relevant hunk and finding(s); review receives the diff
+  and supplied context. Missing hunks fall back to the verified quote.
+- Verification and origin run before dedupe, including confirmation evidence.
+  Final confirmed evidence comes from the confirming reviewer. Original source
+  findings remain available internally when deduping/adjudicating, so a merged
+  representative never loses family provenance or gets its boost added twice.
+  Unavailable confirmation puts the original verified finding in `unconfirmed`;
+  local-only sources can never enter final findings. Unresolved related pairs
+  remain separate and annotated without any additional confidence boost.
+- Dry-run is a pure plan formatter, with configured checks, eligible/fallback
+  tier paths, quota reading times, payload character count and budget. Context
+  carries spec content rather than a spec path, so it says content was supplied;
+  it prints the resolved head SHA rather than inventing a ref name. Quota times
+  are shown with the documented 15-minute staleness guidance, not refreshed.
+  CLI wiring, full mode prompts, reproduction and ledger persistence remain in
+  their later milestones.
+
+Cross-family external review remains unavailable under the task's no-network
+and no-provider-CLI restriction; the available independent review is read-only
+within the same model family.
