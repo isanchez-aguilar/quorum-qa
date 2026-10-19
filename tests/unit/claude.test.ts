@@ -111,3 +111,15 @@ it('escalates an unknown envelope under rule 4 instead of accepting nested findi
   expect(result.calls.map(call => call.status)).toEqual(['invalid', 'ok']);
   expect(result.coverage.complete).toBe(true);
 });
+
+it('recognizes the recorded expired-login envelope (ASSUMPTION 10)', async () => {
+  const { claudeAuthFailure, claudeEnvelope, CLAUDE_LOGIN_HINT } = await import('../../src/providers/claude.js');
+  // Shape recorded from claude 2.1.285 on 2026-10-19, trimmed.
+  const recorded = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, terminal_reason: 'api_error', num_turns: 1,
+    result: 'Failed to authenticate: OAuth session expired and could not be refreshed', usage: { input_tokens: 0, output_tokens: 0 } });
+  expect(claudeAuthFailure(claudeEnvelope(recorded))).toBe(true);
+  expect(claudeAuthFailure(claudeEnvelope(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '[]' })))).toBe(false);
+  // A review that merely mentions OAuth is an answer, not an auth failure.
+  expect(claudeAuthFailure(claudeEnvelope(JSON.stringify({ subtype: 'success', is_error: false, result: 'The OAuth refresh path lacks a check' })))).toBe(false);
+  expect(CLAUDE_LOGIN_HINT).toMatch(/sign in/);
+});

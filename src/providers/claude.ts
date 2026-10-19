@@ -12,6 +12,13 @@ export function claudeEnvelope(stdout: string): Record<string, unknown> | undefi
   try { const value: unknown = JSON.parse(stdout); return isRecord(value) ? value : undefined; }
   catch { return undefined; }
 }
+// Recorded on 2026-10-19: an expired login answers exit 1 with {"is_error": true, "subtype": "success",
+// "terminal_reason": "api_error", "result": "Failed to authenticate: OAuth session expired ..."}.
+export const CLAUDE_LOGIN_HINT = 'claude login expired or missing: run `claude` and sign in';
+export function claudeAuthFailure(envelope: Record<string, unknown> | undefined): boolean {
+  return envelope?.is_error === true && typeof envelope.result === 'string'
+    && /failed to authenticate|oauth|not logged in|please (?:log|sign) in/i.test(envelope.result.slice(0, 300));
+}
 export function claudeAnswer(envelope: Record<string, unknown> | undefined): string | undefined {
   return envelope?.subtype === 'success' && (envelope.is_error === undefined || envelope.is_error === false)
     && typeof envelope.result === 'string' ? envelope.result : undefined;
@@ -38,6 +45,7 @@ export class ClaudeProvider extends ProviderCommands implements ProviderAdapter 
         const failed = result.exitCode !== 0 || envelope?.is_error === true
           || (typeof envelope?.subtype === 'string' && envelope.subtype !== 'success');
         // `result` is answer text, even in failed envelopes: never scan it for quota.
+        if (failed && claudeAuthFailure(envelope)) throw new ProviderError('unavailable', CLAUDE_LOGIN_HINT);
         if (failed && quotaLanguage(result.stderr + '\n' + JSON.stringify([envelope?.subtype, envelope?.error, envelope?.errors]))) {
           throw new ProviderError('quota', 'claude quota exhausted or rate limited');
         }

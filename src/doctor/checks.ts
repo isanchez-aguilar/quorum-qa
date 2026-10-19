@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { CommandRunner } from '../types/index.js';
 import { resolveCommand } from '../checks/resolver.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
-import { claudeArgs, claudeAnswer, claudeEnvelope } from '../providers/claude.js';
+import { CLAUDE_LOGIN_HINT, claudeArgs, claudeAnswer, claudeAuthFailure, claudeEnvelope } from '../providers/claude.js';
 import { QwenProvider } from '../providers/qwen.js';
 import { loopbackUrl } from '../providers/loopback.js';
 
@@ -107,6 +107,7 @@ export async function readProbe(provider: 'agy' | 'codex' | 'claude', model: str
         output = envelope.response;
       } else if (provider === 'claude') {
         const result = await command(context, 'claude', claudeArgs(model), worktree.path, prompt);
+        if (claudeAuthFailure(claudeEnvelope(result.stdout))) throw new Error(CLAUDE_LOGIN_HINT);
         if (result.exitCode !== 0) throw new Error(`exit code ${result.exitCode}`);
         const answer = claudeAnswer(claudeEnvelope(result.stdout));
         if (answer === undefined) throw new Error('Invalid response');
