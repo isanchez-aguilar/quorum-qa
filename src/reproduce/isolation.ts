@@ -7,9 +7,10 @@ import { CommandTimeoutError } from '../process/runner.js';
 import type { CommandRunner, QuorumConfig, TestReport } from '../types/index.js';
 import { infrastructureFailure, parseTestReport } from './evaluate.js';
 
-// Verify this digest with docker buildx imagetools inspect node:22-bookworm-slim
-// before relying on it, then run the opt-in container test.
-export const DEFAULT_REPRODUCE_IMAGE = 'node:22-bookworm-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383';
+// The multi-platform index digest, read from the registry on 2026-10-19 with
+// `docker buildx imagetools inspect node:22-bookworm-slim`. To update it, run the same
+// command, take the top-level Digest line, then run the opt-in container test.
+export const DEFAULT_REPRODUCE_IMAGE = 'node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392';
 
 export interface IsolationOptions {
   warn?: (message: string) => void;

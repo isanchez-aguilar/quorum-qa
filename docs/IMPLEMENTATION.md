@@ -1135,7 +1135,7 @@ Minimal pinned dependency list. Strict adherence to exact versions, favoring Nod
 
 Each assumption listed below represents an unverified CLI behavior or interface contract requiring an explicit probe:
 
-9. **`[ASSUMPTION 9]` default reproduction image digest:** verify the constant in `src/reproduce/isolation.ts` with `docker buildx imagetools inspect node:22-bookworm-slim` before relying on it. Registry identity and actual container behavior have not been verified in these fixes; provider and container executions were prohibited.
+9. **`[ASSUMPTION 9]` default reproduction image digest — partly settled.** On 2026-10-19 Claude read the index digest from the registry with `docker buildx imagetools inspect node:22-bookworm-slim` (`sha256:c3de60bf…978392`). The constant in `src/reproduce/isolation.ts` now uses it; the digest Codex had pinned did not match the registry. Still open: actual container behaviour (volume seeding, the report wrapper, vitest under `--read-only`), because the Docker daemon was not running. Run `QUORUM_CONTAINER_TESTS=1 pnpm vitest run tests/container` with Docker Desktop started to settle it.
 
 1. **`[ASSUMPTION 1]` agy write and shell deny rule names:**
    - *Known:* permissions live in `~/.gemini/antigravity-cli/settings.json` under `permissions.allow` / `permissions.deny`, with entries like `read_file(<path>)`.
