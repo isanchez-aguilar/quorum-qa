@@ -26,10 +26,14 @@ export function modelRef(entry: CatalogEntry): string {
   return entry.provider === entry.id ? entry.id : `${entry.provider}:${entry.id}`;
 }
 
+export function withQwenModel(catalog: readonly CatalogEntry[], model?: string): readonly CatalogEntry[] {
+  return model ? catalog.map(item => item.provider === 'qwen' ? { ...item, id: model } : item) : catalog;
+}
+
 export function parseModelRef(ref: string, catalog: readonly CatalogEntry[] = DEFAULT_CATALOG): { provider: string; model: string; family: Family } {
   const [provider, explicit, ...extra] = ref.split(':');
   if (!provider || !['agy', 'codex', 'claude', 'qwen'].includes(provider)) throw new Error(`Unknown provider: ${provider}`);
-  const model = explicit ?? (provider === 'claude' ? 'sonnet' : provider);
+  const model = explicit ?? (provider === 'claude' ? 'sonnet' : provider === 'qwen' ? catalog.find(item => item.provider === 'qwen')?.id ?? provider : provider);
   const found = catalog.find(item => item.provider === provider && item.id === model);
   if (extra.length || !found) throw new Error(`Unknown model reference: ${ref}`);
   return { provider, model, family: found.family };

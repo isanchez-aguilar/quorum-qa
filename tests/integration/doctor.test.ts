@@ -21,11 +21,12 @@ describe('doctor with synthetic executables and injected runner', () => {
   const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
   beforeEach(async () => {
     vi.resetAllMocks();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'qwen-test' }] }))));
     root = await mkdtemp(path.join(tmpdir(), 'quorum-doctor-test-'));
     home = path.join(root, 'home');
     const bin = path.join(root, 'bin');
     await mkdir(bin);
-    for (const name of ['git', 'agy', 'codex', 'docker', 'podman', 'checker']) await writeFile(path.join(bin, name + (process.platform === 'win32' ? '.EXE' : '')), 'synthetic');
+    for (const name of ['git', 'agy', 'codex', 'claude', 'docker', 'podman', 'checker']) await writeFile(path.join(bin, name + (process.platform === 'win32' ? '.EXE' : '')), 'synthetic');
     env = { PATH: bin, PATHEXT: '.EXE' };
     settings = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
     await mkdir(path.dirname(settings), { recursive: true });
@@ -57,24 +58,86 @@ describe('doctor with synthetic executables and injected runner', () => {
     const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root });
     expect(status(result, 'agy.permissions.read')).toBe('PASS');
   });
-  it('warns for configured adapter stubs while preserving the Qwen endpoint diagnostic', async () => {
-    const cfg = config();
-    cfg.tiers.review = ['claude:sonnet', 'agy:gemini-4-argon-high'];
-    cfg.tiers.triage.push('qwen:local');
-    cfg.qwen = { endpoint: 'http://127.0.0.1:8080/v1' };
-    const fetchMock = vi.fn(async () => new Response('{}'));
-    vi.stubGlobal('fetch', fetchMock);
-    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root });
-    for (const provider of ['claude', 'qwen']) {
-      expect(result.find(check => check.id === `${provider}.adapter`)).toMatchObject({ status: 'WARN', message: `${provider}: not implemented in v1` });
-    }
-    expect(status(result, 'qwen.endpoint')).toBe('PASS');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(runner.mock.calls.some(([file]) => /claude|qwen/i.test(path.basename(file)))).toBe(false);
+  it.each([true, false])('uses FAIL only when Claude/Qwen are required: %s', async required => {
+    const cfg = config(); if (required) { cfg.tiers.triage = ['qwen']; cfg.tiers.review = ['claude:sonnet']; }
+    const result = await runDoctor(cfg, { runner, env: { PATH: '' }, homedir: home, repoRoot: root,
+      fetch: vi.fn<typeof fetch>().mockRejectedValue(new Error('ECONNREFUSED')) });
+    for (const id of ['claude.path', 'qwen.endpoint', 'qwen.model']) expect(status(result, id)).toBe(required ? 'FAIL' : 'WARN');
   });
-  it('does not report adapter stubs absent from all tiers', async () => {
-    const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root });
-    expect(result.some(check => check.id === 'claude.adapter' || check.id === 'qwen.adapter')).toBe(false);
+  it.each([true, false])('validates configured Qwen model membership: %s', async listed => {
+    const cfg = config(); cfg.tiers.triage = ['qwen']; cfg.qwen = { endpoint: 'http://localhost/v1', model: listed ? 'second' : 'absent' };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [{ id: 'first' }, { id: 'second' }] })));
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, fetch: fetcher });
+    expect(status(result, 'qwen.endpoint')).toBe('PASS'); expect(status(result, 'qwen.model')).toBe(listed ? 'PASS' : 'FAIL');
+    expect(result.find(check => check.id === 'qwen.model')?.message).toContain(listed ? 'second' : 'absent');
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it('reports malformed models as a model failure and skips inference without a selected model', async () => {
+    const cfg = config(); cfg.tiers.triage = ['qwen'];
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}'));
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, fetch: fetcher, probe: true });
+    expect(status(result, 'qwen.endpoint')).toBe('PASS'); expect(status(result, 'qwen.model')).toBe('FAIL');
+    expect(status(result, 'qwen.probe')).toBe('FAIL'); expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it.each(['OK', 'wrong', 'nonjson', 'connection'])('makes exactly one local chat probe and checks its answer: %s', async output => {
+    const cfg = config(); cfg.tiers.triage = ['qwen'];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      if (init?.method === 'GET') return new Response(JSON.stringify({ data: [{ id: 'selected-model' }] }));
+      if (output === 'connection') throw new Error('ECONNREFUSED');
+      return new Response(output === 'nonjson' ? 'invalid' : JSON.stringify({ choices: [{ message: { content: output } }] }));
+    });
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, fetch: fetcher, probe: true });
+    expect(status(result, 'qwen.probe')).toBe(output === 'OK' ? 'PASS' : 'FAIL');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetcher.mock.calls[1]![1]!.body as string)).toMatchObject({ model: 'selected-model', messages: [
+      { role: 'system', content: expect.stringContaining('connectivity probe') }, { role: 'user', content: 'Reply with OK' },
+    ] });
+  });
+  it('warns and skips optional inference for providers absent from tiers', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [{ id: 'local' }] })));
+    const result = await runDoctor(config(), { runner, env, homedir: home, repoRoot: root, fetch: fetcher, probe: true });
+    expect(status(result, 'qwen.probe')).toBe('WARN'); expect(status(result, 'claude.probe')).toBe('WARN');
+    expect(fetcher).toHaveBeenCalledOnce(); expect(runner.mock.calls.some(([, args]) => args.includes('-p'))).toBe(false);
+  });
+  it.each(['success', 'dirty', 'wrong', 'nonzero', 'invalid'])('Claude probe %s uses one restricted stdin call and cleans up', async failure => {
+    await writeFile(path.join(root, 'README.md'), '# Synthetic');
+    const cleanup = vi.fn(async () => {});
+    vi.mocked(createReviewWorktree).mockResolvedValue({ path: root, cleanup });
+    vi.mocked(isClean).mockResolvedValue(failure !== 'dirty');
+    runner.mockImplementation(async (_file, args) => args.includes('--verify') ? ok('a'.repeat(40)) : {
+      stdout: failure === 'invalid' ? '{}' : JSON.stringify({ subtype: 'success', result: failure === 'wrong' ? 'wrong' : '# Synthetic' }),
+      stderr: '', exitCode: failure === 'nonzero' ? 1 : 0,
+    });
+    const result = await readProbe('claude', 'sonnet', { runner, env, repoRoot: root });
+    expect(result.status).toBe(failure === 'success' ? 'PASS' : 'FAIL'); expect(cleanup).toHaveBeenCalledOnce();
+    const calls = runner.mock.calls.filter(([, args]) => args.includes('-p')); expect(calls).toHaveLength(1);
+    const [, args, opts] = calls[0]!;
+    expect(args).toEqual(['-p', '--output-format', 'json', '--model', 'sonnet', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--tools', 'Read,Grep,Glob', '--permission-mode', 'dontAsk']);
+    expect(opts?.cwd).toBe(root); expect(opts?.stdin).toContain('Read README.md');
+    expect(opts?.stdin).not.toMatch(/never read|do not read/i);
+  });
+  it('runs the configured Claude alias probe only with --probe', async () => {
+    await writeFile(path.join(root, 'README.md'), '# Synthetic');
+    vi.mocked(createReviewWorktree).mockResolvedValue({ path: root, cleanup: vi.fn(async () => {}) });
+    vi.mocked(isClean).mockResolvedValue(true);
+    const normal = runner.getMockImplementation()!;
+    runner.mockImplementation(async (file, args, opts) => args.includes('--verify') ? ok('a'.repeat(40)) : args.includes('-p')
+      ? ok(JSON.stringify({ subtype: 'success', result: '# Synthetic' })) : normal(file, args, opts));
+    const cfg = config(); cfg.tiers.review = ['claude:opus'];
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, probe: true });
+    expect(status(result, 'claude.probe')).toBe('PASS');
+    const calls = runner.mock.calls.filter(([, args]) => args.includes('-p')); expect(calls).toHaveLength(1);
+    expect(calls[0]![1]).toContain('opus');
+  });
+  it('checks Claude availability and the Qwen model without inference', async () => {
+    const cfg = config(); cfg.tiers.review = ['claude:sonnet']; cfg.tiers.triage.push('qwen');
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'qwen-test' }] })));
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, fetch: fetcher });
+    for (const id of ['claude.path', 'qwen.endpoint', 'qwen.model']) expect(status(result, id)).toBe('PASS');
+    expect(result.find(check => check.id === 'qwen.model')?.message).toContain('qwen-test');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls.filter(([file]) => /claude/i.test(path.basename(file))).map(([, args]) => args)).toEqual([['--version']]);
+    expect(result.some(check => check.id.endsWith('.probe'))).toBe(false);
   });
   it('reports missing executables, checks, models, git and unknown quota without throwing', async () => {
     const result = await runDoctor(config(), { runner, env: { PATH: '' }, homedir: home, repoRoot: root });
@@ -215,14 +278,14 @@ describe('doctor with synthetic executables and injected runner', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
   it.each(['http://127.0.0.1:8080/v1', 'http://[::1]:8080/v1', 'http://localhost:8080/v1/'])('requests loopback models with timeout and no redirects: %s', async endpoint => {
-    const fetcher = vi.fn().mockResolvedValue({ ok: true, body: { cancel: vi.fn() } }); vi.stubGlobal('fetch', fetcher);
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [{ id: 'local-model' }] }))); vi.stubGlobal('fetch', fetcher);
     expect((await checkQwen(endpoint)).status).toBe('PASS');
     const [url, init] = fetcher.mock.calls[0]!;
-    expect(url.pathname).toBe('/v1/models'); expect(init.method).toBe('GET'); expect(init.redirect).toBe('error'); expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect((url as URL).pathname).toBe('/v1/models'); expect(init?.method).toBe('GET'); expect(init?.redirect).toBe('error'); expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
   it('warns for HTTP failure and timeout, and only checks Qwen when configured', async () => {
     const fetcher = vi.fn().mockResolvedValue({ ok: false }); vi.stubGlobal('fetch', fetcher);
-    expect((await checkQwen('http://localhost:8080')).status).toBe('WARN');
+    expect((await checkQwen('http://localhost:8080')).status).toBe('FAIL');
     fetcher.mockRejectedValue(new Error('timeout'));
     const cfg = config(); cfg.qwen = { endpoint: 'http://localhost:8080' };
     expect(status(await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root }), 'qwen.endpoint')).toBe('WARN');

@@ -3,11 +3,12 @@ import { resolveCommand } from '../checks/resolver.js';
 import { runCommand } from '../process/runner.js';
 import { parseAgyQuota } from '../providers/agy.js';
 import type { CommandRunner, QuorumConfig } from '../types/index.js';
-import { checkPermissions, checkQwen, command, readProbe } from './checks.js';
+import { checkPermissions, checkQwenModels, command, readProbe } from './checks.js';
+import { QwenProvider } from '../providers/qwen.js';
 import type { DoctorCheck } from './checks.js';
 
 export type { DoctorCheck } from './checks.js';
-export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean }
+export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
 
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
@@ -43,16 +44,28 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const podman = docker?.exitCode === 0 ? undefined : await run('podman', ['--version']);
   const container = docker?.exitCode === 0 || podman?.exitCode === 0;
   results.push({ id: 'container', status: container ? 'PASS' : 'WARN', message: container ? 'Container runtime is available.' : 'Neither Docker nor Podman is available; reproduction requires explicit interactive confirmation.' });
-  if (config?.qwen) results.push(await checkQwen(config.qwen.endpoint));
-  for (const provider of ['claude', 'qwen']) {
-    if (Object.values(config?.tiers ?? {}).flat().some(ref => ref === provider || ref.startsWith(`${provider}:`))) {
-      results.push({ id: `${provider}.adapter`, status: 'WARN', message: `${provider}: not implemented in v1` });
-    }
-  }
+  const names = Object.values(config?.tiers ?? {}).flat();
+  const required = (provider: string) => names.some(ref => ref === provider || ref.startsWith(`${provider}:`));
+  const claude = await run('claude', ['--version']);
+  results.push({ id: 'claude.path', status: claude?.exitCode === 0 ? 'PASS' : required('claude') ? 'FAIL' : 'WARN',
+    message: claude?.exitCode === 0 ? 'Claude Code is available.' : 'claude --version failed; install Claude Code and check PATH.' });
+  const qwen = new QwenProvider({ ...config?.qwen, fetch: options.fetch });
+  const local = config?.qwen || required('qwen') ? await checkQwenModels(qwen, required('qwen')) : undefined;
+  if (local) results.push(...local.checks);
   if (options.probe) {
     const model = configured.find(id => listed.has(id));
     results.push(model ? await readProbe('agy', model, context) : { id: 'agy.probe', status: 'FAIL', message: 'No configured agy model is listed by agy models; read probe skipped.' });
     results.push(await readProbe('codex', 'codex', context));
+    if (required('claude')) {
+      const ref = names.find(ref => ref === 'claude' || ref.startsWith('claude:'))!;
+      results.push(await readProbe('claude', ref.split(':')[1] ?? 'sonnet', context));
+    } else results.push({ id: 'claude.probe', status: 'WARN', message: 'Claude probe skipped: provider is not configured in tiers.' });
+    if (required('qwen') && local?.model) {
+      try {
+        const answer = await qwen.complete(local.model, 'Reply with OK', { deadlineMs: 30_000 }, 'You are a local connectivity probe. Reply with OK.');
+        results.push({ id: 'qwen.probe', status: answer?.trim() === 'OK' ? 'PASS' : 'FAIL', message: answer?.trim() === 'OK' ? 'Qwen replied with OK.' : 'Qwen probe did not reply with OK.' });
+      } catch { results.push({ id: 'qwen.probe', status: 'FAIL', message: 'Qwen chat probe failed.' }); }
+    } else results.push({ id: 'qwen.probe', status: required('qwen') ? 'FAIL' : 'WARN', message: 'Qwen probe skipped: no configured, available model.' });
   }
   return results;
 }

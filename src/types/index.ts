@@ -121,6 +121,7 @@ export interface QuorumConfig {
   };
   qwen?: {
     endpoint: string;
+    model?: string;
   };
 }
 

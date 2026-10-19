@@ -24,6 +24,7 @@ export interface ProviderAdapter {
   readonly name: string;
   readonly defaultFamily: Family;
   readonly run: CommandRunner;
+  resolveModel?(modelId: string, options: ReviewOptions): Promise<string>;
   probe(modelId: string): Promise<{ available: boolean; error?: string }>;
   getQuota(modelId: string): Promise<Quota>;
   executeReview(context: ReviewContext, modelId: string, prompt: string, options: ReviewOptions): Promise<RawProviderResult>;
@@ -34,12 +35,5 @@ export class ProviderError extends Error {
   constructor(readonly kind: 'quota' | 'timeout' | 'unavailable', message: string) {
     super(message);
     this.name = 'ProviderError';
-  }
-}
-
-export class NotImplementedError extends ProviderError {
-  constructor(readonly provider: 'claude' | 'qwen') {
-    super('unavailable', 'not implemented in v1');
-    this.name = 'NotImplementedError';
   }
 }

@@ -15,7 +15,7 @@ Feature and redesign modes, plus:
 See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 
 ## v1.x: more reviewers, less spend
-- Working claude and qwen adapters.
+- [x] Working claude and qwen adapters.
 - A thin `/quorum` skill that runs the CLI from a Claude Code session, packaged with it as a plugin.
 - **Jules as a cloud reproduction lane**, only once AGENTS.md has an explicit exception for it and the exact commit can be pinned. Its test is pulled without applying it, and re-run locally before it counts as evidence.
 - The cascade policy, configurable per focus (money, auth, a11y, copy).

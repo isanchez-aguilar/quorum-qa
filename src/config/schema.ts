@@ -313,8 +313,9 @@ export function validateConfig(raw: unknown): QuorumConfig {
     ),
   };
 
-  const qwenRaw = r.object(top.qwen, 'qwen', ['endpoint']) ?? {};
-  const qwen = { endpoint: r.string(qwenRaw.endpoint, 'qwen.endpoint', defaults.qwen.endpoint) };
+  const qwenRaw = r.object(top.qwen, 'qwen', ['endpoint', 'model']) ?? {};
+  const qwen = { endpoint: r.string(qwenRaw.endpoint, 'qwen.endpoint', defaults.qwen.endpoint),
+    ...(qwenRaw.model === undefined ? {} : { model: r.string(qwenRaw.model, 'qwen.model', '') }) };
 
   if (r.issues.length > 0) throw new ConfigError(r.issues);
 

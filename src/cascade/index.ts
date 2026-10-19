@@ -4,7 +4,7 @@ import { checkoutSnapshot, checkoutDifference, type CheckoutSnapshot } from '../
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { CatalogEntry, CommandRunner, Finding, LedgerEntry, QuorumConfig, ReproductionProposal, ReviewContext, Tier } from '../types/index.js';
-import { DEFAULT_CATALOG, modelRef, parseModelRef } from '../catalog/index.js';
+import { DEFAULT_CATALOG, modelRef, parseModelRef, withQwenModel } from '../catalog/index.js';
 import { quotaStatus, type QuotaSnapshot } from '../catalog/groups.js';
 import { resolveTier } from '../catalog/tiers.js';
 import { determineOrigin } from '../context/blame.js';
@@ -88,7 +88,7 @@ export async function runCascade(
 ): Promise<CascadeResult> {
   const reviewedFamilies: import('../types/index.js').Family[] = [];
   let cacheHits = 0;
-  const catalog = options.catalog ?? DEFAULT_CATALOG;
+  const catalog = withQwenModel(options.catalog ?? DEFAULT_CATALOG, config.qwen?.model);
   for (const tier of TIERS) for (const ref of config.tiers[tier]) parseModelRef(ref, catalog);
   if (config.author !== undefined) resolveAuthorFamily(config.author);
   const gitRunner = options.gitRunner ?? runCommand;
@@ -149,13 +149,22 @@ export async function runCascade(
       });
       resolved.warnings.forEach(warn);
       const independent = resolved.models.filter(entry => !settings.preferOtherThan?.has(entry.family));
-      const entry = (independent.length ? independent : resolved.models)[0];
+      let entry = (independent.length ? independent : resolved.models)[0];
       if (!entry) return null;
       if (budget.remainingMs <= 0) { warn(BUDGET_WARNING); return null; }
       const ref = modelRef(entry);
       attempted.add(ref);
       if (quotaStatus(entry, snapshot, config.budget.quotaFloorPercent, budget.clock.now()) === 'unchecked') warn(`${entry.quotaGroup}: unknown quota; floor unchecked.`);
       const adapter = providers.get(entry.provider)!;
+      if (adapter.resolveModel) {
+        try { entry = { ...entry, id: await adapter.resolveModel(entry.id, { deadlineMs: Math.min(2000, budget.remainingMs) }) }; }
+        catch (error) {
+          warn(`${ref}: model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof ProviderError && error.kind === 'quota') budget.unavailableGroups.add(entry.quotaGroup);
+          unavailable.add(ref);
+          continue;
+        }
+      }
       const call: CascadeCall = { provider: entry.provider, model: entry.id, tier, purpose,
         promptHash: createHash('sha256').update(prompt).digest('hex'), deadlineMs: budget.remainingMs, status: 'ok' };
 
@@ -163,7 +172,7 @@ export async function runCascade(
         provider: entry.provider, model: entry.id, family: entry.family,
         rawFindingsCount: 0, verifiedFindingsCount: 0, rejectedFindingsCount: 0, durationMs: 0,
         callsUsed: 1, timedOutCalls: 0, reproducedBlockersCount: 0, rejectionReasons: {} };
-      const key = purpose === 'review' && tier !== 'visual' ? cacheKey(prompt, prompt, ref) : undefined;
+      const key = purpose === 'review' && tier !== 'visual' ? cacheKey(prompt, prompt, modelRef(entry)) : undefined;
       if (key && options.cache) {
         const cached = await options.cache.read(key);
         if (cached !== undefined) {

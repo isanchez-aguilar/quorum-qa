@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { DEFAULT_CATALOG, parseModelRef } from '../catalog/index.js';
+import { DEFAULT_CATALOG, parseModelRef, withQwenModel } from '../catalog/index.js';
 import type { QuotaSnapshot } from '../catalog/groups.js';
 import { createExecutionPlan, formatDryRun, runCascade } from '../cascade/index.js';
 import { runDeterministicChecks } from '../checks/index.js';
@@ -25,6 +25,7 @@ import type { CliIo } from './index.js';
 import { UsageError, type ParsedFlags } from './args.js';
 
 export interface ReviewDependencies {
+  fetch?: typeof globalThis.fetch;
   repoRoot?: string;
   providers?: ReadonlyMap<string, ProviderAdapter>;
   catalog?: readonly CatalogEntry[];
@@ -101,7 +102,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'feature' && !acceptanceCriteria(context.specContent ?? '').length) {
     throw new UsageError('No acceptance criteria detected. Use Markdown checkboxes (- [ ] criterion), or a list under a heading containing "acceptance".');
   }
-  const catalog = dependencies.catalog ?? DEFAULT_CATALOG;
+  const catalog = withQwenModel(dependencies.catalog ?? DEFAULT_CATALOG, config.qwen?.model);
   const plan = createExecutionPlan(context, config, catalog);
   const quotaFile = path.join(root, '.quorum', 'quota.json');
   let snapshot = await readQuota(quotaFile);
@@ -118,7 +119,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     warn(message); io.err(`quorum: ${message}\n`);
   }
   plan.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
-  const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider()]]);
+  const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider({ ...config.qwen, fetch: dependencies.fetch })]]);
   const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
   const groups = new Set<string>();
   for (const ref of Object.values(config.tiers).flat()) {
