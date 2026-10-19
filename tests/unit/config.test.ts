@@ -5,6 +5,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config/index.js';
 import { ConfigError, resolveAuthorFamily, validateConfig } from '../../src/config/schema.js';
 
+it('defaults context to git and validates the opt-in provider strictly', () => {
+  expect(validateConfig({ checks: [] }).context).toEqual({ provider: 'git' });
+  expect(validateConfig({ checks: [], context: {} }).context).toEqual({ provider: 'git' });
+  expect(validateConfig({ checks: [], context: { provider: 'codegraph' } }).context).toEqual({ provider: 'codegraph' });
+  for (const provider of ['other', '', null, 1, []]) {
+    expect(() => validateConfig({ checks: [], context: { provider } })).toThrow('context.provider');
+  }
+  expect(() => validateConfig({ checks: [], context: null })).toThrow('context must be an object');
+  expect(() => validateConfig({ checks: [], context: { unexpected: true } })).toThrow('in context');
+});
+
 it('defaults install scripts off and validates the explicit opt-in', () => {
   expect(validateConfig({ checks: [] }).reproduce.allowInstallScripts).toBe(false);
   expect(validateConfig({ checks: [], reproduce: { allowInstallScripts: true } }).reproduce.allowInstallScripts).toBe(true);
@@ -13,6 +24,7 @@ it('defaults install scripts off and validates the explicit opt-in', () => {
 
 // The full example from docs/PLAN.md, Configuration.
 const PLAN_EXAMPLE = {
+  context: { provider: 'git' },
   base: 'origin/main',
   checks: [
     ['pnpm', 'lint'],

@@ -1197,6 +1197,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 17. **v1.x local-only coverage (2026-10-19, extended):** After triage, every chunk reviewed successfully only by a local-family model gets one escalation to the `review` tier, excluding local models and using its normal fallbacks. The full chunk is reviewed within the shared budget and confirmation reserve. A successful non-local review restores that chunk's coverage and its findings follow the normal flow; the original local findings still require rule 3b. If budget, quota or availability prevents this review, `coverage.complete` remains false with `reviewed only by a local model: <files>`, and a run without BLOCKERs exits 2. Finding-level confirmation never replaces a full review of the chunk, and recovering one chunk does not recover other chunks of the same file.
 18. **v1.x per-focus confirmation routes (2026-10-19):** Optional `escalate.routes` maps non-empty focus keywords to non-empty ordered model-ref lists. Keys are additional focus triggers, including keys absent from `escalate.focus`. Every ref is validated against the catalog before any call, like tier refs. Match case-insensitively using the existing substring rule; select the keyword with the earliest position in `file + '\n' + trigger + '\n' + impact`, breaking ties by configured key order. Its list replaces `confirm` for finding confirmation; no match uses `confirm`. Author-family filtering, preference for another source family, same-family independence warnings and exclusion of local confirmers still apply. Exhausted routes fall back to `confirm` with an explicit warning. Routes share quota groups, call/time budgets and the confirmation reserve with tiers. Rule 3b still requires `review`; adjudication and reproduction continue to use the `confirm` tier.
 
+19. **v1.x CodeGraph context (2026-10-19):** `context.provider` defaults to `git`; `codegraph` is opt-in, read-only and never indexes. It requires an existing `.codegraph/` directory and `codegraph` on PATH; on Windows the npm `.cmd` shim runs through the same safe resolver path as the deterministic checks (absolute cmd.exe and shim path, cmd metacharacters rejected per argument). Missing availability falls back to git with one warning. Queries use only `node --symbols-only` and `callers`, with `-p` and cwd pinned to the user's root; Quorum never runs `init`, `index` or `sync`. Index-derived context is explicitly untrusted and may be stale. The diff always has priority over optional context within the existing prompt cap.
+
 ---
 
 ## Review corrections
@@ -2253,3 +2255,76 @@ Post-fix Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
 `git diff --check` passed. Changed files for this follow-up are
 `src/storage/index.ts`, `src/cascade/index.ts`, the two regression test files
 above, and this document. Provider review and Linux/macOS remain unverified.
+
+## v1.x CodeGraph context as built
+
+Implemented on `feat/v1x-codegraph-context`, with no dependencies added.
+Decision 19 makes CodeGraph opt-in, read-only, and never responsible for indexing.
+
+- `ContextProvider` supplies `name`, asynchronous availability, and enrichment
+  returning a per-file map plus notes. Git returns an empty map. Configuration
+  defaults to `context: { provider: "git" }` and rejects other provider values.
+- CodeGraph availability checks an existing `.codegraph/` directory and the
+  shared command resolver, without a process. Unavailable selection produces one
+  warning and uses git. Dry-run shows requested provider and availability without
+  executing CodeGraph. Doctor runs only `--version` when selected; failures WARN.
+  When unselected, an existing index produces the informational PASS hint.
+- Queries run with the user's repository as cwd and explicit `-p`, using only
+  `node -f <file> --symbols-only` and `callers <name> -f <file> -l 5 -j`.
+  No initialization, indexing, synchronization, status query, or checkout file
+  creation is performed. This is a read-only command policy, not an OS sandbox
+  against an independently compromised executable.
+- The tolerant Markdown parser ignores headers/hints and accepts optional
+  signatures. Selection includes the nearest symbol at or before a hunk's first
+  new line and symbols starting inside its new-line range, deduplicated across
+  hunks. Only text files carried by review chunks are queried. Each file queries
+  at most five symbols. Missing caller metadata is tolerated; truncation is
+  disclosed in both the context and notes.
+- UTF-8 output caps include the untrusted-data markers: 4 KiB per file and
+  16 KiB per enrichment. Each run makes at most 30 queries, each bounded to the
+  lesser of ten seconds and remaining time. Enrichment and inference share one
+  `RunBudget`; graph queries consume time but no model-call slots. Any failed,
+  timed-out or unparseable query discards that file's whole block and adds a note,
+  without failing the review. Raw command diagnostics are not reported.
+- Blocks say "Touched symbols and their callers (from CodeGraph, may be stale)"
+  and are untrusted JSON payload data. Prompt packing first builds the existing
+  diff-only chunks, then attaches context for the files each chunk carries. A
+  block that would exceed 24,000 serialized characters is dropped with a note;
+  diff content, chunk boundaries and coverage remain unchanged. Context changes
+  naturally change the existing prompt-based cache key.
+- The CLI preserves its early checkout snapshot to detect preflight/context
+  writes, checks it after enrichment, then takes that verified snapshot as the
+  review baseline. The cascade's baseline also remains after context building.
+- Tests use synthetic Markdown/JSON, injected runners/resolution/clocks and
+  temporary synthetic Git repositories. They cover parser/selection tables,
+  partial metadata, all caps, failure isolation, deadlines, unchanged Git status,
+  config, doctor, dry-run, and callers reaching triage through `main()` with
+  FakeProvider. No real CodeGraph or inference provider is called.
+
+Correction (Claude, same day): Codex first rejected Windows `.cmd` shims, which made the provider
+unusable on Windows, where npm installs `codegraph.cmd`. It now uses the resolver's safe
+`.cmd` path like the checks do; an argument with a cmd metacharacter skips that one
+query with a note. No real CodeGraph run was made: this repository has no index, and
+indexing is the owner's decision.
+External cross-provider review and live probes were not performed under the
+explicit CLI/Qwen prohibition. Internal read-only QA is from the same model
+family and does not replace that review. Linux/macOS and real index behavior
+remain unverified. No branch switch, commit, push or repository log was created.
+
+Final Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test` with
+`QUORUM_CONTAINER_TESTS=0` rebuilt the CLI and passed **1,042 tests**, with
+**6 existing skips**, across **38 files** (124.42 seconds). `git diff --check`
+passed. The first full run exposed one old exact-object assertion that needed
+the new empty `notes` field; its 22-test focused suite passed after correction,
+and the complete suite above then passed. The initial CLI fixture assertion
+was also corrected to find its target file among all diff files and normalize
+Git's Windows path separators. Internal read-only review found no remaining
+BLOCKER or IMPORTANT; QA's suggested partial-file-failure and reused-instance
+cap-reset regressions were added and pass.
+
+Files changed: `src/context/{providers,codegraph}.ts`,
+`src/cascade/{index,planner,prompts}.ts`, `src/cli/review.ts`,
+`src/config/schema.ts`, `src/doctor/index.ts`, `src/types/index.ts`,
+`src/index.ts`; `tests/unit/{context-providers,config,m3-limits}.test.ts`,
+`tests/integration/{review,doctor}.test.ts`; `README.md`,
+`docs/IMPLEMENTATION.md` and `docs/ROADMAP.md`.

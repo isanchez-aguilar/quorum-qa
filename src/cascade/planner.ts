@@ -52,6 +52,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
       timestamp: quotaSnapshot[group]?.timestamp, status };
   });
   const payload = reviewChunks(context);
+  warnings.push(...(context.contextNotes ?? []), ...payload.notes);
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
   const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));
@@ -70,6 +71,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     '=== Quorum Review Plan (Dry Run) ===', '', 'Configuration & Context:',
     `  Base Commit: ${config.base} (${context.baseCommit})`, `  Head Commit: ${context.headCommit}`,
     `  Review Mode: ${context.mode}`, `  Spec: ${context.specContent === undefined ? 'not supplied' : 'supplied as content'}`,
+    `  Context Provider: ${context.contextProvider?.requested ?? config.context?.provider ?? 'git'} (${context.contextProvider ? context.contextProvider.available ? 'available' : 'unavailable; using git' : (config.context?.provider ?? 'git') === 'git' ? 'available' : 'availability not checked'})`,
     `  Author Family: ${author ?? 'unknown'}`, `  Files Changed: ${context.touchedFiles.length} files (+${added}, -${removed} lines)`,
     `  Independence Rule: ${!author ? 'author unknown' : plan.warnings.some(item => item.startsWith('Independence')) ? 'cannot be met in every tier (see warnings)' : 'enforced'}`,
     '', 'Deterministic Pre-flight Checks (Phase 1):',

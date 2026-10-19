@@ -71,6 +71,9 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  providerContext?: Map<string, string>;
+  contextProvider?: { requested: 'git' | 'codegraph'; available: boolean; effective: string };
+  contextNotes?: string[];
   diffTruncated?: boolean;
   mode: 'feature' | 'redesign';
   diff: string;
@@ -89,6 +92,7 @@ export interface ReviewContext {
 }
 
 export interface QuorumConfig {
+  context?: { provider: 'git' | 'codegraph' };
   base: string;
   // Required, no default. Each check is an argv array, never a shell string.
   checks: string[][];

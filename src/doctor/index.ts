@@ -5,6 +5,7 @@ import { parseAgyQuota } from '../providers/agy.js';
 import type { CommandRunner, QuorumConfig } from '../types/index.js';
 import { checkPermissions, checkQwenModels, command, readProbe } from './checks.js';
 import { QwenProvider } from '../providers/qwen.js';
+import { CodeGraphContextProvider, hasCodeGraphIndex } from '../context/codegraph.js';
 import type { DoctorCheck } from './checks.js';
 
 export type { DoctorCheck } from './checks.js';
@@ -13,6 +14,20 @@ export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
   const results: DoctorCheck[] = [];
+  const indexFound = await hasCodeGraphIndex(context.repoRoot);
+  if (config?.context?.provider === 'codegraph') {
+    const provider = new CodeGraphContextProvider({ env: context.env });
+    let available = false;
+    if (indexFound && await provider.available(context.repoRoot)) {
+      try {
+        const resolved = provider.resolveInvocation(['--version'], context.repoRoot);
+        const version = await context.runner(resolved.file, resolved.args, { cwd: context.repoRoot, env: context.env, timeoutMs: 10_000 });
+        available = version.exitCode === 0;
+      } catch { /* Optional context never fails doctor. */ }
+    }
+    results.push({ id: 'context.codegraph', status: available ? 'PASS' : 'WARN',
+      message: available ? 'CodeGraph context is available; the index may be stale.' : 'CodeGraph context unavailable (no .codegraph index, codegraph not on PATH, or --version failed); using git context.' });
+  } else if (indexFound) results.push({ id: 'context.codegraph', status: 'PASS', message: 'CodeGraph index found; set context.provider to use it' });
   if (!config) results.push({ id: 'config', status: 'FAIL', message: 'quorum.config.json is missing.', fix: 'Create quorum.config.json with the repository checks and configured model ids.' });
   const run = async (name: string, args: string[]) => {
     try { return await command(context, name, args); } catch { return undefined; }

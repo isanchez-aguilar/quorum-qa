@@ -84,7 +84,7 @@ export async function runCascade(
   context: ReviewContext,
   config: QuorumConfig,
   providers: ReadonlyMap<string, ProviderAdapter>,
-  options: { clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
+  options: { budget?: RunBudget; clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
 ): Promise<CascadeResult> {
   const reviewedFamilies: import('../types/index.js').Family[] = [];
   let cacheHits = 0;
@@ -94,7 +94,7 @@ export async function runCascade(
   if (config.author !== undefined) resolveAuthorFamily(config.author);
   const gitRunner = options.gitRunner ?? runCommand;
   const snapshot = options.quotaSnapshot ?? {};
-  const budget = new RunBudget(config.budget, options.clock);
+  const budget = options.budget ?? new RunBudget(config.budget, options.clock);
   const warnings: string[] = [];
   const errors: string[] = [];
   let baseline: CheckoutSnapshot | undefined;
@@ -290,6 +290,7 @@ export async function runCascade(
   }
 
   const payload = reviewChunks(context);
+  [...(context.contextNotes ?? []), ...payload.notes].forEach(warn);
   const coverage: ReviewCoverage = { reviewedFiles: [], skippedFiles: [...payload.skippedFiles], truncatedHunks: payload.truncatedHunks, binaryFiles: payload.binaryFiles, lostFindings: [], complete: false };
   function lost(reason: string, file?: string, count = 1): void {
     const existing = coverage.lostFindings.find(item => item.reason === reason && item.file === file);

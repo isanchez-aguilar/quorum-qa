@@ -41,6 +41,33 @@ describe('doctor with synthetic executables and injected runner', () => {
   });
   afterEach(async () => { vi.unstubAllGlobals(); await rm(root, { recursive: true, force: true }); });
   const status = (checks: Awaited<ReturnType<typeof runDoctor>>, id: string) => checks.find(check => check.id === id)?.status;
+  it.each([
+    { selected: true, index: true, executable: true, version: 'ok', expected: 'PASS' },
+    { selected: true, index: false, executable: true, version: 'ok', expected: 'WARN' },
+    { selected: true, index: true, executable: false, version: 'ok', expected: 'WARN' },
+    { selected: true, index: true, executable: true, version: 'fail', expected: 'WARN' },
+    { selected: true, index: true, executable: true, version: 'timeout', expected: 'WARN' },
+    { selected: false, index: true, executable: false, version: 'ok', expected: 'PASS' },
+    { selected: false, index: false, executable: true, version: 'ok', expected: undefined },
+  ])('diagnoses opt-in CodeGraph without indexing: %j', async ({ selected, index, executable, version, expected }) => {
+    if (index) await mkdir(path.join(root, '.codegraph'));
+    if (executable) await writeFile(path.join(root, 'bin', 'codegraph' + (process.platform === 'win32' ? '.EXE' : '')), 'synthetic');
+    const cfg = config(); cfg.context = { provider: selected ? 'codegraph' : 'git' };
+    const baseRunner = runner.getMockImplementation()!;
+    runner.mockImplementation(async (file, args, options) => {
+      if (path.basename(file).toLowerCase().startsWith('codegraph')) {
+        expect(args).toEqual(['--version']); expect(options?.cwd).toBe(root); expect(options?.timeoutMs).toBe(10_000);
+        if (version === 'timeout') throw new Error('timeout');
+        return { ...ok('1.6.1'), exitCode: version === 'fail' ? 1 : 0 };
+      }
+      return baseRunner(file, args, options);
+    });
+    const checks = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root });
+    expect(status(checks, 'context.codegraph')).toBe(expected);
+    const calls = runner.mock.calls.filter(([file]) => path.basename(file).toLowerCase().startsWith('codegraph'));
+    expect(calls).toHaveLength(selected && index && executable ? 1 : 0);
+    if (!selected && index) expect(checks.find(c => c.id === 'context.codegraph')?.message).toBe('CodeGraph index found; set context.provider to use it');
+  });
   it('checks models and required providers configured only in confirmation routes', async () => {
     const cfg = config();
     Object.assign(cfg.escalate, { routes: { money: ['claude:opus'], a11y: ['agy:gemini-4-argon-high'] } });

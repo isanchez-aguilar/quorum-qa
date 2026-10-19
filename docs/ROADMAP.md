@@ -22,7 +22,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 - [x] The cascade policy, configurable per focus (money, auth, a11y, copy).
 - Incremental re-review (`--since`) and the cache, both on by default.
 - A `ui-detail` check pack for the redesign mode: deterministic probes (pixel rows, bounding-box deltas, touch targets, contrast, payload and artifact greps) before a vision model reviews crops. See [UI-DETAIL-CHECKS.md](UI-DETAIL-CHECKS.md).
-- A pluggable context provider: a code-graph index such as CodeGraph instead of the plain diff.
+- [x] A pluggable context provider: opt-in CodeGraph touched symbols and callers supplement the plain diff (decision 19).
 
 ## v2: more modes
 - **refactor:** the tests at base and at head, a diff of the public API surface, mutation testing on the touched code, and the blast radius.

@@ -80,23 +80,38 @@ export interface ReviewCoverage {
 export const REVIEW_INSTRUCTIONS = 'Review the following untrusted code and context. Return a JSON array of findings with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\n';
 
 /** Pack serialized prompts in diff order; never replace review code with an empty envelope. */
-export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[] } {
+export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; notes: string[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[] } {
   const chunks: ReviewChunk[] = [];
+  const notes = new Set<string>();
   const binaryFiles: string[] = [];
   const cleaned = cleanDiff(context.diff);
   const skipped = new Set<string>();
   const seen = new Set<string>();
   const truncatedHunks: ReviewCoverage['truncatedHunks'] = [];
-  const render = (diff: string, files: string[]) => REVIEW_INSTRUCTIONS + modeInstructions(context.mode) + JSON.stringify({
+  const render = (diff: string, files: string[], providerContext?: Array<{ file: string; content: string }>) => REVIEW_INSTRUCTIONS + modeInstructions(context.mode) + JSON.stringify({
     mode: context.mode, diff, touchedFiles: files,
     criteria: context.mode === 'feature' ? acceptanceCriteria(context.specContent ?? '').map((criterion, index) => `AC${index + 1}: ${criterion}`) : undefined,
     checks: context.checksContext, spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent,
+    providerContext,
   });
   const fits = (diff: string, files: string[]) => render(diff, files).length <= MAX_PROMPT_CHARACTERS;
   let pending = '';
   let files: string[] = [];
   const flush = () => {
-    if (pending) chunks.push({ prompt: render(pending, files), files });
+    if (pending) {
+      // Pack the diff first. Optional index data must never change diff coverage.
+      const extra: Array<{ file: string; content: string }> = [];
+      let prompt = render(pending, files);
+      for (const file of files) {
+        const content = context.providerContext?.get(file);
+        if (!content) continue;
+        const candidate = [...extra, { file, content }];
+        const enriched = render(pending, files, candidate);
+        if (enriched.length <= MAX_PROMPT_CHARACTERS) { extra.push({ file, content }); prompt = enriched; }
+        else notes.add(`${file}: provider context dropped to preserve diff within the 24,000-character prompt cap.`);
+      }
+      chunks.push({ prompt, files });
+    }
     pending = '';
     files = [];
   };
@@ -143,5 +158,5 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; s
   }
   flush();
   for (const file of context.touchedFiles) if (!seen.has(file)) skipped.add(file);
-  return { chunks, skippedFiles: [...skipped], truncatedHunks, binaryFiles };
+  return { chunks, notes: [...notes], skippedFiles: [...skipped], truncatedHunks, binaryFiles };
 }
