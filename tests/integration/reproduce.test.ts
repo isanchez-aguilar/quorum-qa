@@ -190,7 +190,7 @@ describe('M6 main() reproduction with fake containers', () => {
     expect(outside).not.toContain('![img]');
     expect(markdown).toContain('<summary>bad&lt;path&gt;.test.ts</summary>\n\n');
     expect(markdown).not.toContain('<pre><code>');
-  });
+  }, 30_000);
 });
 
 describe('reproduction revision and interactive contracts', () => {

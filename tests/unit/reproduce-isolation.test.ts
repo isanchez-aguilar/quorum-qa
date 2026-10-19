@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,7 +24,7 @@ beforeEach(async () => {
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0' }));
   await writeFile(path.join(root, 'pnpm-lock.yaml'), lock);
   hash = await dependencyKey(root, 'pnpm-lock.yaml', 'pnpm', '10.0.0', DEFAULT_REPRODUCE_IMAGE, false);
-  identity = hash;
+  identity = `${hash}:layout-2`;
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -115,6 +115,7 @@ it('runs only the proposed test with exact isolated argv and the JSON report in 
   expect(args).toEqual(['run', '--rm', '--name', name, '--network', 'none', '--user', '1000:1000',
     '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
     '--mount', `type=bind,src=${root},dst=/work`, '--mount', `type=volume,src=quorum-deps-${hash},dst=/work/node_modules,readonly`,
+    ...['.vite-temp', '.vite', '.vitest', '.cache'].flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1000,gid=1000,mode=0700`]),
     '--env', 'XDG_CACHE_HOME=/tmp', '--env', 'npm_config_cache=/tmp', '--env', 'TMPDIR=/tmp',
     '--memory', '1g', '--pids-limit', '256', '--cpus', '2', '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
     `quorum-prep:${hash}`, 'node', '-e', REPORT_WRAPPER, marker, reportPath,
@@ -367,4 +368,12 @@ it.each([
   const runner = vi.fn<CommandRunner>(async (_file, args) => ({ exitCode: args[0] === 'volume' && args[1] === 'inspect' ? 1 : 0, stdout: '', stderr: '' }));
   await runIsolatedTest(root, 'src/repro.test.ts', { ...config, allowInstallScripts: true }, runner, { resolveOptions: resolver });
   expect(runner.mock.calls.some(([, args]) => JSON.stringify(args.slice(-command.length)) === JSON.stringify(command))).toBe(true);
+});
+
+it('creates the node_modules mount point in the worktree before the read-only preparation mount', async () => {
+  // Found with real Docker: a volume can't be mounted at /work/node_modules when /work is a
+  // read-only bind mount that lacks the directory.
+  await expect(lstat(path.join(root, 'node_modules'))).rejects.toThrow();
+  await runIsolatedTest(root, 'src/repro.test.ts', config, fake(), { resolveOptions: resolver });
+  expect((await lstat(path.join(root, 'node_modules'))).isDirectory()).toBe(true);
 });

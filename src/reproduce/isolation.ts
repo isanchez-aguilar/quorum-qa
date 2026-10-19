@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveCommand, type ResolveOptions } from '../checks/resolver.js';
@@ -40,6 +40,11 @@ process.exitCode = result.status ?? 1;`;
 
 const CACHE_ENV = ['--env', 'XDG_CACHE_HOME=/tmp', '--env', 'npm_config_cache=/tmp', '--env', 'TMPDIR=/tmp'];
 const READY_FILE = '/work/node_modules/.quorum-ready';
+// Directories that test runners write inside node_modules (vite bundles its config into .vite-temp).
+// They are created in the writable preparation step and covered by tmpfs in the test step, so the
+// dependency volume itself stays read-only. Bump LAYOUT when this list changes so old volumes rebuild.
+const RUNNER_CACHE_DIRS = ['.vite-temp', '.vite', '.vitest', '.cache'];
+const LAYOUT = 'layout-2';
 const PREPARATION_LIMITS = ['--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
   '--memory', '2g', '--pids-limit', '512', '--cpus', '2', '--read-only', '--tmpfs', '/tmp'];
 
@@ -149,6 +154,10 @@ export async function runIsolatedTest(
       throw error;
     });
     if (modules && (modules.isSymbolicLink() || !modules.isDirectory())) return failure('node_modules must be a directory, not a symlink or file');
+    // The preparation step mounts the worktree read-only and the dependency volume at
+    // /work/node_modules; Docker can't create that mount point inside a read-only bind
+    // mount, so it must already exist. Git ignores an empty directory, so the worktree stays clean.
+    if (!modules) await mkdir(path.join(root, 'node_modules'));
     const relative = testFile.replaceAll('\\', '/');
     if (!relative || relative.startsWith('/') || /[:\0]/.test(relative) || relative.split('/').includes('..')) {
       return failure('invalid test path');
@@ -183,7 +192,7 @@ export async function runIsolatedTest(
       image = digests[0];
     }
     const hash = await dependencyKey(root, lockfile, managerName, manager[2]!, image, config.allowInstallScripts === true);
-    const identity = hash;
+    const identity = `${hash}:${LAYOUT}`;
     const preparedImage = `quorum-prep:${hash}`;
     volume = `quorum-deps-${hash}`;
     context = await mkdtemp(path.join(os.tmpdir(), 'quorum-build-'));
@@ -224,7 +233,7 @@ export async function runIsolatedTest(
       if (prepare.exitCode !== 0) return failure('preparation failed: dependency installation');
       const mark = await runAuxiliary(['--rm', '--network', 'none', '--user', '1000:1000',
         ...PREPARATION_LIMITS, '--mount', dependencyMount, preparedImage, 'node', '-e',
-        `require('node:fs').writeFileSync(${JSON.stringify(READY_FILE)}, ${JSON.stringify(identity)})`]);
+        `const fs = require('node:fs'); for (const dir of ${JSON.stringify(RUNNER_CACHE_DIRS)}) fs.mkdirSync('/work/node_modules/' + dir, { recursive: true }); fs.writeFileSync(${JSON.stringify(READY_FILE)}, ${JSON.stringify(identity)})`]);
       if (mark.exitCode !== 0) return failure('preparation failed: dependency cache marker');
     }
     preparationComplete = true;
@@ -241,6 +250,7 @@ export async function runIsolatedTest(
     const args = ['run', '--rm', '--name', name, '--network', 'none', '--user', '1000:1000',
       '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
       '--mount', `type=bind,src=${root},dst=/work`, '--mount', `${dependencyMount},readonly`,
+      ...RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1000,gid=1000,mode=0700`]),
       ...CACHE_ENV, '--memory', '1g', '--pids-limit', '256', '--cpus', '2',
       '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL', preparedImage,
       'node', '-e', REPORT_WRAPPER, marker, reportPath, JSON.stringify(command)];
