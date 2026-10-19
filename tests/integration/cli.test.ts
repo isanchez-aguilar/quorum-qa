@@ -3,8 +3,9 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { main } from '../../src/cli/index.js';
+import { describe, expect, it, vi } from 'vitest';
+import { main, type CliDependencies } from '../../src/cli/index.js';
+import { validateConfig, ConfigError } from '../../src/config/index.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const bin = path.join(root, 'bin', 'quorum.js');
@@ -13,7 +14,7 @@ const version = (
   JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }
 ).version;
 
-async function run(argv: string[]) {
+async function run(argv: string[], dependencies?: CliDependencies) {
   let out = '';
   let err = '';
   const code = await main(argv, {
@@ -23,7 +24,7 @@ async function run(argv: string[]) {
     err: (text) => {
       err += text;
     },
-  });
+  }, dependencies);
   return { code, out, err };
 }
 
@@ -45,12 +46,61 @@ describe('router (in process)', () => {
     expect(result.out).toBe(`${version}\n`);
   });
 
-  it('says review and doctor are not implemented and exits 2', async () => {
-    for (const command of ['review', 'doctor']) {
-      const result = await run([command]);
-      expect(result.code).toBe(2);
-      expect(result.err).toMatch(/not implemented yet \(M3\/M4\)/);
-    }
+  it('keeps review unimplemented until M5', async () => {
+    const result = await run(['review']);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/not implemented yet \(M5\)/);
+  });
+
+  it('runs doctor without probes by default and reports WARN without failure', async () => {
+    const config = validateConfig({ checks: [] });
+    const loadConfig = vi.fn(async () => config);
+    const runDoctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>(async () => [
+      { id: 'git', status: 'PASS', message: 'Repository found.' },
+      { id: 'quota', status: 'WARN', message: 'floor unchecked', fix: 'Sign in.' },
+    ]);
+    const result = await run(['doctor'], { repoRoot: root, loadConfig, runDoctor });
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    expect(result.out).toContain('[PASS] git: Repository found.');
+    expect(result.out).toContain('[WARN] quota: floor unchecked\n  Fix: Sign in.');
+    expect(loadConfig).toHaveBeenCalledWith(path.join(root, 'quorum.config.json'));
+    expect(runDoctor).toHaveBeenCalledExactlyOnceWith(config, { repoRoot: root, probe: false });
+  });
+
+  it('passes --probe explicitly and prints the check list as JSON with exit 2 on FAIL', async () => {
+    const config = validateConfig({ checks: [] });
+    const checks = [{ id: 'agy', status: 'FAIL' as const, message: 'Missing.', fix: 'Install agy.' }];
+    const runDoctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>(async () => checks);
+    const result = await run(['doctor', '--probe', '--json'], {
+      repoRoot: root,
+      loadConfig: async () => config,
+      runDoctor,
+    });
+    expect(result.code).toBe(2);
+    expect(result.err).toBe('');
+    expect(JSON.parse(result.out)).toEqual(checks);
+    expect(runDoctor).toHaveBeenCalledExactlyOnceWith(config, { repoRoot: root, probe: true });
+  });
+
+  it('runs doctor even when config is missing', async () => {
+    const runDoctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>(async () => [{ id: 'config', status: 'FAIL', message: 'Missing config' }]);
+    const result = await run(['doctor', '--json'], {
+      loadConfig: async () => { throw new ConfigError(['file not found: quorum.config.json'], 'Cannot load config'); }, runDoctor,
+    });
+    expect(runDoctor).toHaveBeenCalledOnce();
+    expect(JSON.parse(result.out)[0].id).toBe('config');
+    expect(result.code).toBe(2);
+  });
+  it('reports config errors without starting doctor', async () => {
+    const runDoctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>();
+    const result = await run(['doctor'], {
+      loadConfig: async () => { throw new ConfigError(['synthetic invalid config']); },
+      runDoctor,
+    });
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('synthetic invalid config');
+    expect(runDoctor).not.toHaveBeenCalled();
   });
 
   it('exits 2 on an unknown command', async () => {

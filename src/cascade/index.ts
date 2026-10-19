@@ -1,4 +1,5 @@
 import { cleanDiff, diffSectionPath } from '../context/diff.js';
+import { checkoutSnapshot, checkoutDifference, type CheckoutSnapshot } from '../worktree/checkout.js';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { CatalogEntry, CommandRunner, Finding, LedgerEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
@@ -24,7 +25,7 @@ export interface CascadeCall {
   purpose: 'review' | 'confirm' | 'adjudicate';
   promptHash: string;
   deadlineMs: number;
-  status: 'ok' | 'quota' | 'timeout' | 'unavailable' | 'dirty' | 'invalid';
+  status: 'ok' | 'quota' | 'timeout' | 'unavailable' | 'dirty' | 'invalid' | 'error';
 }
 
 export type LedgerDraft = Omit<LedgerEntry, 'runId' | 'timestamp'> & { rejectionReasons: Record<string, number> };
@@ -35,6 +36,7 @@ export interface CascadeResult {
   unconfirmed: Finding[];
   related: Array<{ first: Finding; second: Finding }>;
   warnings: string[];
+  errors: string[];
   calls: CascadeCall[];
   ledgerDraft: LedgerDraft[];
 }
@@ -82,6 +84,22 @@ export async function runCascade(
   const snapshot = options.quotaSnapshot ?? {};
   const budget = new RunBudget(config.budget, options.clock);
   const warnings: string[] = [];
+  const errors: string[] = [];
+  let baseline: CheckoutSnapshot | undefined;
+  const assertCheckoutUnchanged = async () => {
+    try {
+      const current = await checkoutSnapshot(context.worktreeRoot, gitRunner);
+      if (!baseline) baseline = current;
+      else {
+        const difference = checkoutDifference(baseline, current);
+        if (difference) throw new Error(difference);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!errors.includes(message)) errors.push(message);
+      throw error;
+    }
+  };
   const warn = (message: string) => { if (!warnings.includes(message)) warnings.push(message); };
   const calls: CascadeCall[] = [];
   const ledgerDraft: LedgerDraft[] = [];
@@ -112,6 +130,7 @@ export async function runCascade(
   } = {}): Promise<CallResult | null> {
     const attempted = settings.attempted ?? new Set<string>();
     while (true) {
+      if (errors.length) return null;
       const resolved = resolveTier(tier, config, catalog, snapshot, {
         nowMs: budget.clock.now(), authorFamily: context.authorFamily, excludeLocal: settings.excludeLocal,
         unavailableGroups: budget.unavailableGroups,
@@ -121,7 +140,7 @@ export async function runCascade(
       const independent = resolved.models.filter(entry => !settings.preferOtherThan?.has(entry.family));
       const entry = (independent.length ? independent : resolved.models)[0];
       if (!entry) return null;
-      if (purpose === 'review' && initial.some(needsEscalation) && calls.length >= triageLimit) return null;
+      if (purpose === 'review' && initial.some(needsEscalation) && budget.calls >= triageLimit) return null;
       if (!budget.allowed) { warn(BUDGET_WARNING); return null; }
       const ref = modelRef(entry);
       attempted.add(ref);
@@ -137,10 +156,17 @@ export async function runCascade(
       ledgerDraft.push(ledger);
       const startedAt = budget.clock.now();
       try {
+        if (!baseline) await assertCheckoutUnchanged();
         const result = await budget.execute((deadlineMs, signal) => {
           call.deadlineMs = deadlineMs;
-          return adapter.executeReview(context, entry.id, prompt, { deadlineMs, signal });
-        });
+          return adapter.executeReview(context, entry.id, prompt, { deadlineMs, signal, assertCheckoutUnchanged, reserveRetry: () => {
+            if (!budget.allowed) { warn(BUDGET_WARNING); return false; }
+            if (purpose === 'review' && initial.some(needsEscalation) && budget.calls >= triageLimit) return false;
+            budget.calls++;
+            ledger.callsUsed++;
+            return true;
+          } });
+        }).finally(assertCheckoutUnchanged);
         ledger.durationMs = result.durationMs;
         if (result.tokensUsed) ledger.tokensReported = result.tokensUsed.prompt + result.tokensUsed.completion;
         if (result.error) throw new ProviderError(/429|quota/i.test(result.error) ? 'quota' : 'unavailable', result.error);
@@ -157,6 +183,8 @@ export async function runCascade(
       } catch (error) {
         ledger.durationMs = Math.max(0, budget.clock.now() - startedAt);
         const message = error instanceof Error ? error.message : String(error);
+        if (error instanceof ProviderError) error.warnings.forEach(warn);
+        if (errors.length) { call.status = 'error'; warn(message); return null; }
         call.status = error instanceof ProviderError ? error.kind : /429|quota/i.test(message) ? 'quota' : 'unavailable';
         warn(`${ref}: ${message}`);
         if (call.status === 'quota') budget.unavailableGroups.add(entry.quotaGroup);
@@ -396,7 +424,11 @@ export async function runCascade(
   for (const node of nodes) {
     (node.unconfirmed || node.sources.every(source => source.family === 'local') ? unconfirmed : findings).push(node.finding);
   }
-  return { findings, unconfirmed, related, warnings, calls, ledgerDraft, coverage };
+  if (errors.length) {
+    coverage.complete = false;
+    return { findings: [], unconfirmed: [], related: [], warnings, errors, calls, ledgerDraft, coverage };
+  }
+  return { findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
 }
 
 export { createExecutionPlan, formatDryRun } from './planner.js';

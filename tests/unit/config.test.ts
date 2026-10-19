@@ -16,9 +16,9 @@ const PLAN_EXAMPLE = {
   author: 'claude',
   tiers: {
     triage: ['agy:gemini-3.8-flash-medium', 'qwen', 'agy:gpt-oss-120b-medium'],
-    review: ['agy:gemini-3.1-pro-high', 'claude:sonnet'],
+    review: ['agy:gemini-4-argon-high', 'claude:sonnet'],
     confirm: ['codex', 'agy:claude-opus-5-5-high', 'claude:opus'],
-    visual: ['agy:gemini-3.1-pro-high'],
+    visual: ['agy:gemini-4-argon-high'],
   },
   escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
   budget: { maxCalls: 12, maxMinutes: 20, quotaFloorPercent: 15 },

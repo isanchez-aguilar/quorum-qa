@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { ConfigError } from '../config/index.js';
+import path from 'node:path';
+import { ConfigError, loadConfig } from '../config/index.js';
+import { runDoctor } from '../doctor/index.js';
 import { parseArgs, UsageError } from './args.js';
 
 export const EXIT_OK = 0;
@@ -11,6 +13,12 @@ export interface CliIo {
   err: (text: string) => void;
 }
 
+export interface CliDependencies {
+  repoRoot?: string;
+  loadConfig?: typeof loadConfig;
+  runDoctor?: typeof runDoctor;
+}
+
 const defaultIo: CliIo = {
   out: (text) => void process.stdout.write(text),
   err: (text) => void process.stderr.write(text),
@@ -20,7 +28,7 @@ export const USAGE = `Usage: quorum <command> [options]
 
 Commands:
   review    Run a quorum of AI reviewers over a change (not implemented yet)
-  doctor    Check which providers and models are usable (not implemented yet)
+  doctor    Check which providers and models are usable
 
 Options for review:
   --mode <feature|redesign>  Review mode
@@ -36,6 +44,10 @@ Options for review:
   --reproduce                Try to reproduce BLOCKERs with a failing test
   --allow-unproven           Unproven BLOCKERs do not fail the run
 
+Options for doctor:
+  --probe                    Run one read probe per provider (spends quota)
+  --json                     Print the diagnostic check list as JSON
+
 General:
   --help                     Print this help
   --version                  Print the version
@@ -49,7 +61,11 @@ function packageVersion(): string {
   return (JSON.parse(readFileSync(file, 'utf8')) as { version: string }).version;
 }
 
-export async function main(argv: string[], io: CliIo = defaultIo): Promise<number> {
+export async function main(
+  argv: string[],
+  io: CliIo = defaultIo,
+  dependencies: CliDependencies = {},
+): Promise<number> {
   try {
     const { command, flags } = parseArgs(argv);
 
@@ -64,9 +80,29 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
 
     switch (command) {
       case 'review':
-      case 'doctor':
-        io.err(`quorum ${command}: not implemented yet (M3/M4)\n`);
+        io.err('quorum review: not implemented yet (M5)\n');
         return EXIT_ERROR;
+      case 'doctor': {
+        const repoRoot = dependencies.repoRoot ?? process.cwd();
+        let config;
+        try { config = await (dependencies.loadConfig ?? loadConfig)(path.join(repoRoot, 'quorum.config.json')); }
+        catch (error) {
+          if (!(error instanceof ConfigError) || !error.message.includes('file not found:')) throw error;
+        }
+        const checks = await (dependencies.runDoctor ?? runDoctor)(config, {
+          repoRoot,
+          probe: flags.probe ?? false,
+        });
+        if (flags.json) {
+          io.out(`${JSON.stringify(checks, null, 2)}\n`);
+        } else {
+          for (const check of checks) {
+            io.out(`[${check.status}] ${check.id}: ${check.message}\n`);
+            if (check.fix) io.out(`  Fix: ${check.fix}\n`);
+          }
+        }
+        return checks.some((check) => check.status === 'FAIL') ? EXIT_ERROR : EXIT_OK;
+      }
       case '':
         io.err(USAGE);
         return EXIT_ERROR;
