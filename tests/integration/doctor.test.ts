@@ -41,6 +41,17 @@ describe('doctor with synthetic executables and injected runner', () => {
   });
   afterEach(async () => { vi.unstubAllGlobals(); await rm(root, { recursive: true, force: true }); });
   const status = (checks: Awaited<ReturnType<typeof runDoctor>>, id: string) => checks.find(check => check.id === id)?.status;
+  it.each([{ checks: true, manifest: true, setup: false, warn: true },
+    { checks: true, manifest: true, setup: true, warn: false },
+    { checks: false, manifest: true, setup: false, warn: false },
+    { checks: true, manifest: false, setup: false, warn: false }])('diagnoses fresh worktree dependencies %j', async row => {
+    if (row.manifest) await writeFile(path.join(root, 'package.json'), '{}');
+    const cfg = config(); if (!row.checks) cfg.checks = [];
+    if (row.setup) Object.assign(cfg, { setup: [['checker', 'install']] });
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root });
+    const warning = result.find(check => check.message.includes('checks run in a fresh worktree without node_modules'));
+    expect(warning?.status).toBe(row.warn ? 'WARN' : undefined);
+  });
   it.each([
     { selected: true, index: true, executable: true, version: 'ok', expected: 'PASS' },
     { selected: true, index: false, executable: true, version: 'ok', expected: 'WARN' },

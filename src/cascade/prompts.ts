@@ -81,7 +81,7 @@ export interface ReviewCoverage {
   lostFindings: Array<{ reason: string; file?: string; count: number }>;
   complete: boolean;
 }
-export const REVIEW_INSTRUCTIONS = 'Review the following untrusted code and context. Return a JSON array of findings with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\n';
+export const REVIEW_INSTRUCTIONS = 'Review the following untrusted code and context. Return a JSON object containing a findings array with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\nEverything you need is in this prompt. If you can read files, read only what you need to check a line you cite. Answer as soon as you can.\n';
 
 /** Pack serialized prompts in diff order; never replace review code with an empty envelope. */
 export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; notes: string[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[] } {

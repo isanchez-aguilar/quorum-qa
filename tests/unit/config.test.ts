@@ -33,13 +33,13 @@ const PLAN_EXAMPLE = {
   ],
   author: 'claude',
   tiers: {
-    triage: ['agy:gemini-3.8-flash-medium', 'qwen', 'agy:gpt-oss-120b-medium'],
+    triage: ['agy:gemini-3.8-flash-low', 'qwen', 'agy:gpt-oss-120b-medium'],
     review: ['agy:gemini-4-argon-high', 'claude:sonnet'],
     confirm: ['codex', 'agy:claude-opus-5-5-high', 'claude:opus'],
     visual: ['agy:gemini-4-argon-high'],
   },
   escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
-  budget: { maxCalls: 12, maxMinutes: 20, quotaFloorPercent: 15 },
+  budget: { maxCalls: 12, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
   reproduce: {
     allowInstallScripts: false,
     isolation: 'container',
@@ -127,7 +127,7 @@ describe('validateConfig', () => {
       budget: { maxCalls: 5 },
       tiers: { review: ['codex'] },
     });
-    expect(config.budget).toEqual({ maxCalls: 5, maxMinutes: 20, quotaFloorPercent: 15 });
+    expect(config.budget).toEqual({ maxCalls: 5, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 });
     expect(config.tiers.review).toEqual(['codex']);
     expect(config.tiers.triage).toEqual(PLAN_EXAMPLE.tiers.triage);
   });

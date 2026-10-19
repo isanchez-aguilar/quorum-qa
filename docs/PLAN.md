@@ -91,7 +91,7 @@ CLI ─► Planner ─► Deterministic checks (repo's own lint/tsc/axe via conf
 | Provider | How it runs (user's own login) | Notes from real use |
 |---|---|---|
 | Codex | `codex exec -C <dir> -s read-only -o <out> -` (prompt on stdin) | Finds real money and permission bugs. Quota runs out fast, so save it for escalation. Its sandbox sometimes can't read a freshly created folder on the first try: probe first, retry once. |
-| Antigravity (`agy`) | `agy --model <id> --sandbox --output-format json --print=<prompt>`, optionally `--json-schema <finding schema>` and `--effort`. Not `--mode plan`, which makes it ask what to plan. Not a bare `-p`, which takes the next flag as the prompt. The prompt is an argument, so stay under Windows' ~32K command-line limit. | One CLI, three model families (see the catalog below). Plenty of Gemini quota, and it reads images (good for visual review). **Gemini often cites wrong line numbers and non-existent files**, which is why the verifier exists. Headless runs end on the first denied command, so the prompt must say "use ONLY file-read tools", and the user's agy settings must allow `read_file` for the repo (Quorum prints the rule; it never writes it). |
+| Antigravity (`agy`) | `agy --model <id> --sandbox --output-format json --print=<prompt>`, optionally `--json-schema <finding schema>` and `--effort`. Not `--mode plan`, which makes it ask what to plan. Not a bare `-p`, which takes the next flag as the prompt. The prompt is an argument, so stay under Windows' ~32K command-line limit. | One CLI, three model families (see the catalog below). Plenty of Gemini quota, and it reads images (good for visual review). **Gemini often cites wrong line numbers and non-existent files**, which is why the verifier exists. Headless runs end on the first denied command, so the adapter prefixes every inference prompt with an explicit no-tools instruction, and the user's agy settings must allow `read_file` for the repo (Quorum prints the rule; it never writes it). |
 | Claude Code | `claude -p --model <id>` with read-only tools only | Strong general reviewer. Use it as the triage-plus-fix partner, or as a reviewer when the change came from another family. |
 | Local model (Qwen etc.) | OpenAI-compatible endpoint (e.g. llama.cpp at `127.0.0.1:8080`) | Free, but slow and with limited context. Use it for triage, mechanical checks and drafting test tables, never for final judgment. Optional: if it is not running, Quorum skips it. |
 | Jules (async, cloud) | `jules new --repo <owner/name> "<prompt>"` → poll `jules remote list --session` → `jules remote pull --session <id>` (**never** `--apply`) | Runs in Google's cloud VM against the **pushed** branch, so it can actually run the test suite without touching the local checkout. It is slow (minutes) and has a daily task limit, so it is a lane, not a reviewer in the main loop. See [Jules](#jules-the-async-cloud-lane). |
@@ -104,7 +104,7 @@ The models that agy offers change often, so Quorum never hardcodes them: `quorum
 
 | Model ids | Family | Default tier in Quorum | Notes |
 |---|---|---|---|
-| `gemini-3.8-flash-{low,medium,high}` (also 3.7 and 3.6 flash) | google | **triage** | Cheapest and fastest. The first pass on every diff. Use the newest flash version that is listed. |
+| `gemini-3.8-flash-{low,medium,high}` (also 3.7 and 3.6 flash) | google | **triage** | Default: `gemini-3.8-flash-low` for triage speed (13 s versus 202 s for medium in the 2026-10-19 probe). Effort is part of the model id. |
 | `gemini-4-argon-{low,medium,high}` | google | **review**, **visual** | The main Google reviewer and the image reviewer for `redesign`. **Its own quota group** ("Gemini 4 Argon"), separate from Flash. It replaced `gemini-3.1-pro-*`, which agy stopped listing in mid-October 2026; `quorum doctor` caught the change. |
 | `claude-sonnet-5-5-{low,medium,high}` | anthropic | review | A second Anthropic seat when Claude Code's own quota is low. It does **not** add independence next to Claude Code. |
 | `claude-opus-5-5-{low,medium,high}` | anthropic | confirm | Confirms escalated findings. Shares **one quota group with Sonnet and GPT-OSS** inside agy ("Claude and GPT models", per `/usage`), and a reset can be days away. |
@@ -161,13 +161,13 @@ Guardrails (lessons from running Jules by hand, and from the review of this plan
   "checks": [["pnpm", "lint"], ["pnpm", "typecheck"], ["pnpm", "test"]],
   "author": "claude",
   "tiers": {
-    "triage":  ["agy:gemini-3.8-flash-medium", "qwen", "agy:gpt-oss-120b-medium"],
+    "triage":  ["agy:gemini-3.8-flash-low", "qwen", "agy:gpt-oss-120b-medium"],
     "review":  ["agy:gemini-4-argon-high", "claude:sonnet"],
     "confirm": ["codex", "agy:claude-opus-5-5-high", "claude:opus"],
     "visual":  ["agy:gemini-4-argon-high"]
   },
   "escalate": { "focus": ["money", "auth", "permissions"], "belowConfidence": 0.7 },
-  "budget": { "maxCalls": 12, "maxMinutes": 20, "quotaFloorPercent": 15 },
+  "budget": { "maxCalls": 12, "maxMinutes": 20, "maxCallSeconds": 300, "quotaFloorPercent": 15 },
   "reproduce": { "isolation": "container", "allowInstallScripts": false, "testGlobs": ["**/*.test.*", "**/*.spec.*"], "testCommand": ["pnpm", "vitest", "run", "--reporter=json"] },
   "jules": { "enabled": false, "repo": "owner/name", "maxSessionsPerRun": 3 },
   "qwen": { "endpoint": "http://127.0.0.1:8080/v1" }

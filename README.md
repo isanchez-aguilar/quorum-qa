@@ -54,15 +54,18 @@ Add `quorum.config.json` to the repository root:
 
 ```json
 {
+  "setup": [["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]],
   "checks": [["pnpm", "typecheck"], ["pnpm", "test"]],
   "tiers": {
-    "triage": ["agy:gemini-3.8-flash-medium", "qwen"],
+    "triage": ["agy:gemini-3.8-flash-low", "qwen"],
     "review": ["agy:gemini-4-argon-high", "claude:sonnet"],
     "confirm": ["codex", "claude:opus"],
     "visual": ["agy:gemini-4-argon-high"]
   }
 }
 ```
+
+Optional `setup` argv commands install dependencies in the fresh HEAD worktree before checks. A failed setup fails the checks phase and still permits review. Setup executes install scripts unless the command disables them; `--no-checks` skips both setup and checks. `budget.maxCallSeconds` defaults to 300 (30–1800), capped further by remaining run time.
 
 `context.provider` defaults to `"git"`; set it to `"codegraph"` to add bounded, possibly stale symbol/caller context from an existing `.codegraph/` index and a shell-free CodeGraph executable on PATH (Quorum never creates or updates the index and falls back to git when unavailable).
 

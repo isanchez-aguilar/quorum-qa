@@ -38,6 +38,11 @@ export class ProviderCommands {
     this.run = options.runner ?? runCommand;
     this.now = options.now ?? Date.now;
   }
+  exceedsWindowsArgv(name: string, args: string[], cwd?: string): boolean {
+    if ((this.options.platform ?? process.platform) !== 'win32') return false;
+    const resolved = resolveCommand(name, args, { ...this.options, cwd });
+    return [resolved.file, ...resolved.args].reduce((size, arg) => size + arg.length + 3 + (arg.match(/["\\]/g)?.length ?? 0), 0) >= 30_000;
+  }
   async command(name: string, args: string[], cwd?: string, timeoutMs = 10_000, stdin?: string) {
     try {
       const resolved = resolveCommand(name, args, { ...this.options, cwd });

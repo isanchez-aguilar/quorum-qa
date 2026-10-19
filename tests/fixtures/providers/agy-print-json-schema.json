@@ -1,0 +1,63 @@
+{
+  "conversation_id": "00000000-0000-0000-0000-000000000000",
+  "status": "SUCCESS",
+  "response": "{\"findings\":[{\"evidence_quote\":\"return a/b\",\"file\":\"a.js\",\"line\":1,\"severity\":\"IMPORTANT\"}],\"toolAction\":\"Reporting review findings\",\"toolSummary\":\"Code review completion\"}\n",
+  "duration_seconds": 6.8186772,
+  "num_turns": 1,
+  "structured_output": {
+    "findings": [
+      {
+        "evidence_quote": "return a/b",
+        "file": "a.js",
+        "line": 1,
+        "severity": "IMPORTANT"
+      }
+    ]
+  },
+  "json_schema": {
+    "type": "object",
+    "properties": {
+      "findings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer"
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "BLOCKER",
+                "IMPORTANT",
+                "OPTIONAL"
+              ]
+            },
+            "evidence_quote": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "line",
+            "severity",
+            "evidence_quote"
+          ]
+        }
+      }
+    },
+    "required": [
+      "findings"
+    ]
+  },
+  "usage": {
+    "input_tokens": 13100,
+    "output_tokens": 604,
+    "thinking_tokens": 546,
+    "cache_read_tokens": 0,
+    "total_tokens": 13704
+  }
+}

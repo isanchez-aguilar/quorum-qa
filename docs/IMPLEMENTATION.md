@@ -1199,6 +1199,10 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 19. **v1.x CodeGraph context (2026-10-19):** `context.provider` defaults to `git`; `codegraph` is opt-in, read-only and never indexes. It requires an existing `.codegraph/` directory and `codegraph` on PATH; on Windows the npm `.cmd` shim runs through the same safe resolver path as the deterministic checks (absolute cmd.exe and shim path, cmd metacharacters rejected per argument). Missing availability falls back to git with one warning. Queries use only `node --symbols-only` and `callers`, with `-p` and cwd pinned to the user's root; Quorum never runs `init`, `index` or `sync`. Index-derived context is explicitly untrusted and may be stale. The diff always has priority over optional context within the existing prompt cap.
 
+20. **Fresh-worktree setup (2026-10-19):** Optional `setup` contains argv arrays validated and executed with the same resolver and runner as `checks`. Setup runs first in the disposable HEAD worktree; a failed or timed-out setup fails the checks phase and skips checks, while provider review still runs and receives the failure output. `--no-checks` skips both setup and checks, including in the dry-run plan. The stderr warning announces both and explains that setup executes the change's install scripts unless its command disables them. Doctor warns when checks are configured and `package.json` exists without setup: `checks run in a fresh worktree without node_modules`. This repository uses `[["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]]`. Setup obeys the existing trusted-base configuration policy; it does not copy dependencies from the user's checkout.
+
+21. **Second real self-review fixes (2026-10-19):** Every agy inference purpose gets the adapter-level first line: "Do not call any tools: no file reads and no commands. Everything you need is in this prompt; answer only with the JSON." The shared review prefix instead says "If you can read files, read only what you need to check a line you cite." An empty agy response with stderr containing `required the "command" permission` or `auto-denied` raises `ProviderError('unavailable', 'agy tried to run a command in headless mode and returned nothing')`; the run warns once across models and does not disable the quota group. Default triage is [`agy:gemini-3.8-flash-low`, `qwen`, `agy:gpt-oss-120b-medium`]; this repo uses the first two. Effort is encoded in agy's model id. Qwen sends a strict purpose-specific JSON schema through `response_format`, using the shared schemas. HTTP 400 mentioning `response_format` or `json_schema` permits exactly one retry without that field, within the remaining time and call budget, with the run-deduplicated warning "qwen server does not support response_format". Severity parsing accepts case variants of BLOCKER, IMPORTANT and OPTIONAL only; it still rejects synonyms such as high and critical. This supersedes decision 3's Flash medium default.
+
 ---
 
 ## Review corrections
@@ -2397,3 +2401,53 @@ Validation of the Argon-review fixes on Windows: `pnpm.cmd typecheck` passed;
 `pnpm.cmd test` rebuilt the CLI and passed **1,098 tests**, with **6 skips**,
 across **40 files** (83.09 seconds). The bughunt suites now contain 55 tests.
 `git diff --check` passed. No dependencies were added.
+
+## Real self-review run (2026-10-19)
+
+`quorum review --mode bughunt --diff e33204f...HEAD --radius 10` reviewed Quorum itself. It exited 2 after the full 20-minute budget, with only 2 of 10 files reviewed. Both deterministic checks failed with "node_modules missing": the disposable HEAD worktree had no dependencies installed.
+
+agy Gemini Flash calls took 92–311 seconds each. Most answers were not JSON and failed parsing with "No complete JSON array or object found"; agy runs an agent that explores files. Gemini 4 Argon's weekly quota group was at 0% and was correctly never tried, but the report did not explain the skip. Claude's CLI login had expired and the report gave the correct login hint.
+
+An authorized, scrubbed probe using `--json-schema` answered in about 7 seconds (6.8186772 seconds), in one turn. The recorded envelope adds `structured_output` (the parsed object) and `json_schema`; `response` contains the same JSON as a string plus `toolAction` and `toolSummary`. agy requires an object root: an array root was rejected with `invalid --json-schema: schema root "type" must be "object"`. The exact scrubbed recording is preserved in `tests/fixtures/providers/agy-print-json-schema.json`; its minimal finding lacks fields required by Quorum and must not be treated as a complete finding.
+
+The fixes add decision 20 setup, object-root schemas shared by all agy review/triage, confirmation, adjudication and reproduction calls, and valid `structured_output` preference with the existing response fallback. Quorum still supplies provider, model and family. Windows argv accounting includes the schema and resolved executable; only the schema is omitted with a warning if it will not fit, never prompt content. The stable review prefix now says: "Everything you need is in this prompt. Read other files only to check a line you cite. Answer as soon as you can."
+
+`budget.maxCallSeconds` defaults to 300 (allowed range 30–1800). Each inference call receives the smaller of remaining run time and the call cap; a call timeout does not consume the entire run deadline. Dry-run shows the cap. Quota skips are reported once per group: `<group>: quota below floor (N%), skipped` or `<group>: quota exhausted earlier in this run, skipped`; dry-run reports below-floor groups too. Tests use injected runners and synthetic providers; no new live provider run was made for these fixes.
+
+Validation for these fixes: new regressions were observed failing before their fixes; the final `pnpm typecheck` passed, and `QUORUM_CONTAINER_TESTS=0 pnpm test` passed all 41 test files (1,142 passed, 6 skipped). `git diff --check` passed. The skipped tests are environment-gated container/symlink coverage; no live provider, local Qwen, or CodeGraph executable was called. There is no lint script in this repository. A read-only same-family QA review covered the changes; cross-family CLI review was not run because this task explicitly prohibits provider CLIs. No dependencies, logs, commits, branch changes or pushes were added.
+
+### Second real run and follow-up probes
+
+The second `bughunt` run on this branch's diff exited 2 after 11.5 minutes, reviewing 4 of 18 files. Setup and deterministic checks passed, confirming the setup fix. It lost 6 invalid responses and 10 malformed findings.
+
+The user supplied these observations from subsequent real-service probes; implementation tests do not rerun them:
+
+1. agy Gemini Flash medium with `--json-schema` on a real 4.3 KB review chunk took 208 seconds and returned `response: ""` without `structured_output`. stderr said: `no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.` Flash attempted a shell command that headless agy could not approve, as LESSONS.md already warns. The prompt's "Read other files only to check a line you cite" invited exploration.
+2. Prefixing the same chunk with "Do not call any tools: no file reads and no commands. Everything you need is in this prompt; answer only with the JSON." produced valid `structured_output` (`{"findings":[]}`), but still took 202 seconds.
+3. The same request using `gemini-3.8-flash-low` took 13 seconds and returned valid `structured_output` with real findings. In agy, effort belongs to the model id: `--effort low` with `gemini-3.8-flash-medium` is rejected with "conflicts with --effort=low".
+4. Local llama.cpp Qwen (`qwen3-coder-next`) with `response_format: { type: "json_schema", json_schema: { name: "review", strict: true, schema: <the review schema> } }` returned HTTP 200 in 5 seconds, with valid JSON and severity inside the enum. Without structured output, every Qwen finding in the real run was dropped with `parse: invalid severity`.
+
+Decision 21 records the resulting changes. Regression tests use synthetic stderr, injected command runners and mocked HTTP only. No live provider or local Qwen was called; no dependencies or logs were added, and no commit, push or branch switch was performed. Cross-provider review was not run because the task explicitly prohibits the provider CLIs.
+
+Validation for decision 21: the focused regression run failed on 22 tests before the fixes; a separate cascade regression also demonstrated duplicate denied-command warnings before its fix. The focused adapter/parser/config/prompt suite then passed all 203 tests. Final `pnpm typecheck` passed; `pnpm test` passed all 41 files (1,161 passed, 6 environment-gated tests skipped). `git diff --check` passed. Validation ran on Windows; Linux/macOS and live-provider behavior were not rerun.
+
+### Third real self-review (2026-10-19, after decision 21)
+
+The same `bughunt` run on the same branch diff, after the agy/Qwen fixes.
+
+**Result:** exit 0, coverage COMPLETE, nothing skipped or lost, 9 minutes. 12 `gemini-3.8-flash-low` calls, most between 9 and 44 s (one took 177 s).
+
+| | 1st run | 2nd run | 3rd run |
+|---|---|---|---|
+| Exit | 2 | 2 | 0 |
+| Coverage | 2/10 files | 4/18 files | complete |
+| Checks | failed (no deps) | pass | pass |
+| Lost findings | 4 | 16 | 0 |
+| Time | 20 min (cap) | 11.5 min | 9 min |
+
+**Its one finding was a false positive, analysed by Claude.**
+- **The finding:** `src/providers/qwen.ts:87`, IMPORTANT, confidence 0.95, from Flash-low. It claimed `this.models![0]` throws when the list is uninitialized.
+- **Why it's wrong:** JavaScript evaluates `(await this.listModels()).includes(...)` callee first, so `listModels()` has filled `this.models` before the argument runs.
+- **What it says about the design:** the quote was real, so the verifier accepted it, but the verifier can't judge the reasoning (a documented limit). Because the finding was IMPORTANT, high-confidence and outside the focus areas, no rule escalated it, so a single cheap model's claim reached the report unconfirmed.
+- **Recorded as a v2 roadmap item:** "confirm single-source IMPORTANT findings from the triage tier when budget allows".
+- The code was simplified anyway, to read the returned list.

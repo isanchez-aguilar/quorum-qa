@@ -42,14 +42,15 @@ export class RunBudget {
   async execute<T>(call: (deadlineMs: number, signal: AbortSignal) => Promise<T>): Promise<T> {
     if (!this.allowed) throw new Error(BUDGET_WARNING);
     this.calls++;
-    const deadlineMs = this.remainingMs;
+    const remainingMs = this.remainingMs;
+    const deadlineMs = Math.min(remainingMs, (this.limits.maxCallSeconds ?? 300) * 1000);
     const controller = new AbortController();
     let timer: unknown;
     const deadline = new Promise<never>((_, reject) => {
       timer = this.clock.setTimeout(() => {
-        this.deadlineExceeded = true;
+        this.deadlineExceeded = deadlineMs >= remainingMs;
         // Reject first so a synchronous abort listener cannot mask the timeout classification.
-        reject(new ProviderError('timeout', 'Run deadline reached'));
+        reject(new ProviderError('timeout', this.deadlineExceeded ? 'Run deadline reached' : 'Provider call deadline reached'));
         controller.abort();
       }, deadlineMs);
     });

@@ -136,7 +136,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   let snapshot = await readQuota(quotaFile);
   if (flags.dryRun) {
     const clock = { now, setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>) };
-    io.out(formatDryRun(createExecutionPlan(context, flags.noChecks ? { ...config, checks: [] } : config, catalog, snapshot, { clock })) + '\n');
+    io.out(formatDryRun(createExecutionPlan(context, flags.noChecks ? { ...config, checks: [], setup: [] } : config, catalog, snapshot, { clock })) + '\n');
     if (flags.noChecks) io.out('Deterministic checks: skipped (--no-checks).\n');
     return 0;
   }
@@ -165,9 +165,16 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   snapshot = readings;
   let checks: ReviewResult['checks'] = null;
   if (!flags.noChecks) {
-    if (config.checks.length) io.err(`quorum: running ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code (use --no-checks for untrusted changes)\n`);
+    if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
     const checksTree = await createReviewWorktree(root, head, runner, warn);
-    try { checks = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand); }
+    try {
+      const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand);
+      if (!setup.passed) checks = setup;
+      else {
+        const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand);
+        checks = { passed: checked.passed, results: [...setup.results, ...checked.results] };
+      }
+    }
     finally { try { await checksTree.cleanup(); } catch (error) { warn(`Checks worktree cleanup failed: ${String(error)}`); } }
   }
   context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)

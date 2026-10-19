@@ -1,7 +1,8 @@
 {
+  "setup": [["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]],
   "checks": [["pnpm", "typecheck"], ["pnpm", "test"]],
   "tiers": {
-    "triage": ["agy:gemini-3.8-flash-medium", "qwen"],
+    "triage": ["agy:gemini-3.8-flash-low", "qwen"],
     "review": ["agy:gemini-4-argon-high", "claude:sonnet"],
     "confirm": ["codex", "claude:opus"],
     "visual": ["agy:gemini-4-argon-high"]

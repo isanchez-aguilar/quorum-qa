@@ -98,6 +98,7 @@ export interface QuorumConfig {
   base: string;
   // Required, no default. Each check is an argv array, never a shell string.
   checks: string[][];
+  setup?: string[][];
   // An alias ("claude", "codex", "gemini", "qwen") or a Family; see resolveAuthorFamily().
   author?: string;
   tiers: Record<Tier, string[]>;
@@ -109,6 +110,7 @@ export interface QuorumConfig {
   budget: {
     maxCalls: number;
     maxMinutes: number;
+    maxCallSeconds?: number;
     quotaFloorPercent: number;
   };
   reproduce: {
