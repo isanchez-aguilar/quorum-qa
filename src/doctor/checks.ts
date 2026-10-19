@@ -81,11 +81,15 @@ export async function readProbe(provider: 'agy' | 'codex', model: string, contex
     const worktree = await createReviewWorktree(context.repoRoot, head.stdout.trim(), context.runner);
     try {
       const expected = (await readFile(path.join(worktree.path, 'README.md'), 'utf8')).split(/\r?\n/)[0]!;
-      const prompt = 'Using ONLY file-read tools, return only the first line of README.md. Never write files or run shell commands.';
+      // agy headless stops at the first denied command, so it is told to use file-read tools only. Codex reads files
+      // through its shell, and its read-only guarantee is the -s read-only sandbox, so its prompt must not forbid commands.
+      const prompt = provider === 'agy'
+        ? 'Using ONLY file-read tools, return only the first line of README.md. Never write files or run shell commands.'
+        : 'Read README.md and return only its first line, with nothing else. Do not modify any file.';
       let output: string;
       if (provider === 'agy') {
         const result = await command(context, 'agy', ['--model', model, '--sandbox', '--output-format', 'json', '--print-timeout', '30s', `--print=${prompt}`], worktree.path);
-        if (result.exitCode !== 0) throw new Error('Probe failed');
+        if (result.exitCode !== 0) throw new Error(`exit code ${result.exitCode}`);
         const envelope = JSON.parse(result.stdout) as { status?: unknown; response?: unknown };
         if (envelope.status !== 'SUCCESS' || typeof envelope.response !== 'string') throw new Error('Invalid response');
         output = envelope.response;
@@ -94,7 +98,7 @@ export async function readProbe(provider: 'agy' | 'codex', model: string, contex
         try {
           const file = path.join(temp, 'response.txt');
           const result = await command(context, 'codex', ['exec', '-C', worktree.path, '-s', 'read-only', '-o', file, '-'], worktree.path, prompt);
-          if (result.exitCode !== 0) throw new Error('Probe failed');
+          if (result.exitCode !== 0) throw new Error(`exit code ${result.exitCode}`);
           output = await readFile(file, 'utf8');
         } finally { await rm(temp, { recursive: true, force: true }); }
       }
@@ -102,8 +106,10 @@ export async function readProbe(provider: 'agy' | 'codex', model: string, contex
       if (output.trim() !== expected.trim()) throw new Error('README first line mismatch');
       return { id, status: 'PASS', message: `${provider} read the first line of README.md in a clean disposable worktree.` };
     } finally { await worktree.cleanup(); }
-  } catch {
-    return { id, status: 'FAIL', message: `${provider} read-only probe failed.`,
+  } catch (error) {
+    // Only the reason is reported: never the model output or file contents.
+    const reason = error instanceof Error ? error.message.slice(0, 120) : 'unknown error';
+    return { id, status: 'FAIL', message: `${provider} read-only probe failed: ${reason}.`,
       fix: provider === 'agy' ? `Verify the agy login and read_file(${permissionPath(path.join(context.repoRoot, '.quorum', 'worktrees'))}) permission.` : 'Run codex login and verify read-only sandbox access.' };
   }
 }

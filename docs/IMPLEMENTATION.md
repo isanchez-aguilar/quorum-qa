@@ -1698,3 +1698,17 @@ fix, as did the existing stderr failure cases. An additional output-limit test
 Existing synthetic cascade runners now answer the checkout protocol; deadline
 tests advance time during origin verification or after inference starts. The
 origin-call ceiling remains 800 plus four baseline/post-call checkout queries.
+
+### M4 on a real machine (2026-10-19)
+
+`quorum doctor` and `quorum doctor --probe` were run on Isaac's Windows machine with the real agy 1.2.x and codex 0.160.0. They found three things the fake-runner tests could not:
+
+1. **agy's `settings.json` had a UTF-8 BOM** (written by PowerShell). agy accepts it, but `JSON.parse` doesn't, so the permission check failed silently. Fixed: the BOM is stripped, and there's a regression test.
+2. **agy no longer lists `gemini-3.1-pro-*`.** `doctor` flagged the configured id. The review and visual defaults move to `gemini-4-argon-high`, which has its own quota group ("Gemini 4 Argon"). The old ids stay in the catalog so older configs still resolve.
+3. **The Codex probe failed because its prompt forbade shell commands.** On Windows, Codex reads files through `pwsh Get-Content`, and its read-only guarantee is `-s read-only`, so its prompt no longer forbids commands. agy keeps "file-read tools only", because a headless run stops at the first denied command. A failed probe now names its reason (exit code, mismatch, dirty), without showing any content.
+
+After the fixes, both probes pass: each provider read README.md inside a disposable worktree under `.quorum/worktrees`, the worktree stayed clean, and it was removed. **ASSUMPTION 6 (agy can read the worktrees) is settled.** ASSUMPTION 1 (agy's deny-rule tool names) is still open.
+
+Real calls spent on M4: agy 3 (one fixture capture, two probes; `/usage` spends no inference), Codex 3 (two doctor probes and one manual reproduction).
+
+The repo now has its own `quorum.config.json` (checks: `pnpm typecheck`, `pnpm test`), so Quorum can review its own changes from M5 on.

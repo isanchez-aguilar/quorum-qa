@@ -169,6 +169,17 @@ describe('doctor with synthetic executables and injected runner', () => {
     expect(runner.mock.calls.filter(([, args]) => args.includes('exec'))).toHaveLength(1);
     expect(cleanup).toHaveBeenCalledOnce();
   });
+  it('does not forbid shell commands in the Codex probe, and names the failure reason', async () => {
+    // Codex reads files through its shell; its read-only guarantee is the sandbox flag.
+    await writeFile(path.join(root, 'README.md'), '# Synthetic');
+    vi.mocked(createReviewWorktree).mockResolvedValue({ path: root, cleanup: vi.fn(async () => {}) });
+    runner.mockImplementation(async (_file, args) => args.includes('--verify') ? ok('a'.repeat(40)) : { ...ok(), exitCode: 3 });
+    const result = await readProbe('codex', 'codex', { runner, env, repoRoot: root });
+    const exec = runner.mock.calls.find(([, args]) => args.includes('exec'))!;
+    expect(exec[1]).toEqual(expect.arrayContaining(['-s', 'read-only']));
+    expect(exec[2]?.stdin).not.toMatch(/shell|command/i);
+    expect(result.message).toContain('exit code 3');
+  });
   it('handles worktree creation failure as a failed probe', async () => {
     vi.mocked(createReviewWorktree).mockRejectedValue(new Error('not ignored'));
     expect((await readProbe('agy', model, { runner, env, repoRoot: root })).status).toBe('FAIL');

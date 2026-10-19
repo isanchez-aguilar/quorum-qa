@@ -1,0 +1,9 @@
+{
+  "checks": [["pnpm", "typecheck"], ["pnpm", "test"]],
+  "tiers": {
+    "triage": ["agy:gemini-3.8-flash-medium", "qwen"],
+    "review": ["agy:gemini-4-argon-high", "claude:sonnet"],
+    "confirm": ["codex", "claude:opus"],
+    "visual": ["agy:gemini-4-argon-high"]
+  }
+}
