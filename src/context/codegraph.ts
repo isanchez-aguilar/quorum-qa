@@ -104,6 +104,7 @@ export class CodeGraphContextProvider implements ContextProvider {
       invocations++;
       const result = await runner(resolved.file, resolved.args, {
         cwd: context.worktreeRoot, env: this.options.env, timeoutMs: Math.min(10_000, remaining),
+        windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       });
       if (this.now() >= end) throw new Error('run deadline reached');
       if (result.exitCode !== 0) throw new Error('command failed');

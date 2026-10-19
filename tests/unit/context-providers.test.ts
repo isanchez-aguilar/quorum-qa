@@ -238,3 +238,24 @@ it('attaches only each chunk\'s files and retains valid bounded JSON', () => {
   }
   expect(result.notes).toEqual([]);
 });
+
+it('passes windowsVerbatimArguments to the runner for a .cmd shim (cmd.exe fails without it)', async () => {
+  // Verified on Windows with the real npm shim: without verbatim arguments cmd.exe can't parse the quoted command line.
+  const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
+  const repo = await (await import('node:fs/promises')).mkdtemp(path.join((await import('node:os')).tmpdir(), 'quorum-cg-verbatim-'));
+  await mk(path.join(repo, '.codegraph'));
+  await wf(path.join(repo, 'a.ts'), 'export const a = 1;\n');
+  const resolve = () => ({ file: 'C:\Windows\System32\cmd.exe', args: ['/d', '/s', '/c', '""C:\npm\codegraph.cmd""'], windowsVerbatimArguments: true });
+  const calls: Array<{ windowsVerbatimArguments?: boolean }> = [];
+  const runner = vi.fn(async (_file: string, _args: string[], options?: { windowsVerbatimArguments?: boolean }) => {
+    calls.push({ windowsVerbatimArguments: options?.windowsVerbatimArguments });
+    return { stdout: '**a.ts** — 0 symbols', stderr: '', exitCode: 0 };
+  });
+  const provider = new CodeGraphContextProvider({ resolve });
+  const diff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-x\n+export const a = 1;\n';
+  await provider.enrich({ worktreeRoot: repo, diff, touchedFiles: ['a.ts'] } as never,
+    [{ files: ['a.ts'], payload: diff }] as never, { runner: runner as never, deadlineMs: 30_000 });
+  expect(calls.length).toBeGreaterThan(0);
+  expect(calls.every(call => call.windowsVerbatimArguments === true)).toBe(true);
+  await (await import('node:fs/promises')).rm(repo, { recursive: true, force: true });
+});

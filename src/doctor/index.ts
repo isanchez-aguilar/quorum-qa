@@ -21,7 +21,8 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
     if (indexFound && await provider.available(context.repoRoot)) {
       try {
         const resolved = provider.resolveInvocation(['--version'], context.repoRoot);
-        const version = await context.runner(resolved.file, resolved.args, { cwd: context.repoRoot, env: context.env, timeoutMs: 10_000 });
+        const version = await context.runner(resolved.file, resolved.args, { cwd: context.repoRoot, env: context.env, timeoutMs: 10_000,
+          windowsVerbatimArguments: resolved.windowsVerbatimArguments });
         available = version.exitCode === 0;
       } catch { /* Optional context never fails doctor. */ }
     }
