@@ -7,7 +7,15 @@ export interface AdapterOptions extends Pick<ResolveOptions, 'env' | 'platform' 
   runner?: CommandRunner;
   now?: () => number;
 }
-export const quotaLanguage = (text: string): boolean => /RESOURCE_EXHAUSTED|quota|429|rate limit/i.test(text);
+export const quotaLanguage = (text: string): boolean => /RESOURCE_EXHAUSTED|\bquota\b|\b429\b|rate.?limit/i.test(text);
+
+export async function cleanupPreservingError(cleanup: () => Promise<void>, original: unknown): Promise<void> {
+  try { await cleanup(); }
+  catch (error) {
+    if (!(original instanceof ProviderError)) throw error;
+    original.warnings.push(`Cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 export function remaining(options: ReviewOptions, started: number, now: () => number): number {
   const value = options.deadlineMs - (now() - started);
   if (options.signal?.aborted || !Number.isFinite(value) || value <= 0) throw new ProviderError('timeout', 'Provider deadline reached');
@@ -31,8 +39,8 @@ export class ProviderCommands {
         env: this.options.env, windowsVerbatimArguments: resolved.windowsVerbatimArguments });
     } catch (error) {
       if (error instanceof ProviderError) throw error;
-      if ((error instanceof CommandTimeoutError || error instanceof CommandOutputLimitError)
-        && quotaLanguage(error.stdout + '\n' + error.stderr)) throw new ProviderError('quota', name + ' quota exhausted or rate limited');
+      if ((error instanceof CommandTimeoutError || (error instanceof CommandOutputLimitError && error.exitCode !== 0))
+        && quotaLanguage(error.stderr)) throw new ProviderError('quota', name + ' quota exhausted or rate limited');
       if (error instanceof CommandTimeoutError) throw new ProviderError('timeout', `${name} timed out`);
       throw new ProviderError('unavailable', `${name} call failed: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -107,6 +107,24 @@ describe('doctor with synthetic executables and injected runner', () => {
     await writeFile(settings, JSON.stringify({ permissions: { allow: [`read_file(${parent})`] } }));
     expect((await checkPermissions(home, root))[0]?.status).toBe('PASS');
   });
+  it('refuses an unlisted probe model without inference', async () => {
+    const cfg = config(); cfg.tiers.triage = ['agy:missing']; cfg.tiers.review = [];
+    const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, probe: true });
+    expect(result.find(check => check.id === 'agy.probe')).toMatchObject({ status: 'FAIL', message: expect.stringContaining('listed') });
+    expect(runner.mock.calls.some(([, args]) => args.includes('--model'))).toBe(false);
+    // Only Codex may create a probe worktree; agy must be rejected before setup.
+    expect(createReviewWorktree).toHaveBeenCalledTimes(1);
+  });
+  it.each(['*', '/', 'ROOT', 'PARENT'])('read deny %s overrides allow', async denied => {
+    const rule = denied === 'ROOT' ? permissionPath(root) : denied === 'PARENT' ? permissionPath(path.join(root, '.quorum', 'worktrees')) : denied;
+    await writeFile(settings, JSON.stringify({ permissions: { allow: [`read_file(${permissionPath(root)})`], deny: [`read_file(${rule})`] } }));
+    expect((await checkPermissions(home, root))[0]?.status).toBe('FAIL');
+  });
+  it('runs independent checks without config', async () => {
+    const result = await runDoctor(undefined!, { runner, env, homedir: home, repoRoot: root });
+    for (const id of ['git.repo', 'agy.path', 'codex.path', 'container']) expect(status(result, id)).toBe('PASS');
+    expect(result.find(check => check.id === 'config')).toMatchObject({ status: 'FAIL', fix: expect.stringContaining('quorum.config.json') });
+  });
   it('runs exactly one call per requested probe, verifies output and cleans up', async () => {
     await writeFile(path.join(root, 'README.md'), '# Synthetic\nsecond');
     const cleanup = vi.fn(async () => {});
@@ -153,7 +171,7 @@ describe('doctor with synthetic executables and injected runner', () => {
   it('skips agy probe when no agy model is configured', async () => {
     const cfg = config(); cfg.tiers.triage = ['codex']; cfg.tiers.review = ['codex'];
     const result = await runDoctor(cfg, { runner, env, homedir: home, repoRoot: root, probe: true });
-    expect(status(result, 'agy.probe')).toBe('WARN');
+    expect(status(result, 'agy.probe')).toBe('FAIL');
     expect(runner.mock.calls.some(([, args]) => args.some(arg => arg.startsWith('--print=Using')))).toBe(false);
   });
   it.each(['https://example.com', 'http://127.0.0.2', 'file:///tmp/models', 'http://user:pass@localhost'])('refuses non-loopback/unsafe endpoint %s without HTTP', async endpoint => {

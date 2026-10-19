@@ -83,6 +83,15 @@ describe('router (in process)', () => {
     expect(runDoctor).toHaveBeenCalledExactlyOnceWith(config, { repoRoot: root, probe: true });
   });
 
+  it('runs doctor even when config is missing', async () => {
+    const runDoctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>(async () => [{ id: 'config', status: 'FAIL', message: 'Missing config' }]);
+    const result = await run(['doctor', '--json'], {
+      loadConfig: async () => { throw new ConfigError(['file not found: quorum.config.json'], 'Cannot load config'); }, runDoctor,
+    });
+    expect(runDoctor).toHaveBeenCalledOnce();
+    expect(JSON.parse(result.out)[0].id).toBe('config');
+    expect(result.code).toBe(2);
+  });
   it('reports config errors without starting doctor', async () => {
     const runDoctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>();
     const result = await run(['doctor'], {

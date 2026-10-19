@@ -32,19 +32,22 @@ export async function checkPermissions(homedir: string, repoRoot: string): Promi
   try {
     const settings: unknown = JSON.parse(await readFile(path.join(homedir, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8'));
     const allow = (settings as { permissions?: { allow?: unknown } } | null)?.permissions?.allow;
-    allowed = Array.isArray(allow) && allow.some(entry => {
+    const deny = (settings as { permissions?: { deny?: unknown } } | null)?.permissions?.deny;
+    const covers = (entry: unknown): boolean => {
       if (typeof entry !== 'string') return false;
       const match = /^read_file\(([^\r\n]+)\)$/.exec(entry);
+      if (match?.[1] === '*') return true;
       if (!match || !match[1]!.startsWith('/')) return false;
-      let permitted = permissionPath(match[1]!);
+      let permitted = permissionPath(match[1]!.replace(/\/\*\*?$/, ''));
       let target = parent;
       if (process.platform === 'win32') { permitted = permitted.toLowerCase(); target = target.toLowerCase(); }
       return permitted === '/' || target === permitted || target.startsWith(`${permitted}/`);
-    });
+    };
+    allowed = Array.isArray(allow) && allow.some(covers) && !(Array.isArray(deny) && deny.some(covers));
   } catch { /* Only report the result, never settings contents or parse errors. */ }
   return [
     { id: 'agy.permissions.read', status: allowed ? 'PASS' : 'FAIL',
-      message: allowed ? 'agy permits reading review worktrees.' : 'agy settings do not allow reading review worktrees.',
+      message: allowed ? 'agy permits reading review worktrees.' : 'agy settings do not allow reading review worktrees or contain a covering read deny rule.',
       ...(!allowed ? { fix: `Add ${rule} to permissions.allow in ~/.gemini/antigravity-cli/settings.json.` } : {}) },
     { id: 'agy.permissions.deny', status: 'WARN', message: 'Write and shell deny tool names are unverified (ASSUMPTION 1).',
       fix: 'Suggested permissions.deny rules (unverified): write_file(*), run_command(*). Verify the actual tool names in agy documentation before adding them.' },

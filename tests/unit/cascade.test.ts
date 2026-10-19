@@ -26,6 +26,20 @@ describe('fake provider cascade', () => {
   }
   const yes = (fields = {}) => JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote, ...fields });
 
+  it.each(['status', 'HEAD', 'error'])('aborts the run on checkout %s changes', async mode => {
+    let changed = false;
+    const pool = providers({ agy: { flash: ['[]'], pro: ['[]'] }, codex: { codex: ['[]'] } });
+    pool.get('agy')!.executeReview = async () => { changed = true; if (mode === 'error') throw new Error('failed'); return { rawOutput: '[]', durationMs: 0, worktreeClean: true }; };
+    const result = await runCascade(context(root), config(), pool, { catalog, clock: new FakeClock(), gitRunner: async (command, args, options) => {
+      if (args.includes('status')) return { stdout: changed && mode !== 'HEAD' ? ' M sample.ts\n?? new.txt\n' : '', stderr: '', exitCode: 0 };
+      if (changed && mode === 'HEAD' && args.includes('rev-parse')) return { stdout: 'c'.repeat(40), stderr: '', exitCode: 0 };
+      return originRunner(root)(command, args, options);
+    } });
+    expect(result).toMatchObject({ errors: [expect.stringContaining(mode === 'HEAD' ? 'HEAD' : 'sample.ts')] });
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0]?.status).toBe('error');
+    expect(result.coverage.complete).toBe(false);
+  });
   it('testCascade_EscalatesMoney', async () => {
     const pool = providers({ agy: { flash: [JSON.stringify([finding({ trigger: 'currency rounding error' })])] }, codex: { codex: [yes()] } });
     const cfg = config({ escalate: { focus: ['currency'], belowConfidence: 0.7 } });
@@ -114,7 +128,8 @@ describe('fake provider cascade', () => {
     const clock = new FakeClock();
     const pool = providers({ agy: { flash: [{ neverReturns: true }], pro: ['[]'] } });
     const pending = runCascade(context(root), config({ budget: { maxMinutes: 1 } }), pool, { gitRunner: originRunner(root), catalog, clock });
-    await Promise.resolve();
+    for (let i = 0; i < 20 && !pool.get('agy')!.calls.length; i++) await Promise.resolve();
+    expect(pool.get('agy')!.calls).toHaveLength(1);
     clock.advance(60_000);
     const result = await pending;
     expect(result.calls).toHaveLength(1);
@@ -246,7 +261,7 @@ describe('fake provider cascade', () => {
     ctx.touchedFiles = Array.from({ length: count }, (_, i) => 'file' + i + '.ts');
     ctx.diff = ctx.touchedFiles.map(file => 'diff --git a/' + file + ' b/' + file + '\n--- a/' + file + '\n+++ b/' + file + '\n@@ -1 +1 @@\n+' + 'x'.repeat(count === 3000 ? 10 : 10000) + '\n').join('');
     const pool = providers({ agy: { flash: Array(100).fill('[]') } });
-    const result = await runCascade(ctx, config({ budget: { maxCalls: size === 1 ? 1 : 100 } }), pool, { catalog, clock: new FakeClock() });
+    const result = await runCascade(ctx, config({ budget: { maxCalls: size === 1 ? 1 : 100 } }), pool, { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
     expect(result.coverage.complete).toBe(size !== 1);
     expect(result.coverage.skippedFiles.length).toBe(size === 1 ? 8 : 0);
     expect(result.calls.length).toBeGreaterThan(size === 1 ? 0 : 1);
@@ -261,21 +276,21 @@ describe('fake provider cascade', () => {
   it('records a cut oversized hunk', async () => {
     const ctx = context(root);
     ctx.diff += '+' + 'x'.repeat(100000);
-    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock() });
+    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
     expect(result.coverage.complete).toBe(false);
     expect(result.coverage.truncatedHunks).toEqual([{ file: 'sample.ts', hunk: 1 }]);
     expect(result.warnings.join(' ')).toContain('sample.ts');
   });
   it('skips files when no diff content fits', async () => {
     const ctx = { ...context(root), specContent: 'x'.repeat(30000) };
-    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock() });
+    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
     expect(result.calls).toHaveLength(0);
     expect(result.coverage).toMatchObject({ complete: false, skippedFiles: ['sample.ts'] });
   });
   it('counts findings left at the verification deadline', async () => {
     const clock = new FakeClock();
     const runner: ReturnType<typeof originRunner> = async (...args) => {
-      clock.advance(60000);
+      if (args[1].includes('blame')) clock.advance(60000);
       return originRunner(root)(...args);
     };
     const result = await runCascade(context(root), config({ budget: { maxMinutes: 1 } }), providers({ agy: { flash: [JSON.stringify([finding(), finding()])] } }), { catalog, clock, gitRunner: runner });
@@ -289,7 +304,7 @@ describe('fake provider cascade', () => {
     const hunks = [1, 2, 3].map(line => '@@ -' + line + ' +' + line + ' @@\n+' + ('hunk' + line).repeat(3000) + '\n');
     ctx.diff = header + hunks.join('');
     const pool = providers({ agy: { flash: Array(10).fill('[]') } });
-    const result = await runCascade(ctx, config({ budget: { maxCalls } }), pool, { catalog, clock: new FakeClock() });
+    const result = await runCascade(ctx, config({ budget: { maxCalls } }), pool, { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
     expect(result.calls).toHaveLength(maxCalls === 1 ? 1 : 3);
     expect(result.coverage.truncatedHunks).toEqual([]);
     expect(result.coverage.complete).toBe(maxCalls !== 1);
@@ -302,7 +317,7 @@ describe('fake provider cascade', () => {
   it('reports missing diff files and unsuccessful review responses', async () => {
     const ctx = context(root);
     ctx.touchedFiles.push('missing.ts');
-    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['invalid'], pro: ['invalid'] } }), { catalog, clock: new FakeClock() });
+    const result = await runCascade(ctx, config(), providers({ agy: { flash: ['invalid'], pro: ['invalid'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
     expect(result.coverage).toMatchObject({ complete: false, reviewedFiles: [], skippedFiles: ['missing.ts', 'sample.ts'] });
     for (const file of ctx.touchedFiles) expect(result.warnings.join(' ')).toContain(file);
   });

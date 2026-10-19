@@ -12,6 +12,7 @@ export interface RawProviderResult {
 
 export interface ReviewOptions {
   deadlineMs: number;
+  assertCheckoutUnchanged?: () => Promise<void>;
   // Reserves an additional inference slot before an adapter retries a call.
   reserveRetry?: () => boolean;
   // Cancellation supplements the runner deadline, including adapters with no child process.
@@ -28,6 +29,7 @@ export interface ProviderAdapter {
 }
 
 export class ProviderError extends Error {
+  readonly warnings: string[] = [];
   constructor(readonly kind: 'quota' | 'timeout' | 'unavailable', message: string) {
     super(message);
     this.name = 'ProviderError';

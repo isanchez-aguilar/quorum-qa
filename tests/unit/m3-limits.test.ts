@@ -19,13 +19,13 @@ beforeAll(async () => {
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 const config = () => validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
 
-it('500 findings use at most 800 git calls, never the adapter runner', async () => {
+it('500 findings use at most 800 origin calls plus four checkout checks, never the adapter runner', async () => {
   const gitRunner = vi.fn(originRunner(root));
   const providerRunner = vi.fn(originRunner(root));
   const fake = new FakeProvider('agy', 'google', providerRunner, { flash: [JSON.stringify(Array.from({ length: 500 }, () => finding()))] });
   const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, gitRunner });
   expect(gitRunner.mock.calls.length).toBeGreaterThan(0);
-  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(800);
+  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(804);
   expect(providerRunner).not.toHaveBeenCalled();
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(100);
   expect(result.ledgerDraft[0]?.rejectionReasons['parse: too many findings']).toBe(400);
@@ -37,13 +37,13 @@ it('stops verification at the deadline between findings', async () => {
   const clock = new FakeClock();
   const cfg = config();
   const gitRunner = vi.fn(async (...args: Parameters<ReturnType<typeof originRunner>>) => {
-    clock.time = cfg.budget.maxMinutes * 60_000;
+    if (args[1].includes('blame')) clock.time = cfg.budget.maxMinutes * 60_000;
     return originRunner(root)(...args);
   });
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding(), finding()])] });
   const result = await runCascade(context(root), cfg, new Map([['agy', fake]]), { catalog, gitRunner, clock });
   expect(result.ledgerDraft[0]?.verifiedFindingsCount).toBe(1);
-  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(8);
+  expect(gitRunner.mock.calls.length).toBeLessThanOrEqual(12);
   expect(result.warnings).toContain(BUDGET_WARNING);
   expect(result.coverage.complete).toBe(false);
   expect(result.coverage.lostFindings).toContainEqual({ reason: 'run deadline', file: 'sample.ts', count: 1 });
@@ -102,7 +102,7 @@ it('old low quota is unknown and does not block planning or execution', async ()
   expect(plan.tiers.triage).toHaveLength(1);
   expect(plan.quotas[0]?.remainingPercent).toBe('unknown');
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: ['[]'] });
-  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, quotaSnapshot });
+  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, quotaSnapshot, gitRunner: originRunner(root) });
   expect(result.calls).toHaveLength(1);
   expect(result.warnings.join(' ')).toContain('floor unchecked');
 });
@@ -140,14 +140,14 @@ it('caps actual confirm and adjudication prompts, removes reproduction, and trun
 it.each(['[Quorum: diff truncated at 512 KiB]', '[Quorum: command output truncated]'])('tracks upstream truncation: %s', async marker => {
   const ctx = context(root); ctx.diff += marker + '\n';
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: ['[]'] });
-  const result = await runCascade(ctx, config(), new Map([['agy', fake]]), { catalog });
+  const result = await runCascade(ctx, config(), new Map([['agy', fake]]), { catalog, gitRunner: originRunner(root) });
   expect(result.coverage.complete).toBe(false);
   expect(result.coverage.truncatedHunks).toContainEqual({ file: 'sample.ts', hunk: 1 });
   expect(fake.calls[0]?.prompt).not.toContain(marker);
 });
 it('records exhausted invalid responses', async () => {
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: ['bad'], pro: ['bad'] });
-  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog });
+  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, gitRunner: originRunner(root) });
   expect(result.coverage.lostFindings).toContainEqual({ reason: 'invalid response', count: 2 });
   expect(result.coverage.complete).toBe(false);
 });
@@ -167,7 +167,7 @@ it('reserves four calls with 3000 files', async () => {
 });
 it('separates binary files', async () => {
   const ctx = {...context(root), touchedFiles:['image.png'], diff:'diff --git a/image.png b/image.png\nBinary files a/image.png and b/image.png differ\n'};
-  const result = await runCascade(ctx, config(), new Map(), {catalog});
+  const result = await runCascade(ctx, config(), new Map(), { catalog, gitRunner: originRunner(root) });
   expect(result.coverage.binaryFiles).toEqual(['image.png']);
   expect(result.coverage.reviewedFiles).toEqual([]);
   expect(result.coverage.complete).toBe(true);
@@ -196,13 +196,13 @@ it('releases the reserve when there are no findings to escalate', async () => {
   ctx.diff = ctx.touchedFiles.map(f => 'diff --git a/'+f+' b/'+f+'\n--- a/'+f+'\n+++ b/'+f+'\n@@ -0,0 +1 @@\n+value\n').join('');
   const fake = new FakeProvider('agy', 'google', originRunner(root), {flash:Array.from({length:12}, () => '[]')});
   const cfg = config(); cfg.budget.maxCalls = 12;
-  const result = await runCascade(ctx, cfg, new Map([['agy',fake]]), {catalog});
+  const result = await runCascade(ctx, cfg, new Map([['agy',fake]]), { catalog, gitRunner: originRunner(root) });
   expect(result.calls.filter(call => call.tier === 'triage')).toHaveLength(12);
 });
 
 it('honors the explicit upstream flag even without a marker', async () => {
   const fake = new FakeProvider('agy', 'google', originRunner(root), {flash:['[]']});
-  const result = await runCascade({...context(root), diffTruncated:true}, config(), new Map([['agy',fake]]), {catalog});
+  const result = await runCascade({...context(root), diffTruncated:true}, config(), new Map([['agy',fake]]), { catalog, gitRunner: originRunner(root) });
   expect(result.coverage.complete).toBe(false);
   expect(result.coverage.truncatedHunks).toContainEqual({file:'sample.ts', hunk:1});
 });
@@ -220,7 +220,7 @@ it('sends the actual hunk when a finding path has spaces', async () => {
 });
 
 it('records a finding lost because git cannot tell its origin', async () => {
-  const gitRunner = vi.fn(async () => ({ stdout: '', stderr: 'fatal: shallow clone', exitCode: 128 }));
+  const gitRunner = vi.fn(async (...args: Parameters<ReturnType<typeof originRunner>>) => args[1].includes('blame') ? { stdout: '', stderr: 'fatal: shallow clone', exitCode: 128 } : originRunner(root)(...args));
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding()])] });
   const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, gitRunner });
   expect(result.findings).toEqual([]);
@@ -232,7 +232,7 @@ it('records a finding lost because git cannot tell its origin', async () => {
 it('records malformed findings as lost', async () => {
   const { fix: _fix, ...withoutFix } = finding();
   const fake = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding(), withoutFix])] });
-  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog });
+  const result = await runCascade(context(root), config(), new Map([['agy', fake]]), { catalog, gitRunner: originRunner(root) });
   expect(result.coverage.complete).toBe(false);
   expect(result.coverage.lostFindings).toContainEqual({ reason: 'malformed finding', count: 1 });
 });

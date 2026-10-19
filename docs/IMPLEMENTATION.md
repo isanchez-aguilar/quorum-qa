@@ -1605,6 +1605,20 @@ No dependencies were added. Review remains unimplemented until M5.
   files, and cleans up in finally. M3 discards dirty results. The parent must
   be git-ignored and cannot be a symlink/junction. Cleanup is concurrent-safe,
   idempotent after success, and retries a failed remove/prune on a later call.
+  Creation prunes Git metadata first, then removes only real, unlisted child
+  directories older than 24 hours; registered worktrees and fresh entries stay.
+  Cleanup failures preserve the original ProviderError and attach warnings,
+  which the cascade includes in its warnings.
+- Before its first provider call, the cascade snapshots the user's repository
+  `git status --porcelain --untracked-files=all` and HEAD. After every call,
+  including failures and Codex retry attempts, a difference aborts the entire
+  run, records an error with changed paths (or HEAD), and returns no findings.
+  Pre-existing dirty status is allowed if unchanged. Failure to check Git also
+  aborts. This compares status and HEAD, not file contents: an edit that leaves
+  the same porcelain status, ignored files, or writes elsewhere is not detected.
+  Until ASSUMPTION 1 (agy deny-rule tool names) is settled, agy's protection
+  against writes outside the review worktree is detection after the fact, not
+  prevention; it is not a filesystem sandbox guarantee.
 - agy uses the recorded SUCCESS envelope, argument prompt, sandbox and explicit
   timeout. Worktree preparation consumes the remaining deadline. On Windows the
   conservative 30,000-character guard also includes the resolved executable and
@@ -1617,6 +1631,11 @@ No dependencies were added. Review remains unimplemented until M5.
   minimum active bucket and the earliest valid reset among binding buckets;
   disabled buckets are recognized in JSON or the response text column. Missing,
   malformed and failed readings remain unknown. Codex quota remains unknown.
+  Specific Argon model patterns precede generic Gemini patterns. Review quota
+  detection runs only on failed calls, using stderr and agy envelope error/status
+  fields with bounded quota/429 terms; model output, response text and stdout
+  envelopes are never scanned. Timeout diagnostics use stderr only. Successful
+  Codex calls with a nonempty output file cannot become quota errors.
 - Codex writes its final message under the OS temporary directory, sends the
   prompt on stdin and removes the temporary directory on success or failure.
   Only a nonzero exit with missing/empty output permits one retry. A new optional
@@ -1629,12 +1648,17 @@ No dependencies were added. Review remains unimplemented until M5.
   refused. Settings are read only; neither contents nor parsing errors are
   printed. Unknown write/shell deny names always produce WARN with explicitly
   unverified suggested rules. No optional Claude diagnostic is included in M4.
+  A covering read deny rule overrides an allow rule. Missing quorum.config.json
+  is a FAIL with a setup hint, while independent Git/provider/container checks
+  still run; invalid configuration continues to fail before diagnostics.
 - Doctor probes are opt-in, each makes exactly one inference in a fresh
   worktree and compares the result with README.md's first line. The Codex doctor
   probe deliberately does not retry, following the brief's one-call limit;
   ordinary Codex reviews do retry. Probe failures and dirty worktrees fail the
   diagnostic, and cleanup still runs. CLI JSON is the check array; WARN alone
   exits zero and any FAIL exits two. CLI dependencies are injectable for tests.
+  The agy probe selects only configured ids present in `agy models`; without
+  such an id it reports FAIL without an agy inference call.
 - Fixtures are the two scrubbed recordings supplied in .quorum/fixtures, copied
   to tests/fixtures/providers. Tests use only injected provider runners, mocked
   HTTP responses, synthetic settings and temporary Git repositories. No live
@@ -1651,6 +1675,26 @@ fixed pre-validation directory creation through a junction and incomplete argv
 length accounting. Cross-family review was not run because the brief forbids
 provider CLIs. No branch switch, commit or push was made.
 
-Validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test` rebuilt the
-CLI and passed 541 tests with one existing skip across 21 files. `git diff
---check` passed after removing an extra trailing blank line in the catalog.
+Validation of the M4 review fixes on Windows: `pnpm.cmd typecheck` passed;
+`pnpm.cmd test` rebuilt the CLI and passed 565 tests with one existing skip
+across 21 files. `git diff --check` passed.
+
+Before implementation, the focused five-file regression run had 23 failures
+and 116 passes. The failures were:
+
+- Adapters: three SUCCESS response/token-count cases, successful Codex prompt
+  echo/output, failed agy and Codex model output, word boundaries, both adapters'
+  cleanup error preservation, timeout stdout exclusion, and Argon precedence.
+- Cascade: checkout status changes, HEAD changes, and changes during a failed
+  provider call all failed to abort.
+- Doctor: unlisted probe model, four covering deny rules, missing config, and
+  the updated existing no-configured-model expectation (FAIL instead of WARN).
+- CLI: missing config prevented independent diagnostics.
+- Worktree: prune-before-add and stale unlisted directory removal.
+
+The positive failed-envelope RESOURCE_EXHAUSTED case already passed before the
+fix, as did the existing stderr failure cases. An additional output-limit test
+(exit zero with quota prompt echo) was observed failing before its correction.
+Existing synthetic cascade runners now answer the checkout protocol; deadline
+tests advance time during origin verification or after inference starts. The
+origin-call ceiling remains 800 plus four baseline/post-call checkout queries.

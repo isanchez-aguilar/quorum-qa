@@ -84,9 +84,11 @@ export async function main(
         return EXIT_ERROR;
       case 'doctor': {
         const repoRoot = dependencies.repoRoot ?? process.cwd();
-        const config = await (dependencies.loadConfig ?? loadConfig)(
-          path.join(repoRoot, 'quorum.config.json'),
-        );
+        let config;
+        try { config = await (dependencies.loadConfig ?? loadConfig)(path.join(repoRoot, 'quorum.config.json')); }
+        catch (error) {
+          if (!(error instanceof ConfigError) || !error.message.includes('file not found:')) throw error;
+        }
         const checks = await (dependencies.runDoctor ?? runDoctor)(config, {
           repoRoot,
           probe: flags.probe ?? false,

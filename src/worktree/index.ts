@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, realpath, lstat } from 'node:fs/promises';
+import { mkdir, realpath, lstat, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { git, requireWorktreeRoot, validateRef } from '../context/git.js';
 import type { CommandRunner } from '../types/index.js';
@@ -21,6 +21,21 @@ export async function createReviewWorktree(repoRoot: string, sha: string, runner
   await mkdir(parent, { recursive: true });
   const relative = path.relative(await realpath(repoRoot), await realpath(parent));
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Review worktree parent must stay inside the repository.');
+  const pruned = await git(['worktree', 'prune'], repoRoot, runner);
+  if (pruned.exitCode !== 0) throw new Error(`git worktree prune failed: ${pruned.stderr}`);
+  const listed = await git(['worktree', 'list', '--porcelain', '-z'], repoRoot, runner);
+  if (listed.exitCode !== 0) throw new Error(`git worktree list failed: ${listed.stderr}`);
+  const normalize = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  const registered = new Set(listed.stdout.split('\0').filter(item => item.startsWith('worktree ')).map(item => normalize(item.slice(9))));
+  for (const entry of await readdir(parent, { withFileTypes: true })) {
+    const candidate = path.resolve(parent, entry.name);
+    if (path.dirname(candidate) !== path.resolve(parent) || registered.has(normalize(candidate))) continue;
+    const stat = await lstat(candidate);
+    if (stat.isSymbolicLink() || !stat.isDirectory() || Date.now() - stat.mtimeMs <= 24 * 60 * 60 * 1000) continue;
+    const actual = await realpath(candidate);
+    if (path.dirname(actual) !== await realpath(parent)) throw new Error('Stale worktree must stay inside its parent.');
+    await rm(candidate, { recursive: true, force: true });
+  }
   const location = path.join(parent, randomUUID());
   const added = await git(['worktree', 'add', '--detach', location, sha], repoRoot, runner);
   if (added.exitCode !== 0) throw new Error(`git worktree add failed: ${added.stderr}`);

@@ -1,7 +1,7 @@
 import { AGY_QUOTA_GROUPS, agyQuotaGroup } from '../catalog/agy-groups.js';
 import type { ReviewContext } from '../types/index.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
-import { ProviderCommands, quotaLanguage, remaining } from './commands.js';
+import { ProviderCommands, quotaLanguage, remaining, cleanupPreservingError } from './commands.js';
 import { ProviderError, type ProviderAdapter, type Quota, type RawProviderResult, type ReviewOptions } from './types.js';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -52,6 +52,7 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
     const started = this.now();
     remaining(options, started, this.now);
     const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run);
+    let failure: unknown;
     try {
       const timeoutMs = remaining(options, started, this.now);
       const args = ['--model', modelId, '--sandbox', '--output-format', 'json', '--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`, `--print=${prompt}`];
@@ -60,16 +61,20 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
         throw new ProviderError('unavailable', 'agy argv exceeds the 30,000-character Windows limit');
       }
       const result = await this.command('agy', args, worktree.path, timeoutMs);
-      if (quotaLanguage(result.stdout + '\n' + result.stderr)) throw new ProviderError('quota', 'agy quota exhausted or rate limited');
-      if (result.exitCode !== 0) throw new ProviderError('unavailable', `agy exited with ${result.exitCode}`);
       let envelope: unknown;
-      try { envelope = JSON.parse(result.stdout); } catch { throw new ProviderError('unavailable', 'Invalid agy JSON envelope'); }
+      try { envelope = JSON.parse(result.stdout); } catch { /* Failure stderr is still diagnostic. */ }
+      if (result.exitCode !== 0 || (record(envelope) && envelope.status !== 'SUCCESS')) {
+        const diagnostic = result.stderr + '\n' + (record(envelope) ? JSON.stringify([envelope.status, envelope.error]) : '');
+        if (quotaLanguage(diagnostic)) throw new ProviderError('quota', 'agy quota exhausted or rate limited');
+      }
+      if (result.exitCode !== 0) throw new ProviderError('unavailable', `agy exited with ${result.exitCode}`);
       if (!record(envelope) || envelope.status !== 'SUCCESS' || typeof envelope.response !== 'string') throw new ProviderError('unavailable', 'agy did not return a SUCCESS response');
       const usage = envelope.usage;
       const tokens = record(usage) && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number'
         && Number.isFinite(usage.input_tokens) && usage.input_tokens >= 0 && Number.isFinite(usage.output_tokens) && usage.output_tokens >= 0
         ? { prompt: usage.input_tokens, completion: usage.output_tokens } : undefined;
       return { rawOutput: envelope.response, durationMs: this.now() - started, worktreeClean: await isClean(worktree.path, this.run), ...(tokens ? { tokensUsed: tokens } : {}) };
-    } finally { await worktree.cleanup(); }
+    } catch (error) { failure = error; throw error; }
+    finally { await cleanupPreservingError(worktree.cleanup, failure); }
   }
 }

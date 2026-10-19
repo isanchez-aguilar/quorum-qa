@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, access, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access, symlink, mkdir, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -45,6 +45,21 @@ describe.skipIf(!gitPath)('disposable review worktrees', () => {
     await expect(access(tree.path)).rejects.toThrow();
     expect(await git('worktree', 'list', '--porcelain')).not.toContain(tree.path.replaceAll('\\', '/'));
     expect(await isClean(root, runner)).toBe(true);
+  });
+  it('prunes first and removes only stale unlisted directories', async () => {
+    const { root, sha } = await repository(true);
+    const active = await createReviewWorktree(root, sha, runner);
+    const parent = path.join(root, '.quorum', 'worktrees');
+    const stale = path.join(parent, 'stale'); const fresh = path.join(parent, 'fresh');
+    await mkdir(stale); await mkdir(fresh);
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await utimes(stale, old, old); await utimes(active.path, old, old);
+    const commands: string[][] = [];
+    const tree = await createReviewWorktree(root, sha, async (command, args, options) => { commands.push(args); return runner(command, args, options); });
+    expect(commands.findIndex(args => args.includes('prune'))).toBeLessThan(commands.findIndex(args => args.includes('add')));
+    await expect(access(stale)).rejects.toThrow();
+    await access(fresh); await access(active.path);
+    await tree.cleanup(); await active.cleanup();
   });
   it('refuses an unignored .quorum directory', async () => {
     const { root, sha } = await repository(false);

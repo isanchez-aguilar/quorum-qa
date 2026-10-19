@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgyProvider, parseAgyQuota } from '../../src/providers/agy.js';
 import { CodexProvider } from '../../src/providers/codex.js';
 import { DEFAULT_CATALOG } from '../../src/catalog/index.js';
+import { agyQuotaGroup } from '../../src/catalog/agy-groups.js';
+import { CommandTimeoutError, CommandOutputLimitError } from '../../src/process/runner.js';
 import type { CommandRunner, ReviewContext } from '../../src/types/index.js';
 
 const envelope = await readFile(new URL('../fixtures/providers/agy-print-json.json', import.meta.url), 'utf8');
@@ -126,7 +128,7 @@ describe('codex adapter', () => {
     await expect(new CodexProvider(settings()).executeReview(context, 'codex', 'p', { deadlineMs: 5000, reserveRetry: () => false })).rejects.toThrow('budget');
     expect(providerCalls()).toHaveLength(1);
   });
-  it.each([success('429', 1), success('', 1, 'quota exhausted')])('maps quota without retry', async response => {
+  it.each([success('', 1, '429'), success('', 1, 'quota exhausted')])('maps quota without retry', async response => {
     answer = async () => response;
     await expect(new CodexProvider(settings()).executeReview(context, 'codex', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'quota' });
     expect(providerCalls()).toHaveLength(1);
@@ -173,4 +175,48 @@ it('rejects an already aborted review without creating a worktree', async () => 
   const controller = new AbortController(); controller.abort();
   await expect(new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000, signal: controller.signal })).rejects.toMatchObject({ kind: 'timeout' });
   expect(calls).toHaveLength(0);
+});
+
+describe('M4 regressions', () => {
+  it.each(['quota', 'HTTP 429 looks fine', '[]'])('accepts SUCCESS %s and token count 14290', async response => {
+    answer = async () => success(JSON.stringify({ status: 'SUCCESS', response, usage: { input_tokens: 14290, output_tokens: 1 } }));
+    expect((await new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rawOutput).toBe(response);
+  });
+  it('accepts Codex success with quota in prompt echo and output', async () => {
+    answer = async (_command, args) => { await writeFile(args[args.indexOf('-o') + 1]!, 'quota 429'); return success('14290', 0, 'prompt: quota'); };
+    expect((await new CodexProvider(settings()).executeReview(context, 'codex', 'p', { deadlineMs: 5000 })).rawOutput).toBe('quota 429');
+  });
+  it.each(['agy', 'codex'])('ignores quota in %s failed model output', async provider => {
+    answer = async (_command, args) => {
+      if (provider === 'codex') await writeFile(args[args.indexOf('-o') + 1]!, 'quota 429');
+      return success(JSON.stringify({ status: 'FAILED', response: 'quota 429' }), 1);
+    };
+    const adapter = provider === 'agy' ? new AgyProvider(settings()) : new CodexProvider(settings());
+    await expect(adapter.executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+  it('recognizes failed envelope error fields', async () => {
+    answer = async () => success(JSON.stringify({ status: 'FAILED', error: { message: 'RESOURCE_EXHAUSTED' } }));
+    await expect(new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'quota' });
+  });
+  it('requires word boundaries in failed stderr', async () => {
+    answer = async () => success('', 1, '14290 quotaStatus abc429def');
+    await expect(new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+  it.each(['agy', 'codex'])('preserves %s error with cleanup warning', async provider => {
+    answer = async () => { throw new CommandTimeoutError('', ''); };
+    const locked: CommandRunner = async (command, args, options) => args.includes('remove') ? success('', 1, 'locked') : runner(command, args, options);
+    const adapter = provider === 'agy' ? new AgyProvider({ ...settings(), runner: locked }) : new CodexProvider({ ...settings(), runner: locked });
+    await expect(adapter.executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'timeout', warnings: [expect.stringContaining('locked')] });
+  });
+  it('uses stderr only on timeout', async () => {
+    answer = async () => { throw new CommandTimeoutError('quota 429', ''); };
+    await expect(new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'timeout' });
+  });
+  it('does not classify a successful output-limit error as quota', async () => {
+    answer = async () => { throw new CommandOutputLimitError('', 'prompt: quota', '', '', 0); };
+    await expect(new AgyProvider(settings()).executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+  it('matches argon before generic Gemini', () => {
+    expect(agyQuotaGroup('gemini-3.8-pro-argon-high')).toBe('agy:argon');
+  });
 });
