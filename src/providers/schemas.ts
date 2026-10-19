@@ -35,6 +35,10 @@ export const AGY_SCHEMAS: Record<ReviewPurpose, Schema> = {
   }, required: ['decision'],
   if: { type: 'object', properties: { decision: { type: 'string', enum: ['confirm'] } }, required: ['decision'] },
   then: { type: 'object', required: ['evidence_quote'] } },
+  'confirm-batch': { type: 'object', properties: { decisions: { type: 'array', items: {
+    type: 'object', properties: { id: text, decision: { type: 'string', enum: ['confirm', 'reject'] }, line, evidence_quote: text },
+    required: ['id', 'decision'],
+  } } }, required: ['decisions'] },
   adjudicate: { type: 'object', properties: { same: { type: 'boolean' } }, required: ['same'] },
   reproduce: { type: 'object', properties: { path: text, content: text, expect: text }, required: ['path', 'content', 'expect'] },
 };

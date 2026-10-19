@@ -207,9 +207,9 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
           noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
     const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
-    if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.coverage.complete = false; }
+    if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
     const clean = await isClean(verificationTree.path, runner);
-    if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.coverage.complete = false; }
+    if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
     const families = [...cascade.reviewedFamilies];
     // Cached reviews are still independent reviews by the original model family.
     // Confirming families count too: a finding confirmed by another family was reviewed by it.

@@ -47,6 +47,21 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
 }
 
 describe('M5 zero-quota review CLI', () => {
+  it('rejects a confident triage false positive through main without reporting a finding', async () => {
+    const provider = fake([JSON.stringify([finding({ confidence: 0.95 })])]);
+    const confirmer = new FakeProvider('codex', 'openai', runner, { codex: [JSON.stringify({ decisions: [{ id: 'c1', decision: 'reject' }] })] });
+    const { code, result } = await review(provider, ['--no-cache'], { providers: new Map([['agy', provider], ['codex', confirmer]]) });
+    expect(code).toBe(0);
+    expect(result?.findings).toEqual([]);
+    expect(result?.rejectedOnConfirmation).toHaveLength(1);
+    expect(result?.coverage.complete).toBe(true);
+    const markdown = await readFile(path.join(root, '.quorum/report.md'), 'utf8');
+    expect(markdown).toContain('## Important Findings\n\nNone.');
+    expect(markdown).toContain('## Rejected on confirmation');
+    expect(markdown).toContain('codex:codex');
+    const ledger = await readFile(path.join(root, '.quorum/ledger.jsonl'), 'utf8');
+    expect(ledger).toContain('rejected by confirmation');
+  });
   it.each(['success', 'failure', 'timeout', 'skip', 'dry-skip'])('runs setup before checks in the head worktree: %s', async state => {
     await commitConfig({ ...config([[process.execPath, '--version']]), ...{ setup: [[process.execPath, '--help']] } });
     await git('add', '.'); await git('commit', '-m', 'synthetic setup config');

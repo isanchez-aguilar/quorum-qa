@@ -1203,6 +1203,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 21. **Second real self-review fixes (2026-10-19):** Every agy inference purpose gets the adapter-level first line: "Do not call any tools: no file reads and no commands. Everything you need is in this prompt; answer only with the JSON." The shared review prefix instead says "If you can read files, read only what you need to check a line you cite." An empty agy response with stderr containing `required the "command" permission` or `auto-denied` raises `ProviderError('unavailable', 'agy tried to run a command in headless mode and returned nothing')`; the run warns once across models and does not disable the quota group. Default triage is [`agy:gemini-3.8-flash-low`, `qwen`, `agy:gpt-oss-120b-medium`]; this repo uses the first two. Effort is encoded in agy's model id. Qwen sends a strict purpose-specific JSON schema through `response_format`, using the shared schemas. HTTP 400 mentioning `response_format` or `json_schema` permits exactly one retry without that field, within the remaining time and call budget, with the run-deduplicated warning "qwen server does not support response_format". Severity parsing accepts case variants of BLOCKER, IMPORTANT and OPTIONAL only; it still rejects synonyms such as high and critical. This supersedes decision 3's Flash medium default.
 
+22. **v2 precision (2026-10-19):** `escalate.confirmImportant` defaults to `true`; `false` retains the earlier call policy. After mandatory rules 1–4/3b, routes, adjudication and opt-in reproduction, remaining budget (including unused M3 reserve) can confirm verified IMPORTANT findings sourced exclusively from triage calls of one non-local family, with no mandatory escalation. Group by resolved route and source family, up to five per `confirm-batch` call; prefer another family and warn if only the source family remains. Qwen never confirms. Match the object-root `decisions` answer by opaque `c1`–`c5` ids only; ignore unknown ids and every occurrence of duplicated ids. Reject invalid batch envelopes instead of extracting nested JSON. Confirmation preserves confidence (decision B), records confirmation families and enforces same-file, ten-line relocation with unchanged code in bughunt. Rejection removes the finding, records `rejected by confirmation` in the ledger and lists both reviewers in `Rejected on confirmation`. Missing/invalid answers or exhausted resources retain the IMPORTANT with `singleSource: true`, the report tag `single model, not confirmed`, and its SARIF property. Confirmation does not change coverage or IMPORTANT exit semantics. Dry-run discloses the setting and grouping/batch size.
+
 ---
 
 ## Review corrections
@@ -2451,3 +2453,72 @@ The same `bughunt` run on the same branch diff, after the agy/Qwen fixes.
 - **What it says about the design:** the quote was real, so the verifier accepted it, but the verifier can't judge the reasoning (a documented limit). Because the finding was IMPORTANT, high-confidence and outside the focus areas, no rule escalated it, so a single cheap model's claim reached the report unconfirmed.
 - **Recorded as a v2 roadmap item:** "confirm single-source IMPORTANT findings from the triage tier when budget allows".
 - The code was simplified anyway, to read the returned list.
+
+## v2 precision as built
+
+Implemented on `feat/v2-precision`, without new dependencies. Decision 22 adds
+default-on `escalate.confirmImportant`; setting it to false preserves the earlier
+provider call sequence. The candidate filter uses actual source call tiers and
+families after dedupe/adjudication, never catalog defaults or just the merged
+representative. Local-only, review/visual-sourced, multi-family and already
+mandatory-escalated findings do not enter this optional lane.
+
+- Mandatory escalation and opt-in reproduction finish first. The optional lane
+  uses only remaining calls/time, including unused confirmation reserve. Groups
+  share a resolved route and source family, then split into batches of up to five.
+  Route keywords already trigger mandatory escalation (decision 18), so ordinary
+  optional candidates use the confirm tier. Existing quota, author-family,
+  fallback and independence rules apply; local models cannot confirm.
+- The new `confirm-batch` purpose has an object-root schema shared with agy and
+  Qwen's response-format lookup. Each prompt explicitly labels its candidate
+  findings and hunks as untrusted JSON data and retains the 24,000-character cap.
+  Responses must be a complete top-level JSON object within the existing 1 MiB
+  response limit and match the schema. No nested answer or prose extraction is
+  attempted. Only unique known `c1`–`c5` ids count, independent of answer order;
+  every occurrence of a duplicate id is ignored.
+- Confirmation can omit line/quote to retain the original verified evidence.
+  Supplied evidence passes the existing verifier and blame, including numbered
+  bughunt quotes, same-file and ten-line relocation limits, and unchanged-window
+  checks. Confirmation-only origin failures keep the original finding and do not
+  reduce review coverage. Prompted confirmation sources add no confidence boost.
+- A rejection removes the final finding, records `rejected by confirmation` in
+  its call's ledger and retains the title, file:line, original model(s) and
+  confirmer under `Rejected on confirmation`. Related annotations are recomputed
+  after removal so a rejected candidate cannot survive indirectly. Checkout and
+  verification-worktree guards clear rejected results as well as final findings.
+- Unanswered candidates stay in Important Findings with `singleSource: true`,
+  the visible `single model, not confirmed` tag, and SARIF's matching property.
+  Coverage and IMPORTANT exit semantics are unchanged. Dry-run prints the setting,
+  grouping and maximum batch size.
+
+Regression evidence: the initial focused FakeProvider run failed all 18 new
+cases (17 unit cases and the `main()` false-positive rejection integration case)
+against the unchanged implementation. Read-only QA then identified three invalid
+schema-field cases (null line, fractional line on rejection and boolean quote);
+all three failed before strict schema validation fixed them. The expanded unit
+suite passes 34 tests covering missing/duplicate/unknown/out-of-order ids,
+injection, budget/quota/model exhaustion, 5+2 batching, disabled-call snapshot,
+mandatory priority and reserve release, reproduction retention, family preference,
+local-model exclusion, true source tiers, independent dedupe and relocation.
+All fixtures are synthetic, with FakeProvider and injected Git runners.
+
+Validation: `pnpm.cmd typecheck` passed, including a final run after the last test
+additions. `pnpm.cmd test` with `QUORUM_CONTAINER_TESTS=0` rebuilt the CLI and
+passed all 42 files (**1,191 passed, 6 skipped**, 106.57 seconds). Five additional
+QA cases were added after that run had discovered tests; the final focused
+`pnpm.cmd exec vitest run tests/unit/precision.test.ts` passed all **34 tests**.
+The earlier full run found only two existing config exact-object expectations
+missing the new default; both were updated and passed in the final full run.
+`git diff --check` passed (only Git's existing LF-to-CRLF notices).
+
+No provider CLI, real Qwen, dependency installation, branch switch, commit, push
+or repository log was used. External cross-family review was not run under the
+explicit provider prohibition; internal read-only QA is the same family and does
+not replace it. Windows is the validated host; Linux/macOS and opt-in container
+checks remain unverified. No lint script exists. Grouping also by source family
+preserves per-candidate independence; reproduction takes priority as existing
+mandatory work. These are the implementation choices within the brief.
+
+### Real check of the batch schema (2026-10-19)
+
+Before merging decision 22, `agy --json-schema` was run once with the real `confirm-batch` schema (Gemini 3.8 Flash-low, a two-candidate prompt, no tools). It was accepted in 9 s and returned `structured_output` with `decisions` for `c1` (confirm: a real division by zero) and `c2` (reject: an unused variable), matching what the parser expects. The full pipeline with real providers has not been run since this feature; Gemini 4 Argon was out of quota.
