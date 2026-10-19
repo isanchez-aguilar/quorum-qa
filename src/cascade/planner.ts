@@ -1,4 +1,4 @@
-import { reviewChunks } from './prompts.js';
+import { CONFIRM_BATCH_SIZE, reviewChunks } from './prompts.js';
 import { systemClock, type Clock } from './budget.js';
 import type { CatalogEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
@@ -93,6 +93,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     ...Object.entries(plan.routes).map(([keyword, entries]) => `    Route ${keyword}: ${entries.map(item => `${modelRef(item)} (${item.family})`).join(' -> ') || 'none available; fall back to confirm'}`),
     `    Confirm: ${names('confirm')}`, `    Local-only / parse failure / timeout -> review: ${names('review')}`,
     '    Possibly related, cross-family pairs -> confirm: same defect?',
+    `    confirmImportant: ${config.escalate.confirmImportant !== false}; after mandatory escalation and reproduction, group by resolved route and source family, up to ${CONFIRM_BATCH_SIZE} candidates per confirm-batch call using remaining budget and unused reserve.`,
     '  [Phase 4: Reproduction Lane]', '    Enabled: No (M6; requires opt-in)',
     '', 'Budget Ceilings:', `    Max API Calls: ${config.budget.maxCalls}`,
     `    Confirmation reserve: ${plan.confirmationReserve} calls (released when no findings need escalation)`,

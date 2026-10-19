@@ -22,7 +22,7 @@ it('defaults install scripts off and validates the explicit opt-in', () => {
   expect(() => validateConfig({ checks: [], reproduce: { allowInstallScripts: 'true' } })).toThrow('reproduce.allowInstallScripts must be a boolean');
 });
 
-// The full example from docs/PLAN.md, Configuration.
+// The full PLAN.md example with the precision confirmation default made explicit.
 const PLAN_EXAMPLE = {
   context: { provider: 'git' },
   base: 'origin/main',
@@ -38,7 +38,7 @@ const PLAN_EXAMPLE = {
     confirm: ['codex', 'agy:claude-opus-5-5-high', 'claude:opus'],
     visual: ['agy:gemini-4-argon-high'],
   },
-  escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
+  escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true },
   budget: { maxCalls: 12, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
   reproduce: {
     allowInstallScripts: false,

@@ -22,6 +22,7 @@ export interface Finding {
   verified?: boolean;
   // Computed by the cascade from verified sources, never accepted from provider JSON.
   confirmationFamilies?: Family[];
+  singleSource?: boolean;
   verification_note?: string;
   reproduction?: ReproductionProposal;
   // Set by dedupe: other findings at the same place whose text overlaps but was not strong enough
@@ -103,6 +104,7 @@ export interface QuorumConfig {
   author?: string;
   tiers: Record<Tier, string[]>;
   escalate: {
+    confirmImportant?: boolean;
     routes?: Record<string, string[]>;
     focus: string[];
     belowConfidence: number;

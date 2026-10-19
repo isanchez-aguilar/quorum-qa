@@ -46,7 +46,7 @@ export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' 
       confirm: ['codex', 'agy:claude-opus-5-5-high', 'claude:opus'],
       visual: ['agy:gemini-4-argon-high'],
     },
-    escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7 },
+    escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true },
     budget: { maxCalls: 12, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
     reproduce: {
       allowInstallScripts: false,
@@ -220,8 +220,9 @@ export function validateConfig(raw: unknown): QuorumConfig {
     }
   }
 
-  const escalateRaw = r.object(top.escalate, 'escalate', ['focus', 'belowConfidence', 'routes']) ?? {};
+  const escalateRaw = r.object(top.escalate, 'escalate', ['focus', 'belowConfidence', 'routes', 'confirmImportant']) ?? {};
   const escalate: QuorumConfig['escalate'] = {
+    confirmImportant: typeof escalateRaw.confirmImportant === 'boolean' ? escalateRaw.confirmImportant : true,
     focus: r.stringArray(escalateRaw.focus, 'escalate.focus', defaults.escalate.focus, true),
     belowConfidence: r.number(
       escalateRaw.belowConfidence,
@@ -231,6 +232,9 @@ export function validateConfig(raw: unknown): QuorumConfig {
     ),
   };
 
+  if (escalateRaw.confirmImportant !== undefined && typeof escalateRaw.confirmImportant !== 'boolean') {
+    r.issues.push('escalate.confirmImportant must be a boolean');
+  }
   if (escalateRaw.routes !== undefined) {
     if (!isObject(escalateRaw.routes)) r.issues.push('escalate.routes must be an object');
     else {

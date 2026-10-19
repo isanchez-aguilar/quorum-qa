@@ -1,4 +1,5 @@
 import { AGY_COMMAND_DENIED } from '../providers/agy.js';
+import { validStructuredOutput } from '../providers/schemas.js';
 import { cacheKey, type ReviewCache } from '../storage/index.js';
 import { cleanDiff, diffSectionPath } from '../context/diff.js';
 import { checkoutSnapshot, checkoutDifference, type CheckoutSnapshot } from '../worktree/checkout.js';
@@ -17,14 +18,14 @@ import { BUDGET_WARNING, RunBudget, type Clock } from './budget.js';
 import { extractJson, isRecord, parseFindings, parseReproductionProposal } from './parse.js';
 import { runCommand } from '../process/runner.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
-import { boundedPrompt, promptFinding, reproductionPrompt, REVIEW_INSTRUCTIONS } from './prompts.js';
+import { boundedPrompt, confirmationBatchPrompt, CONFIRM_BATCH_SIZE, promptFinding, reproductionPrompt, REVIEW_INSTRUCTIONS } from './prompts.js';
 import { reviewChunks, type ReviewCoverage } from './prompts.js';
 
 export interface CascadeCall {
   provider: string;
   model: string;
   tier: Tier;
-  purpose: 'review' | 'confirm' | 'adjudicate' | 'reproduce';
+  purpose: 'review' | 'confirm' | 'confirm-batch' | 'adjudicate' | 'reproduce';
   promptHash: string;
   deadlineMs: number;
   status: 'ok' | 'quota' | 'timeout' | 'unavailable' | 'dirty' | 'invalid' | 'error';
@@ -33,6 +34,7 @@ export interface CascadeCall {
 export type LedgerDraft = Omit<LedgerEntry, 'runId' | 'timestamp'> & { rejectionReasons: Record<string, number> };
 
 export interface CascadeResult {
+  rejectedOnConfirmation?: Array<{ finding: Finding; sources: Array<Pick<Finding, 'provider' | 'model' | 'family'>>; confirmer: Pick<Finding, 'provider' | 'model' | 'family'> }>;
   pointsAtChange?: Finding[];
   reviewedFamilies: import('../types/index.js').Family[];
   cacheHits: number;
@@ -252,7 +254,7 @@ export async function runCascade(
     }
   }
 
-  async function verify(finding: Finding, response: CallResult): Promise<Finding | null> {
+  async function verify(finding: Finding, response: CallResult, confirmationOnly = false): Promise<Finding | null> {
     const root = options.verificationRoot ?? context.worktreeRoot;
     let verification = await verifyFinding(root, finding);
     if (context.mode === 'bughunt' && !verification.verified) {
@@ -273,8 +275,8 @@ export async function runCascade(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       rejection(response.ledger, `origin unavailable: ${message}`);
-      lost('origin unavailable', corrected.file);
-      warn(`${corrected.file}: a verified finding was dropped because git could not tell its origin (${message})`);
+      if (!confirmationOnly) lost('origin unavailable', corrected.file);
+      warn(`${corrected.file}: ${confirmationOnly ? 'confirmation unavailable' : 'a verified finding was dropped'} because git could not tell its origin (${message})`);
       return null;
     }
     if (context.mode === 'bughunt' && corrected.origin === 'pre-existing'
@@ -548,19 +550,6 @@ export async function runCascade(
   // Recompute annotations without re-clustering an adjudicated pair or losing its source families.
   nodes = nodes.map(node => ({ ...node, finding: mergeSources(node.sources) }));
   const related: CascadeResult['related'] = [];
-  for (const node of nodes) delete node.finding.possibly_related;
-  for (let first = 0; first < nodes.length; first++) {
-    for (let second = first + 1; second < nodes.length; second++) {
-      const a = nodes[first]!;
-      const b = nodes[second]!;
-      if (path.posix.normalize(a.finding.file.replace(/\\/g, '/')) !== path.posix.normalize(b.finding.file.replace(/\\/g, '/'))) continue;
-      const annotations = relatedAnnotations([a.sources, b.sources]);
-      if (!annotations[0]?.length) continue;
-      (a.finding.possibly_related ??= []).push(...annotations[0]);
-      (b.finding.possibly_related ??= []).push(...annotations[1]!);
-      related.push({ first: a.finding, second: b.finding });
-    }
-  }
   if (budget.deadlineExceeded) warn(BUDGET_WARNING);
   const findings: Finding[] = [];
   const unconfirmed: Finding[] = [];
@@ -607,6 +596,105 @@ export async function runCascade(
       try { await assertCheckoutUnchanged(); } catch { break; }
     }
   }
+  const rejectedOnConfirmation: NonNullable<CascadeResult['rejectedOnConfirmation']> = [];
+  if (config.escalate.confirmImportant !== false && !errors.length) {
+    // Mandatory escalation, adjudication and reproduction have first claim on the reserve.
+    const groups = new Map<string, typeof nodes>();
+    for (const node of nodes) {
+      if (node.finding.severity !== 'IMPORTANT' || node.unconfirmed
+        || node.sources.some(source => tiers.get(source) !== 'triage' || needsEscalation(source))
+        || new Set(node.sources.map(source => source.family)).size !== 1) continue;
+      node.finding.singleSource = true;
+      const key = JSON.stringify([routeFor(node.finding)?.[0] ?? null, node.sources[0]!.family]);
+      const group = groups.get(key) ?? [];
+      group.push(node);
+      groups.set(key, group);
+    }
+    const rejected = new Set<Finding>();
+    for (const group of groups.values()) {
+      for (let offset = 0; offset < group.length; offset += CONFIRM_BATCH_SIZE) {
+        const batch = group.slice(offset, offset + CONFIRM_BATCH_SIZE);
+        const prompt = confirmationBatchPrompt(batch.map((node, index) => ({ id: `c${index + 1}`,
+          finding: node.finding, hunk: hunkFor(context, node.finding) })), context.mode);
+        const attempted = new Set<string>();
+        let route = routeFor(batch[0]!.finding);
+        let response: CallResult | null;
+        while (true) {
+          response = await invoke('confirm', prompt, 'confirm-batch', { attempted, excludeLocal: true,
+            preferOtherThan: new Set(batch[0]!.sources.map(source => source.family)),
+            refs: route?.[1], label: route ? `route "${route[0]}"` : undefined });
+          if (response || !route) break;
+          warn(`Confirmation route "${route[0]}" unavailable; falling back to confirm tier.`);
+          route = undefined;
+        }
+        if (!response) continue;
+        let output: unknown;
+        // Never scan nested JSON or a prompt echo for decisions about opaque ids.
+        try { output = response.result.rawOutput.length <= 1024 * 1024 ? JSON.parse(response.result.rawOutput) : null; }
+        catch { output = null; }
+        if (!isRecord(output) || !Array.isArray(output.decisions) || !validStructuredOutput(output, 'confirm-batch')) {
+          response.call.status = 'invalid';
+          warn(`${modelRef(response.entry)}: invalid batch confirmation response.`);
+          continue;
+        }
+        const counts = new Map<string, number>();
+        for (const decision of output.decisions) {
+          if (isRecord(decision) && typeof decision.id === 'string') counts.set(decision.id, (counts.get(decision.id) ?? 0) + 1);
+        }
+        for (const [index, node] of batch.entries()) {
+          const id = `c${index + 1}`;
+          if (counts.get(id) !== 1) continue;
+          const decision: unknown = output.decisions.find(value => isRecord(value) && value.id === id);
+          if (!isRecord(decision) || !['confirm', 'reject'].includes(String(decision.decision))) continue;
+          response.ledger.rawFindingsCount++;
+          if (decision.decision === 'reject') {
+            rejection(response.ledger, 'rejected by confirmation');
+            rejected.add(node.finding);
+            const { provider, id: model, family } = response.entry;
+            rejectedOnConfirmation.push({ finding: node.finding, sources: node.sources.map(({ provider, model, family }) => ({ provider, model, family })),
+              confirmer: { provider, model, family } });
+            continue;
+          }
+          if (budget.remainingMs <= 0) { warn(BUDGET_WARNING); continue; }
+          const candidate = { ...node.finding, line: decision.line ?? node.finding.line,
+            evidence_quote: decision.evidence_quote ?? node.finding.evidence_quote };
+          const parsed = parseFindings(JSON.stringify([candidate]), response.entry);
+          for (const dropped of parsed.dropped) rejection(response.ledger, `parse: ${dropped.reason}`);
+          const corroborated = parsed.findings[0] ? await verify(parsed.findings[0], response, true) : null;
+          if (!corroborated) continue;
+          if ((decision.file !== undefined && decision.file !== node.finding.file)
+            || Math.abs(corroborated.line - node.finding.line) > 10
+            || (context.mode === 'bughunt' && corroborated.origin === 'introduced')) {
+            response.ledger.verifiedFindingsCount--;
+            rejection(response.ledger, 'confirmation moved outside original location');
+            response.call.status = 'invalid';
+            continue;
+          }
+          confirmations.add(corroborated);
+          node.sources.push(corroborated);
+          Object.assign(node.finding, mergeSources(node.sources));
+          delete node.finding.singleSource;
+          node.finding.confirmationFamilies = [...new Set(node.sources.map(source => source.family))];
+        }
+      }
+    }
+    nodes = nodes.filter(node => !rejected.has(node.finding));
+    for (let index = findings.length - 1; index >= 0; index--) if (rejected.has(findings[index]!)) findings.splice(index, 1);
+  }
+  // A rejected source must not survive indirectly as a related annotation.
+  for (const node of nodes) delete node.finding.possibly_related;
+  for (let first = 0; first < nodes.length; first++) {
+    for (let second = first + 1; second < nodes.length; second++) {
+      const a = nodes[first]!;
+      const b = nodes[second]!;
+      if (!sameFile(a.finding.file, b.finding.file)) continue;
+      const annotations = relatedAnnotations([a.sources, b.sources]);
+      if (!annotations[0]?.length) continue;
+      (a.finding.possibly_related ??= []).push(...annotations[0]);
+      (b.finding.possibly_related ??= []).push(...annotations[1]!);
+      related.push({ first: a.finding, second: b.finding });
+    }
+  }
   // Confirmation can lose evidence after initial diff coverage was computed.
   coverage.complete = coverageComplete();
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
@@ -614,7 +702,7 @@ export async function runCascade(
     coverage.complete = false;
     return { ...(context.mode === 'bughunt' ? { pointsAtChange: [] } : {}), reviewedFamilies, cacheHits, findings: [], unconfirmed: [], related: [], warnings, errors, calls, ledgerDraft, coverage };
   }
-  return { ...(context.mode === 'bughunt' ? { pointsAtChange: dedupeFindings(pointsAtChange) } : {}), reviewedFamilies, cacheHits, findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
+  return { ...(context.mode === 'bughunt' ? { pointsAtChange: dedupeFindings(pointsAtChange) } : {}), rejectedOnConfirmation, reviewedFamilies, cacheHits, findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
 }
 
 export { createExecutionPlan, formatDryRun } from './planner.js';

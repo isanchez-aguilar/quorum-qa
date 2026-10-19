@@ -20,6 +20,7 @@ const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
 const details = (findings: Finding[]) => findings.length ? findings.map((f, i) => [
   `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line} (${f.origin})`,
   `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${f.provider}:${f.model} (${f.family})`,
+  f.singleSource ? '- **single model, not confirmed**' : '',
   `- **Impact:** ${cell(f.impact)}`, `- **Evidence Quote:** ${cell(f.evidence_quote)}`,
   `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? `- **Reproduction Proof:** ${f.reproduction?.status ?? 'unproven'} (${cell(f.reproduction?.failureReason ?? 'reproduction not requested')}).` : '',
 ].filter(Boolean).join('\n')).join('\n\n') : 'None.';
@@ -65,6 +66,8 @@ export function generateMarkdownReport(result: ReviewResult): string {
     '## Blockers', details(result.findings.filter(f => f.severity === 'BLOCKER')),
     '## Important Findings', details(result.findings.filter(f => f.severity === 'IMPORTANT')),
     '## Optional Findings', details(result.findings.filter(f => f.severity === 'OPTIONAL')),
+    '## Rejected on confirmation', result.rejectedOnConfirmation?.length ? result.rejectedOnConfirmation.map(({ finding, sources, confirmer }) =>
+      `- **${cell(finding.trigger)}** — ${cell(finding.file)}:${finding.line} — ${sources.map(source => cell(`${source.provider}:${source.model}`)).join(', ')}; rejected by ${cell(`${confirmer.provider}:${confirmer.model}`)}`).join('\n') : 'None.',
     '## Unconfirmed (local model only)', details(result.unconfirmed.filter(f => f.family === 'local')),
     '## Unconfirmed (other reviewers)', details(result.unconfirmed.filter(f => f.family !== 'local')),
     ...(result.mode === 'bughunt' ? ['## Points at the change (use feature mode)', details(result.pointsAtChange ?? [])] : []),
@@ -98,6 +101,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
       return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, snippet: { text: f.evidence_quote } } } }],
         properties: { origin: f.origin, ...(result ? { mode: result.mode } : {}), confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
+          ...(f.singleSource ? { singleSource: true } : {}),
           ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },
       };

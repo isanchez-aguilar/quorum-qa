@@ -10,7 +10,7 @@ export interface RawProviderResult {
   error?: string;
 }
 
-export type ReviewPurpose = 'review' | 'confirm' | 'adjudicate' | 'reproduce';
+export type ReviewPurpose = 'review' | 'confirm' | 'confirm-batch' | 'adjudicate' | 'reproduce';
 
 export interface ReviewOptions {
   purpose?: ReviewPurpose;
