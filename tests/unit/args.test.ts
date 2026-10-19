@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { parseArgs, UsageError } from '../../src/cli/args.js';
 
 describe('parseArgs', () => {
+  it('parses doctor probe and JSON switches without enabling them by default', () => {
+    expect(parseArgs(['doctor']).flags).toEqual({});
+    expect(parseArgs(['doctor', '--probe', '--json']).flags).toEqual({ probe: true, json: true });
+  });
+
+  it.each(['--probe=true', '--json=false'])('rejects values on %s', (flag) => {
+    expect(() => parseArgs(['doctor', flag])).toThrow(/does not take a value/);
+  });
+
   it('testArgs_HelpFlag', () => {
     expect(parseArgs(['--help'])).toEqual({
       command: 'help',

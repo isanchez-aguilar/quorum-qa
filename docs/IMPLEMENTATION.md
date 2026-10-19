@@ -1591,3 +1591,66 @@ round explicitly forbids provider CLIs and network.
 - Round 3 validation uses only synthetic Git repositories and FakeProvider;
   external cross-family review was not run under the explicit no-provider and
   no-network instructions. No dependency, commit or branch change is needed.
+
+## M4 as built
+
+M4 adds AgyProvider and CodexProvider, disposable detached review worktrees,
+and `quorum doctor [--probe] [--json]`. The current M4 brief supersedes the
+older signatures and live-probe acceptance criteria in sections 3 and 9.
+No dependencies were added. Review remains unimplemented until M5.
+
+- Adapters implement the M3 ProviderAdapter contract, resolve executables with
+  the M2 resolver, and use its injected CommandRunner. Each review creates a
+  worktree at the context head, checks porcelain status including untracked
+  files, and cleans up in finally. M3 discards dirty results. The parent must
+  be git-ignored and cannot be a symlink/junction. Cleanup is concurrent-safe,
+  idempotent after success, and retries a failed remove/prune on a later call.
+- agy uses the recorded SUCCESS envelope, argument prompt, sandbox and explicit
+  timeout. Worktree preparation consumes the remaining deadline. On Windows the
+  conservative 30,000-character guard also includes the resolved executable and
+  quoting/wrapper overhead. The existing resolver intentionally rejects unsafe
+  characters in .cmd/.bat arguments: multiline/JSON review prompts require a
+  native agy executable on Windows. This fail-closed limitation is not bypassed.
+- One catalog table maps model ids and usage descriptions to quota groups.
+  Claude and GPT-OSS share the existing internal name `agy:anthropic` (a quota
+  identity, not a model-family assignment). Argon is separate. Usage takes the
+  minimum active bucket and the earliest valid reset among binding buckets;
+  disabled buckets are recognized in JSON or the response text column. Missing,
+  malformed and failed readings remain unknown. Codex quota remains unknown.
+- Codex writes its final message under the OS temporary directory, sends the
+  prompt on stdin and removes the temporary directory on success or failure.
+  Only a nonzero exit with missing/empty output permits one retry. A new optional
+  ReviewOptions.reserveRetry hook reserves that inference in the cascade's call
+  ceiling and ledger callsUsed. Retry time shares the original deadline and
+  escalation reserve. Standalone adapters permit one retry without that hook.
+- Doctor resolves configured checks without executing them, diagnoses provider
+  availability, model ids, usage, permissions and containers, and checks Qwen
+  only when configured. Qwen uses a two-second loopback-only GET with redirects
+  refused. Settings are read only; neither contents nor parsing errors are
+  printed. Unknown write/shell deny names always produce WARN with explicitly
+  unverified suggested rules. No optional Claude diagnostic is included in M4.
+- Doctor probes are opt-in, each makes exactly one inference in a fresh
+  worktree and compares the result with README.md's first line. The Codex doctor
+  probe deliberately does not retry, following the brief's one-call limit;
+  ordinary Codex reviews do retry. Probe failures and dirty worktrees fail the
+  diagnostic, and cleanup still runs. CLI JSON is the check array; WARN alone
+  exits zero and any FAIL exits two. CLI dependencies are injectable for tests.
+- Fixtures are the two scrubbed recordings supplied in .quorum/fixtures, copied
+  to tests/fixtures/providers. Tests use only injected provider runners, mocked
+  HTTP responses, synthetic settings and temporary Git repositories. No live
+  provider, authentication, permission or endpoint probe was performed.
+
+Remaining assumptions: actual agy write/shell deny tool names (1), live
+worktree readability (6), and reproduction of Codex's first-folder failure (4)
+remain unverified. Recorded JSON and usage settle the exercised envelope and
+quota formats (7 and 3), but do not establish future CLI compatibility or
+--json-schema behavior. Claude read-only flags (2) and container runner caches
+(8) remain outside M4. The inherited Windows shim/process-tree limitations
+remain. Linux and macOS were not executed. Internal read-only review found and
+fixed pre-validation directory creation through a junction and incomplete argv
+length accounting. Cross-family review was not run because the brief forbids
+provider CLIs. No branch switch, commit or push was made.
+
+Validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test` rebuilt the
+CLI and passed 541 tests with one existing skip across 21 files. `git diff
+--check` passed after removing an extra trailing blank line in the catalog.

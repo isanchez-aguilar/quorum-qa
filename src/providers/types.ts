@@ -12,6 +12,8 @@ export interface RawProviderResult {
 
 export interface ReviewOptions {
   deadlineMs: number;
+  // Reserves an additional inference slot before an adapter retries a call.
+  reserveRetry?: () => boolean;
   // Cancellation supplements the runner deadline, including adapters with no child process.
   signal?: AbortSignal;
 }

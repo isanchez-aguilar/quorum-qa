@@ -1,7 +1,8 @@
+import { agyQuotaGroup } from './agy-groups.js';
 import type { CatalogEntry, Family, Tier } from '../types/index.js';
 
 function entry(provider: string, id: string, family: Family, defaultTier: Tier, quotaGroup: string, supportsImages = false): CatalogEntry {
-  return { provider, id, family, defaultTier, quotaGroup, supportsImages };
+  return { provider, id, family, defaultTier, quotaGroup: provider === 'agy' ? agyQuotaGroup(id) ?? quotaGroup : quotaGroup, supportsImages };
 }
 
 export const DEFAULT_CATALOG: readonly CatalogEntry[] = [

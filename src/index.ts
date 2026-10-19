@@ -11,3 +11,8 @@ export type { RawProviderResult, ReviewOptions, Quota } from './providers/types.
 export { FakeProvider } from './providers/fake.js';
 export { DEFAULT_CATALOG, parseModelRef, resolveTier } from './catalog/index.js';
 export type { QuotaSnapshot, QuotaReading } from './catalog/groups.js';
+export { AgyProvider } from './providers/agy.js';
+export { CodexProvider } from './providers/codex.js';
+export { createReviewWorktree, isClean } from './worktree/index.js';
+export { runDoctor } from './doctor/index.js';
+export type { DoctorCheck, DoctorOptions } from './doctor/index.js';

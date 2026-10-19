@@ -121,7 +121,7 @@ export async function runCascade(
       const independent = resolved.models.filter(entry => !settings.preferOtherThan?.has(entry.family));
       const entry = (independent.length ? independent : resolved.models)[0];
       if (!entry) return null;
-      if (purpose === 'review' && initial.some(needsEscalation) && calls.length >= triageLimit) return null;
+      if (purpose === 'review' && initial.some(needsEscalation) && budget.calls >= triageLimit) return null;
       if (!budget.allowed) { warn(BUDGET_WARNING); return null; }
       const ref = modelRef(entry);
       attempted.add(ref);
@@ -139,7 +139,13 @@ export async function runCascade(
       try {
         const result = await budget.execute((deadlineMs, signal) => {
           call.deadlineMs = deadlineMs;
-          return adapter.executeReview(context, entry.id, prompt, { deadlineMs, signal });
+          return adapter.executeReview(context, entry.id, prompt, { deadlineMs, signal, reserveRetry: () => {
+            if (!budget.allowed) { warn(BUDGET_WARNING); return false; }
+            if (purpose === 'review' && initial.some(needsEscalation) && budget.calls >= triageLimit) return false;
+            budget.calls++;
+            ledger.callsUsed++;
+            return true;
+          } });
         });
         ledger.durationMs = result.durationMs;
         if (result.tokensUsed) ledger.tokensReported = result.tokensUsed.prompt + result.tokensUsed.completion;
