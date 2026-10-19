@@ -7,6 +7,7 @@ import { createExecutionPlan, formatDryRun, runCascade } from '../cascade/index.
 import { runDeterministicChecks } from '../checks/index.js';
 import { resolveAuthorFamily, validateConfig } from '../config/index.js';
 import { buildReviewContext } from '../context/index.js';
+import { buildBughuntContext } from '../context/bughunt.js';
 import { selectContextProvider, type ContextProvider } from '../context/providers.js';
 import { CodeGraphContextProvider } from '../context/codegraph.js';
 import { reviewChunks } from '../cascade/prompts.js';
@@ -63,6 +64,8 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  if (mode === 'bughunt' && (flags.spec || flags.inventory)) throw new UsageError('--spec and --inventory are not supported in bughunt mode.');
+  if (mode !== 'bughunt' && flags.radius !== undefined) throw new UsageError('--radius requires bughunt mode.');
   if (mode === 'feature' && !flags.spec) throw new UsageError('--spec is required for feature mode.');
   if (flags.since && flags.diff) throw new UsageError('--since and --diff cannot be combined.');
   if (mode !== 'redesign' && flags.images) throw new UsageError('--images requires redesign mode.');
@@ -89,6 +92,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (!parts) throw new UsageError('Invalid range; expected <base>..HEAD or <base>...HEAD.');
   if (await revParse(parts[3]!, root, runner) !== head) throw new UsageError('The review range must end at HEAD.');
   const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner, exactBase: parts[2] === '..' });
+  if (mode === 'bughunt') context.radius = flags.radius ?? 40;
   if (!context.touchedFiles.length) throw new UsageError('nothing to review: the selected range touches no files.');
   const trustBase = flags.since && !headConfig
     ? await mergeBase(await revParse((await bootstrapConfig()).base, root, runner), head, root, runner)
@@ -113,6 +117,15 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     dependencies.contextProvider ?? new CodeGraphContextProvider({ now }));
   context.contextProvider = { requested: config.context?.provider ?? 'git', available: selected.available, effective: selected.provider.name };
   context.contextNotes = selected.notes;
+  if (mode === 'bughunt') {
+    const tree = await createReviewWorktree(root, head, runner, message => context.contextNotes!.push(message));
+    try {
+      context.bughunt = await buildBughuntContext(context, tree.path);
+      if (!await isClean(tree.path, runner)) throw new Error('Bughunt context worktree changed; run aborted.');
+    } finally { await tree.cleanup(); }
+    const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
+    if (changed) throw new Error(changed);
+  }
   const plan = createExecutionPlan(context, config, catalog);
   const quotaFile = path.join(root, '.quorum', 'quota.json');
   let snapshot = await readQuota(quotaFile);
@@ -182,9 +195,9 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
           noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
     const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
-    if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.coverage.complete = false; }
+    if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.coverage.complete = false; }
     const clean = await isClean(verificationTree.path, runner);
-    if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.coverage.complete = false; }
+    if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.coverage.complete = false; }
     const families = [...cascade.reviewedFamilies];
     // Cached reviews are still independent reviews by the original model family.
     // Confirming families count too: a finding confirmed by another family was reviewed by it.
@@ -193,7 +206,9 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     }
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
     const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
-      .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
+      .some(f => f.severity === 'BLOCKER' && (mode === 'bughunt'
+        ? f.origin === 'pre-existing' && f.verified && (f.confirmationFamilies?.length ?? 0) >= 2
+        : !flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
     const exitCode = failingBlocker ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
     result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks,
       criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };

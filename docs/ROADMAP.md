@@ -26,7 +26,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 
 ## v2: more modes
 - **refactor:** the tests at base and at head, a diff of the public API surface, mutation testing on the touched code, and the blast radius.
-- **bughunt:** pre-existing bugs near the diff, reported separately.
+- [x] **bughunt:** pre-existing bugs near the diff, reported separately, with bounded HEAD windows and independent BLOCKER confirmation.
 - **contract:** code compared against business-rules docs and against UI copy.
 - **runtime:** Playwright flows that collect console errors, 4xx/5xx responses, blank pages and technical text shown to users.
 - **rule-mining:** a recurring finding becomes a proposed lint rule.

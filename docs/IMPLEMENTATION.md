@@ -2328,3 +2328,81 @@ Files changed: `src/context/{providers,codegraph}.ts`,
 `src/index.ts`; `tests/unit/{context-providers,config,m3-limits}.test.ts`,
 `tests/integration/{review,doctor}.test.ts`; `README.md`,
 `docs/IMPLEMENTATION.md` and `docs/ROADMAP.md`.
+
+## v2 bughunt as built
+
+Implemented on `feat/v2-bughunt`, with no dependencies added. The first v2 mode
+accepts `--mode bughunt` with an optional diff and `--radius` (default 40,
+integer values clamped to 0-200). Spec, inventory and images are not accepted;
+radius belongs only to bughunt. Feature and redesign retain their existing flow.
+
+- Selection reads the committed HEAD version from a disposable review worktree,
+  including during dry-run. It never uses dirty checkout text. For each unified
+  hunk, targets are the radius lines before and after its full HEAD range; the
+  hunk itself, including unchanged unified context, is orientation only.
+  Overlapping/adjacent flanks merge, and every hunk range is subtracted so a nearby
+  hunk cannot become an unchanged target. Zero-length hunks are boundaries after
+  their HEAD line; out-of-bounds hunks anchor at EOF. A terminal newline does not
+  create an extra line. Radius zero selects no windows and is vacuously complete
+  unless a file or diff could not be covered.
+- Payload windows have minimum-four-digit, one-based `NNNN: ` HEAD line prefixes,
+  exact source lines and nearby hunks labelled `the change, for orientation only`.
+  The short stable suffix requests bugs in UNCHANGED code independent of the
+  change, with the normal finding schema. Whole windows are packed under the
+  existing serialized 24,000-character cap. They are never split mid-window or
+  mid-line. A single window that cannot fit is skipped whole, with its range and
+  an INCOMPLETE result. Optional CodeGraph context is added only after packing;
+  it cannot displace a window or its orientation hunk.
+- Deleted HEAD files, binaries, unreadable/unsafe paths and non-regular or
+  oversized files are skipped with notes; the file-size limit reuses the
+  verifier's 2 MiB bound. These exclusions and truncated diffs remain INCOMPLETE.
+  Coverage records reviewed and skipped ranges per file, including partial
+  coverage of a multi-chunk file. Only a successful non-local full-chunk review
+  covers windows; local-only chunks use the existing escalation rule and budget.
+- Every finding is verified and blamed, including OPTIONAL findings the model
+  labels improvement. A corrected pre-existing location outside the selected
+  windows is rejected in the ledger. Equivalent relative path spellings use the
+  same normalization as dedupe for window matching. Introduced findings are
+  separated before escalation/dedupe under `Points at the change (use feature
+  mode)`; they do not reserve confirmation calls, merge into bughunt results,
+  affect its summary or fail its exit status. Confirmation corrections undergo
+  the same scope and origin checks. Confirmation/adjudication/reproduction
+  receive the target window and its orientation, not only the evidence quote.
+- A verified, cross-family-confirmed pre-existing BLOCKER exits 1, including with
+  `--allow-unproven`; incomplete coverage without such a BLOCKER exits 2, otherwise
+  0. This mode requires independent confirmation to fail even without the waiver.
+  Reproduction, routes, quotas, deadline, retry and call accounting use the
+  existing cascade. SARIF contains only bughunt results with
+  `properties.origin = "pre-existing"` and `properties.mode = "bughunt"`.
+- Review prompts include mode and radius, so prompt-based cache keys distinguish
+  feature/bughunt and radii even if file bounds produce identical windows.
+  Feature/redesign cache keys are unchanged. Ledger entries carry the new mode.
+  Dry-run lists ranges, window count, total lines and chunk count.
+- Tests use synthetic repositories, FakeProvider and injected Git protocol
+  fixtures only. The initial end-to-end run failed 8 cases against the original
+  code (two usage-error controls passed); the unit suite initially failed on the
+  missing selector module. Read-only QA identified scope relocation, equivalent
+  paths and inline diff truncation edge cases. Two scope regressions failed with
+  the guard temporarily removed and restored in `finally`; the path and
+  truncation regressions failed before their fixes. No provider CLI or real
+  Qwen/CodeGraph request was made.
+
+Interpretations/limits: hunk context is orientation, not a target; oversized
+atomic windows are explicitly incomplete rather than truncated; radius zero is
+an empty successful review. External cross-family review and live provider
+validation were prohibited by the task. Internal review is from the same model
+family and does not replace it. Linux/macOS and opt-in container tests remain
+unverified. No branch switch, commit, push or repository log was created.
+
+Final Windows validation: `pnpm.cmd typecheck` passed. `pnpm.cmd test` with
+`QUORUM_CONTAINER_TESTS=0` rebuilt the CLI and passed **1,080 tests**, with
+**6 existing skips**, across **40 files** (111.56 seconds). The final run includes
+37 new bughunt tests. `git diff --check` passed. No linter command is configured.
+The earlier full run passed 1,079 tests before the equivalent-path regression
+was added; the complete suite was rerun after that fix.
+
+Files changed: `src/context/bughunt.ts`, `src/cascade/{index,planner,prompts}.ts`,
+`src/cli/{args,index,review}.ts`, `src/modes/index.ts`, `src/reporters/index.ts`,
+`src/types/index.ts`, `tests/unit/bughunt.test.ts`,
+`tests/integration/bughunt.test.ts`, `README.md`, and
+`docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.

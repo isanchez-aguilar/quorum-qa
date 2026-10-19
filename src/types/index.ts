@@ -71,11 +71,13 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  radius?: number;
+  bughunt?: import('../context/bughunt.js').BughuntContext;
   providerContext?: Map<string, string>;
   contextProvider?: { requested: 'git' | 'codegraph'; available: boolean; effective: string };
   contextNotes?: string[];
   diffTruncated?: boolean;
-  mode: 'feature' | 'redesign';
+  mode: 'feature' | 'redesign' | 'bughunt';
   diff: string;
   baseCommit: string;
   mergeBaseCommit?: string;
@@ -133,7 +135,7 @@ export interface QuorumConfig {
 export interface LedgerEntry {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign';
+  mode: 'feature' | 'redesign' | 'bughunt';
   headSha: string;
   baseSha: string;
   provider: string;

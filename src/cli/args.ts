@@ -5,12 +5,13 @@ export class UsageError extends Error {
   }
 }
 
-export const REVIEW_MODES = ['feature', 'redesign'] as const;
+export const REVIEW_MODES = ['feature', 'redesign', 'bughunt'] as const;
 
 export interface ParsedFlags {
   help?: boolean;
   version?: boolean;
   mode?: (typeof REVIEW_MODES)[number];
+  radius?: number;
   diff?: string;
   spec?: string;
   inventory?: string;
@@ -39,7 +40,7 @@ export interface ParsedArgs {
 }
 
 type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
-type ValueFlag = 'mode' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'author' | 'since' | 'out' | 'sarif';
+type ValueFlag = 'mode' | 'radius' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   help: 'help',
@@ -56,6 +57,7 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
 };
 
 const VALUE_FLAGS: Record<string, ValueFlag> = {
+  radius: 'radius',
   mode: 'mode',
   diff: 'diff',
   spec: 'spec',
@@ -111,7 +113,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       let value = inlineValue;
       if (value === undefined) {
         const next = argv[i + 1];
-        if (next === undefined || (next.startsWith('-') && next !== '-')) {
+        if (next === undefined || (next.startsWith('-') && next !== '-' && !(key === 'radius' && /^-\d/.test(next)))) {
           throw new UsageError(`Option --${name} needs a value.`);
         }
         value = next;
@@ -127,6 +129,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
           );
         }
         flags.mode = value as (typeof REVIEW_MODES)[number];
+      } else if (key === 'radius') {
+        if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new UsageError('--radius must be an integer.');
+        flags.radius = Math.min(200, Math.max(0, Number(value)));
       } else {
         flags[key] = value;
       }
@@ -142,5 +147,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
     else command = '';
   }
 
+  if (flags.mode === 'bughunt') flags.radius ??= 40;
   return { command, flags, positionals };
 }
