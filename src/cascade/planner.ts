@@ -1,3 +1,4 @@
+import { contractClauses } from '../modes/index.js';
 import { CONFIRM_BATCH_SIZE, reviewChunks } from './prompts.js';
 import { systemClock, type Clock } from './budget.js';
 import type { CatalogEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
@@ -87,6 +88,7 @@ export function formatDryRun(plan: ExecutionPlan): string {
     `    Payload size: ${plan.payloadCharacters} characters (not tokens)`,
     ...(context.mode === 'bughunt' ? [`    Windows: ${context.bughunt?.windows.length ?? 0} (${context.bughunt?.windows.reduce((sum, window) => sum + window.end - window.start + 1, 0) ?? 0} total lines); radius ${context.radius ?? 40}`,
       ...(context.bughunt?.windows ?? []).map(window => `      ${window.file}:${window.start}-${window.end}`)] : []),
+    ...(context.mode === 'contract' ? [`    Clauses: ${contractClauses(context.rulesContent ?? '').length}`, ...(context.contract?.groups ?? []).map(group => `      ${group.file.file}; imports: ${group.imports.map(file => file.file).join(', ') || 'none'}`), `    Copy files: ${context.contract?.copy.map(file => file.file).join(', ') || 'none (strings in touched files)'}`] : []),
     `    Review chunks: ${plan.chunkCount}; call budget ${plan.budgetCoversChunks ? 'covers' : 'does not cover'} initial triage (retries and escalation extra; time depends on providers)`,
     '  [Phase 3: Conditional Escalation Paths]',
     `    Triggers: findings matching [${[...new Set([...config.escalate.focus, ...Object.keys(plan.routes)])].join(', ')}] OR confidence < ${config.escalate.belowConfidence.toFixed(2)} OR BLOCKER`,

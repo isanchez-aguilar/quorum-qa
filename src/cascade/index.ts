@@ -1,3 +1,5 @@
+import { citedClause, contractClauses } from '../modes/index.js';
+import { fileExistsAtCommit } from '../context/git.js';
 import { AGY_COMMAND_DENIED } from '../providers/agy.js';
 import { validStructuredOutput } from '../providers/schemas.js';
 import { cacheKey, type ReviewCache } from '../storage/index.js';
@@ -74,6 +76,11 @@ function rejection(ledger: LedgerDraft, reason: string): void {
 const sameFile = (left: string, right: string) => path.posix.normalize(left.replace(/\\/g, '/')) === path.posix.normalize(right.replace(/\\/g, '/'));
 
 function hunkFor(context: ReviewContext, finding: Finding): string {
+  if (context.mode === 'contract') {
+    const group = context.contract?.groups.find(group => sameFile(group.file.file, finding.file) || group.imports.some(file => sameFile(file.file, finding.file)));
+    const copy = context.contract?.copy.find(file => sameFile(file.file, finding.file));
+    return JSON.stringify({ clauses: contractClauses(context.rulesContent ?? '').map((text, i) => ({ clause: `R${i + 1}`, text })), code: group, copy });
+  }
   if (context.mode === 'bughunt') {
     const window = context.bughunt?.windows.find(item => sameFile(item.file, finding.file) && finding.line >= item.start && finding.line <= item.end);
     if (window) return `UNCHANGED HEAD lines:\n${window.content}\nThe change, for orientation only:\n${window.orientation}`;
@@ -94,7 +101,7 @@ export async function runCascade(
   context: ReviewContext,
   config: QuorumConfig,
   providers: ReadonlyMap<string, ProviderAdapter>,
-  options: { budget?: RunBudget; clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
+  options: { budget?: RunBudget; clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; copyVerificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
 ): Promise<CascadeResult> {
   const reviewedFamilies: import('../types/index.js').Family[] = [];
   let cacheHits = 0;
@@ -255,8 +262,17 @@ export async function runCascade(
   }
 
   async function verify(finding: Finding, response: CallResult, confirmationOnly = false): Promise<Finding | null> {
-    const root = options.verificationRoot ?? context.worktreeRoot;
+    const copy = context.mode === 'contract' && context.contract?.copy.find(file => sameFile(file.file, finding.file));
+    const root = copy ? options.copyVerificationRoot ?? options.verificationRoot ?? context.worktreeRoot : options.verificationRoot ?? context.worktreeRoot;
+    if (context.mode === 'contract') {
+      if (context.rulesFile && sameFile(context.rulesFile, finding.file)) { rejection(response.ledger, 'rules document is not code or copy evidence'); return null; }
+      const allowed = copy || context.contract?.groups.some(group => [group.file, ...group.imports].some(file => sameFile(file.file, finding.file)));
+      if (!allowed) { rejection(response.ledger, 'outside contract code or copy inputs'); return null; }
+    }
     let verification = await verifyFinding(root, finding);
+    if (copy && !verification.verified && context.contract?.groups.some(group => [group.file, ...group.imports].some(file => sameFile(file.file, finding.file)))) {
+      verification = await verifyFinding(options.verificationRoot ?? context.worktreeRoot, finding);
+    }
     if (context.mode === 'bughunt' && !verification.verified) {
       const stripped = finding.evidence_quote.split('\n').map(line => line.replace(/^\s*\d{4,}: /, '')).join('\n');
       if (stripped !== finding.evidence_quote) {
@@ -269,8 +285,15 @@ export async function runCascade(
       return null;
     }
     const corrected = verification.correctedFinding;
+    if (context.mode === 'contract') {
+      corrected.clause = citedClause(corrected.trigger, contractClauses(context.rulesContent ?? ''));
+      corrected.clauseNote = corrected.clause ? undefined : 'no clause cited';
+    }
     try {
-      corrected.origin = context.mode !== 'bughunt' && finding.origin === 'improvement' && finding.severity === 'OPTIONAL' ? 'improvement'
+      if (copy && !await fileExistsAtCommit(context.headCommit, corrected.file, options.verificationRoot ?? context.worktreeRoot, gitRunner)) {
+        corrected.origin = 'introduced';
+        corrected.verification_note = [corrected.verification_note, 'Supplied copy is not tracked at HEAD; treated as introduced input.'].filter(Boolean).join('; ');
+      } else corrected.origin = context.mode !== 'bughunt' && finding.origin === 'improvement' && finding.severity === 'OPTIONAL' ? 'improvement'
         : await determineOrigin(corrected.file, corrected.line, context.baseCommit, context.headCommit, options.verificationRoot ?? context.worktreeRoot, gitRunner);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

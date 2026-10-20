@@ -23,6 +23,8 @@ export interface Finding {
   // Computed by the cascade from verified sources, never accepted from provider JSON.
   confirmationFamilies?: Family[];
   singleSource?: boolean;
+  clause?: string;
+  clauseNote?: string;
   verification_note?: string;
   reproduction?: ReproductionProposal;
   // Set by dedupe: other findings at the same place whose text overlaps but was not strong enough
@@ -72,13 +74,15 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  contract?: import('../context/contract.js').ContractContext;
+  rulesFile?: string;
   radius?: number;
   bughunt?: import('../context/bughunt.js').BughuntContext;
   providerContext?: Map<string, string>;
   contextProvider?: { requested: 'git' | 'codegraph'; available: boolean; effective: string };
   contextNotes?: string[];
   diffTruncated?: boolean;
-  mode: 'feature' | 'redesign' | 'bughunt';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract';
   diff: string;
   baseCommit: string;
   mergeBaseCommit?: string;
@@ -139,7 +143,7 @@ export interface QuorumConfig {
 export interface LedgerEntry {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign' | 'bughunt';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract';
   headSha: string;
   baseSha: string;
   provider: string;
