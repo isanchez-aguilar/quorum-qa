@@ -206,7 +206,7 @@ non-local `review` pass within budget before its coverage can be complete.
 | `refactor` | parts 1–2 done (v2) | Behaviour equivalence: tests at merge-base and head, public API diff, blast radius and model review. Any behaviour change is suspect. Opt-in `--mutation` samples changed source lines deterministically (up to 8 extra suite runs by default); survivors yield SUSPECT, not NOT EQUIVALENT. `refactor.mutation` configures 1–25 mutants and a 30–3600 second budget but does not enable it. |
 | `bughunt` | done in v2 | Look for **pre-existing** bugs in unchanged code near the diff, and report them separately. |
 | `contract` | done (v2) | Check the code against the business-rules docs and against UI copy. Example: a message saying "charge $455" when the server never applies the deposit. |
-| `runtime` | roadmap | Drive the app with Playwright and collect console errors, 4xx/5xx, blank pages, and technical error text shown to users. |
+| `runtime` | planned, see [RUNTIME-PLAN.md](RUNTIME-PLAN.md) | Drive the app with Playwright and collect console errors, 4xx/5xx, blank pages, and technical error text shown to users. |
 | `rule-mining` | done (decision 24) | `quorum rules propose` mines recurring findings across runs/files; accepted `quorum.rules.json` patterns run deterministically on added lines before models. |
 
 ## Token-saving strategy

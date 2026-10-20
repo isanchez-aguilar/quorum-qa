@@ -29,7 +29,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 - **refactor (parts 1–2 done, decisions 25–26):** tests at merge-base and head, public API surface diff, blast radius and model review; `--deterministic-only` needs no provider calls. Opt-in `--mutation` now samples changed source lines with no provider quota (up to 8 extra suite runs by default); survivors yield SUSPECT. `refactor.mutation` sets maxMutants (1–25) and budgetSeconds (30–3600, default 300); only the flag enables it.
 - [x] **bughunt:** pre-existing bugs near the diff, reported separately, with bounded HEAD windows and independent BLOCKER confirmation.
 - **contract (done):** code compared against business-rules clauses and UI copy, with direct imports, verified evidence, Rules coverage and SARIF.
-- **runtime:** Playwright flows that collect console errors, 4xx/5xx responses, blank pages and technical text shown to users.
+- **runtime (planned, docs/RUNTIME-PLAN.md):** Playwright flows that collect console errors, 4xx/5xx responses, blank pages and technical text shown to users.
 - [x] **rule-mining:** recurring verified findings become proposed lint rules; human-accepted rules run deterministically on added lines using trusted-base configuration (decision 24).
 
 ## v3: team use
