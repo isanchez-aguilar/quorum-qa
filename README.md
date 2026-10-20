@@ -93,7 +93,34 @@ node bin/quorum.js review --mode bughunt --diff origin/main...HEAD --radius 40
 
 # Redesign review auditing feature parity and visual assets
 node bin/quorum.js review --mode redesign --diff origin/main...HEAD --inventory docs/old-features.md --images shots/
+
+# Propose rules from recurring verified findings, without calling a model
+node bin/quorum.js rules propose --min 3 --days 90 --out proposed-rules.md
 ```
+
+Review a proposal's examples and noise estimate, then manually add accepted entries
+to `quorum.rules.json` at the repository root:
+
+```json
+{
+  "rules": [
+    { "id": "no-debug-call", "pattern": "console\\.log\\(", "message": "Remove debug output", "severity": "warning", "paths": ["src/**"] }
+  ]
+}
+```
+
+Rules run on added lines before models. They are read from the merge-base, so
+deleting or weakening a rule in a PR does not bypass it. `--trust-head-config`
+uses committed HEAD; `--no-checks` skips rules. Each pattern has a one-second
+worker timeout; lines over 2000 characters are skipped with a note. Timeouts warn.
+Error-severity matches exit 1; warnings do not change the exit code.
+
+`.quorum/findings.jsonl` contains local verified-finding history **including code
+quotes**. Keep it local and git-ignored. It is capped at 5 MiB and retains the
+newest half when full. `rules propose` requires findings from at least two runs
+and two files; it never writes `quorum.rules.json` or calls a model. The default
+90-day window and minimum of three can be changed; `--json` prints structured
+proposals. Generated rules start as warnings and still need human review.
 
 ## How a review works
 
@@ -115,9 +142,9 @@ node bin/quorum.js review --mode redesign --diff origin/main...HEAD --inventory 
 
 ## Exit codes
 
-- `0` = complete coverage with no failing BLOCKER
-- `1` = a BLOCKER remains
-- `2` = incomplete coverage with no BLOCKER, nothing to review, or tool/config/usage error
+- `0` = complete coverage with no failing BLOCKER or error-severity rule match
+- `1` = a BLOCKER or error-severity rule match remains
+- `2` = incomplete coverage without either, nothing to review, or tool/config/usage error
 
 ## Flags
 

@@ -207,7 +207,7 @@ non-local `review` pass within budget before its coverage can be complete.
 | `bughunt` | done in v2 | Look for **pre-existing** bugs in unchanged code near the diff, and report them separately. |
 | `contract` | done (v2) | Check the code against the business-rules docs and against UI copy. Example: a message saying "charge $455" when the server never applies the deposit. |
 | `runtime` | roadmap | Drive the app with Playwright and collect console errors, 4xx/5xx, blank pages, and technical error text shown to users. |
-| `rule-mining` | roadmap | When the same finding appears 3 or more times, propose a lint rule, so it never costs tokens again. |
+| `rule-mining` | done (decision 24) | `quorum rules propose` mines recurring findings across runs/files; accepted `quorum.rules.json` patterns run deterministically on added lines before models. |
 
 ## Token-saving strategy
 

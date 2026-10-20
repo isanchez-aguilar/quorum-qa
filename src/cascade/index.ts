@@ -149,6 +149,7 @@ export async function runCascade(
     merged.confidence = Math.max(best, independent.length ? combinedConfidence(independent) : best);
     const confirmed = sources.filter(source => confirmations.has(source)).sort((a, b) =>
       Number(tiers.get(b) === 'confirm') - Number(tiers.get(a) === 'confirm') || b.confidence - a.confidence)[0];
+    merged.confirmed = confirmed !== undefined;
     if (confirmed) {
       merged.file = confirmed.file;
       merged.line = confirmed.line;

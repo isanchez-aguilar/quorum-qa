@@ -24,6 +24,8 @@ import { reproduceBlocker, type ReproductionOptions } from '../reproduce/index.j
 import type { ProviderAdapter } from '../providers/types.js';
 import { generateMarkdownReport, generateSarifReport, type ReviewResult } from '../reporters/index.js';
 import { appendLedger, atomicWrite, diskCache, readQuota } from '../storage/index.js';
+import { appendFindings, historyEntries } from '../storage/findings.js';
+import { loadRulesAt, runRules } from '../rules/index.js';
 import type { CatalogEntry, CommandRunner, QuorumConfig } from '../types/index.js';
 import { checkoutDifference, checkoutSnapshot } from '../worktree/checkout.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
@@ -42,6 +44,7 @@ export interface ReviewDependencies {
   containerRunner?: CommandRunner;
   reproductionOptions?: Omit<ReproductionOptions, 'gitRunner' | 'deadlineMs' | 'noHostPrompt' | 'warn'>;
   appendLedger?: typeof appendLedger;
+  appendFindings?: typeof appendFindings;
   now?: () => number;
 }
 
@@ -102,6 +105,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     ? await mergeBase(await revParse((await bootstrapConfig()).base, root, runner), head, root, runner)
     : context.mergeBaseCommit ?? context.baseCommit;
   const config = headConfig ?? await configAt(trustBase, root, runner);
+  const rulesCommit = flags.trustHeadConfig ? head : trustBase;
+  const deterministicRules = await loadRulesAt(rulesCommit, root, runner);
   if (flags.author) config.author = flags.author;
   if (config.author) context.authorFamily = resolveAuthorFamily(config.author);
   for (const [flag, property] of [['spec', 'specContent'], ['inventory', 'inventoryContent'], ['rules', 'rulesContent']] as const) {
@@ -140,7 +145,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'bughunt' && !context.bughunt?.windows.length) {
     for (const note of context.bughunt?.notes ?? []) io.err(`${note}\n`);
     io.err('nothing to review in bughunt mode (no unchanged lines near the change)\n');
-    return 2;
+    // Added lines still need deterministic rules even when there is no bughunt window.
+    if (!deterministicRules.length || flags.noChecks) return 2;
   }
   if (mode === 'contract' && flags.copy) {
     const copy = await loadCopy(path.resolve(root, flags.copy), root, path.resolve(root, flags.rules!));
@@ -154,6 +160,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const clock = { now, setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>) };
     io.out(formatDryRun(createExecutionPlan(context, flags.noChecks ? { ...config, checks: [], setup: [] } : config, catalog, snapshot, { clock })) + '\n');
     if (flags.noChecks) io.out('Deterministic checks: skipped (--no-checks).\n');
+    io.out(`Deterministic rules: ${flags.noChecks ? 0 : deterministicRules.length} (from ${rulesCommit}${flags.noChecks ? '; skipped --no-checks' : ''}).\n`);
     return 0;
   }
   const warnings: string[] = [];
@@ -163,6 +170,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     warn(message); io.err(`quorum: ${message}\n`);
   }
   plan.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
+  const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);
+  ruleChecks?.notes.forEach(warn);
   const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider({ ...config.qwen, fetch: dependencies.fetch })]]);
   const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
   const groups = new Set<string>();
@@ -241,8 +250,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
     const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
       .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
-    const exitCode = failingBlocker ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
-    result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks,
+    const exitCode = failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
+    result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
       ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
       criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
     if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();
@@ -251,6 +260,11 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
       callsUsed: 1, runId, timestamp, coverageComplete: cascade.coverage.complete })));
     try { await (dependencies.appendLedger ?? appendLedger)(entries, path.join(root, '.quorum', 'ledger.jsonl'), root); }
     catch (error) { warn(`Ledger write failed: ${String(error)}`); }
+    try {
+      await (dependencies.appendFindings ?? appendFindings)(
+        historyEntries([...result.findings, ...result.unconfirmed, ...(result.pointsAtChange ?? [])], { runId, timestamp, mode }),
+        path.join(root, '.quorum', 'findings.jsonl'), root);
+    } catch (error) { warn(`Findings history write failed: ${String(error)}`); }
   } finally {
     try { await rm(copyDirectory, { recursive: true, force: true }); } catch (error) { warn(`Copy cleanup failed: ${String(error)}`); }
     try { await rm(imageDirectory, { recursive: true, force: true }); } catch (error) { warn(`Image cleanup failed: ${String(error)}`); }

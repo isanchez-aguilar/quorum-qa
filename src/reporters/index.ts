@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { CascadeResult } from '../cascade/index.js';
 import type { runDeterministicChecks } from '../checks/index.js';
 import type { Family, Finding } from '../types/index.js';
+import type { RuleRun } from '../rules/index.js';
 
 export interface ReviewResult extends CascadeResult {
   runId: string;
@@ -11,6 +12,7 @@ export interface ReviewResult extends CascadeResult {
   headSha: string;
   baseSha: string;
   checks: Awaited<ReturnType<typeof runDeterministicChecks>> | null;
+  ruleChecks?: RuleRun | null;
   clauses?: string[];
   contractFiles?: Array<{ file: string; imports: string[] }>;
   copyFiles?: string[];
@@ -54,7 +56,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
       return `| ${severity} | ${['introduced', 'pre-existing', 'improvement'].map(origin => rows.filter(f => f.origin === origin).length).join(' | ')} | ${rows.length} |`;
     }),
     `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`,
-    '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs exits 2.**',
+    '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs or error-severity rule matches exits 2.**',
     `- Reviewed: ${coverage.reviewedFiles.map(cell).join(', ') || 'none'}`,
     ...(result.mode === 'bughunt' ? [
       `- Windows reviewed: ${(coverage.reviewedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
@@ -88,6 +90,11 @@ export function generateMarkdownReport(result: ReviewResult): string {
     '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',
     result.checks === null ? 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
       `- ${cell(check.argv.join(' '))}: ${check.exitCode === 0 && !check.timedOut ? 'passed' : 'FAILED'} (exit ${check.exitCode})\n\n${cell(check.stdoutTail + '\n' + check.stderrTail)}`).join('\n') : 'No checks configured.',
+    '## Rule matches',
+    result.ruleChecks === null ? 'Skipped (--no-checks).' : result.ruleChecks?.results.filter(row => row.totalMatches).map(row =>
+      `### ${cell(row.rule.id)} (${row.rule.severity})\n\n${cell(row.rule.message)}\n\n` +
+      row.matches.slice(0, 50).map(match => `- ${cell(match.file)}:${match.line} — ${cell(match.text)}`).join('\n') +
+      (row.totalMatches > 50 ? `\n\n+${row.totalMatches - 50} more` : '')).join('\n\n') || 'None.',
     '## Warnings', [...result.warnings, ...result.errors].map(w => `- ${cell(w)}`).join('\n') || 'None.',
     '## Independence', `Families that reviewed: ${result.families.join(', ') || 'none'}.`,
     ...result.warnings.filter(w => w.startsWith('Independence')),
@@ -109,7 +116,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
         lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
       unconfirmedCount: result?.unconfirmed.length ?? 0,
     },
-    results: findings.map(f => {
+    results: [...findings.map(f => {
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;
       return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, snippet: { text: f.evidence_quote } } } }],
@@ -119,6 +126,11 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
           ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },
       };
-    }),
+    }), ...(result?.ruleChecks?.results ?? []).flatMap(row => row.matches.map(match => ({
+      ruleId: `quorum-rule/${row.rule.id}`, level: row.rule.severity, message: { text: row.rule.message },
+      locations: [{ physicalLocation: { artifactLocation: { uri: match.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' },
+        region: { startLine: match.line, snippet: { text: match.text } } } }],
+      properties: { deterministic: true },
+    })))],
   }] }, null, 2);
 }

@@ -30,7 +30,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 - [x] **bughunt:** pre-existing bugs near the diff, reported separately, with bounded HEAD windows and independent BLOCKER confirmation.
 - **contract (done):** code compared against business-rules clauses and UI copy, with direct imports, verified evidence, Rules coverage and SARIF.
 - **runtime:** Playwright flows that collect console errors, 4xx/5xx responses, blank pages and technical text shown to users.
-- **rule-mining:** a recurring finding becomes a proposed lint rule.
+- [x] **rule-mining:** recurring verified findings become proposed lint rules; human-accepted rules run deterministically on added lines using trusted-base configuration (decision 24).
 
 ## v3: team use
 - A GitHub Action that posts verified findings as a PR review, with Jules as an optional cloud reviewer.

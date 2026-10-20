@@ -4,6 +4,8 @@ import path from 'node:path';
 import { ConfigError, loadConfig } from '../config/index.js';
 import { runDoctor } from '../doctor/index.js';
 import { parseArgs, UsageError } from './args.js';
+import { proposeRules, renderRuleProposals } from '../rules/mining.js';
+import { atomicWrite } from '../storage/index.js';
 
 export const EXIT_OK = 0;
 export const EXIT_BLOCKERS = 1;
@@ -30,6 +32,7 @@ export const USAGE = `Usage: quorum <command> [options]
 Commands:
   review    Run a quorum of AI reviewers over a change
   doctor    Check which providers and models are usable
+  rules propose  Propose deterministic rules from recurring verified findings (no model calls)
 
 Options for review:
   --mode <feature|redesign|bughunt|contract>  Review mode
@@ -59,6 +62,16 @@ Options for doctor:
   --probe                    Run one read probe per provider (spends quota)
   --json                     Print the diagnostic check list as JSON
 
+Options for rules propose:
+  --min <n>                  Minimum findings (default 3; range 2-50)
+  --days <n>                 History window (default 90; range 1-3650)
+  --out <file.md>            Save the Markdown proposals
+  --json                     Print proposals as JSON
+
+Files:
+  quorum.rules.json          Accepted deterministic rules; read from the trusted config commit
+  .quorum/findings.jsonl     Local verified-finding history, including code quotes (never commit)
+
 General:
   --help                     Print this help
   --version                  Print the version
@@ -68,8 +81,10 @@ Checks execute the reviewed change's code in a disposable worktree.
 --spec, --inventory and --rules require regular non-symlink files, at most 256 KiB each.
 Feature specs accept Markdown checkboxes or a list under a heading containing "acceptance".
 
-Exit codes: 0 = complete coverage with no failing BLOCKER; 1 = a BLOCKER remains;
-2 = incomplete coverage with no BLOCKER, nothing to review, or tool/config/usage error.
+Exit codes: 0 = complete coverage with no failing BLOCKER or error-severity rule match;
+1 = a BLOCKER or error-severity rule match remains;
+2 = incomplete coverage with no BLOCKER or error-severity rule match, nothing to review,
+or tool/config/usage error.
 `;
 
 function packageVersion(): string {
@@ -84,7 +99,7 @@ export async function main(
   dependencies: CliDependencies = {},
 ): Promise<number> {
   try {
-    const { command, flags } = parseArgs(argv);
+    const { command, flags, positionals } = parseArgs(argv);
 
     if (flags.help || command === 'help') {
       io.out(USAGE);
@@ -96,6 +111,20 @@ export async function main(
     }
 
     switch (command) {
+      case 'rules': {
+        if (positionals.length !== 1 || positionals[0] !== 'propose') throw new UsageError('Use quorum rules propose.');
+        for (const key of Object.keys(flags)) {
+          if (!['min', 'days', 'out', 'json'].includes(key)) throw new UsageError(`Option ${key} is not supported by rules propose.`);
+        }
+        if (flags.out && !/\.md$/i.test(flags.out)) throw new UsageError('--out for rules propose must be a Markdown (.md) file.');
+        const root = path.resolve(dependencies.repoRoot ?? process.cwd());
+        const proposals = await proposeRules(root, { min: flags.min, days: flags.days, runner: dependencies.gitRunner,
+          ...(dependencies.now ? { now: new Date(dependencies.now()) } : {}) });
+        const markdown = renderRuleProposals(proposals) + '\n';
+        if (flags.out) await atomicWrite(path.resolve(root, flags.out), markdown, root);
+        io.out(flags.json ? JSON.stringify(proposals, null, 2) + '\n' : markdown);
+        return EXIT_OK;
+      }
       case 'review':
         return await review(flags, io, dependencies);
       case 'doctor': {

@@ -1209,6 +1209,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 ---
 
+24. **v2 rule mining (2026-10-19):** Final reported verified findings, including unconfirmed and bughunt change-point sections but excluding confirmation rejections, append to local `.quorum/findings.jsonl` under the ledger's atomic lock. Quotes are capped at 400 characters; exceeding 5 MiB retains the newest complete records within 2.5 MiB. `quorum rules propose` clusters single-line evidence shapes with 3–40 tokens, defaults to three occurrences in 90 days, and requires two distinct runs and files. OPTIONAL/improvement findings never qualify. Proposals self-verify and measure noise on bounded tracked HEAD text without models. Humans accept rules into `quorum.rules.json`; it is never generated automatically. Review reads that file from the same trusted commit as config (merge-base, or committed HEAD with `--trust-head-config`) and checks added lines before models. Each regex runs in a worker with a one-second deadline; lines over 2000 characters are skipped with a note, and timeouts warn. Matches stay outside model findings, cache, verification, dedupe and cascade. Error matches exit 1 even with incomplete coverage; warnings preserve existing coverage/BLOCKER exit semantics. `--no-checks` skips rules; dry-run and doctor disclose them.
+
 ## Review corrections
 
 Claude checked Gemini's draft on 2026-10-12. Each item below changed the draft:
@@ -2639,3 +2641,100 @@ because this OS refused its creation. Junction tests ran and passed.
 `tests/unit/contract.test.ts` and this document changed for these fixes.
 No dependencies, provider calls, commits, pushes, branch switches or log files
 were added. Cross-provider review and Linux/macOS execution remain unverified.
+
+## v2 rule mining as built
+
+Decision 24 adds a local findings history, `quorum rules propose`, and accepted
+`quorum.rules.json` checks without dependencies or model calls for either rule
+operation. The rules command is separate from `review --mode`: it mines past
+runs rather than reviewing a diff with an AI prompt.
+
+- History uses the ledger's existing lock, stale-lock handling and atomic rename.
+  Final verified entries include visible unconfirmed findings and bughunt points
+  at the change; rejected confirmations and dirty-run discarded findings are
+  excluded. The `confirmed` boolean records successful confirmation (including
+  the same family) or independent multi-family corroboration. Reproduction is
+  an explicit status, defaulting to `unproven`. Quotes are limited to 400
+  characters. At more than 5 MiB, the append retains newest complete JSONL
+  records within 2.5 MiB, under the lock. Write errors warn without changing the
+  review result. `.quorum/findings.jsonl` contains code quotes, stays local and
+  must remain git-ignored.
+- Mining reuses the verifier's linear tokenizer with an opt-in punctuation and
+  keyword mode; verification's original token semantics are unchanged. Shapes
+  retain operators, keywords and punctuation and abstract identifiers, strings
+  and numbers. Only 3–40-token single-line quotes qualify; multiline skips are
+  counted. OPTIONAL and improvement findings are excluded. The default three
+  findings must span at least two runs and two files within 90 days. CLI bounds
+  are 2–50 occurrences and 1–3650 days. Malformed history entries are counted and
+  skipped. The most frequent trigger uses lexical ordering to break ties.
+- Generated patterns escape literal metacharacters, allow flexible whitespace,
+  and are checked against every complete quote in the safe worker before being
+  offered. Unsupported templates, escaped-string forms, hexadecimal numbers,
+  Unicode identifiers not matched by the specified ASCII identifier pattern,
+  and patterns exceeding 500 characters can yield `no safe pattern`. Generated
+  entries default to warning severity; a human chooses what to enable.
+- Noise reads tracked regular-file blobs from HEAD, not dirty working files or
+  symlink targets. Binary files and blobs over 256 KiB are excluded. The scan
+  caps at 3000 files and 2000 matching lines, counting known sites within two
+  lines in the same file. Zero known sites or more than 50 matches marks a rule
+  noisy. Additional defensive limits cap materialized noise input at 100,000
+  lines or 16 MiB; these, timeouts and truncated Git listings are disclosed and
+  mark the estimate incomplete/noisy. A successful Git output overflow retains
+  complete NUL-terminated listing records only. These aggregate memory limits
+  are an explicit addition to the brief's caps.
+- Rules validate named unknown keys, unique bounded IDs, compilable patterns,
+  flags, messages, severity, paths and the 200-rule limit. They load from the
+  same trusted commit as config, including `--since`; HEAD deletion/weakening
+  does not bypass base rules. `--trust-head-config` reads committed HEAD.
+  Doctor checks the local file and reports PASS/count or WARN/first problem.
+- Added-line extraction uses the existing Git path decoder and diff parser;
+  context and deleted lines never become matches. Paths use the existing
+  dependency-free `**`, `*`, `?` glob matcher (brackets/braces are literal).
+  A separate worker per rule receives only pattern, flags and eligible lines,
+  with a fixed one-second timeout and termination. Lines longer than 2000
+  characters are counted and skipped. A timeout discards that rule's partial
+  matches and warns. Matching finishes before quota or inference calls.
+- `ruleChecks` is separate from model findings. Neither match results nor rule
+  messages are appended to model prompts; the underlying source diff remains
+  reviewable, including changes to the rules file itself. No match enters the
+  cascade, dedupe, verification, history or cache. Markdown adds Rule matches
+  after deterministic checks, with 50 results per rule and a remainder count.
+  SARIF emits retained results with `quorum-rule/<id>` and
+  `properties.deterministic=true`. Error matches take exit 1 precedence;
+  warnings/timeouts preserve complete/incomplete coverage exit behavior.
+- `--no-checks` skips rules. Dry-run lists the count and source commit. Bughunt
+  still runs configured rules on added lines when no unchanged window exists;
+  model coverage remains incomplete. Proposals print Markdown or JSON and can
+  save a Markdown report using `--out`; output must have a `.md` extension and
+  never writes the accepted rules configuration.
+
+Tests use synthetic repositories, injected runners and FakeProvider. Initial
+integration tests demonstrated ten failures before CLI/report/history wiring;
+module tests first failed on missing implementations. Follow-up failing
+regressions cover displayed local/change-point history, same-family confirmation,
+empty bughunt windows, partial regex self-matches and bounded Git/noise scanning.
+The end-to-end case records three reviews, proposes a rule, accepts it into the
+base commit, and reports its match on a new change with zero model calls.
+
+No provider CLI, real Qwen or CodeGraph invocation, dependency installation,
+branch switch, commit, push or repository log was used. Internal read-only QA
+was from the same model family; external cross-family review was not run under
+the task's explicit provider prohibition. Linux/macOS and opt-in container
+execution remain unverified.
+
+Files changed: `src/rules/{index,mining}.ts`,
+`src/storage/{index,findings}.ts`, `src/verifier/semantic.ts`,
+`src/cli/{args,index,review}.ts`, `src/reporters/index.ts`,
+`src/doctor/index.ts`, `src/cascade/index.ts`, `src/types/index.ts`,
+`tests/integration/{rules,rules-history}.test.ts`,
+`tests/unit/{rules,rule-mining,mining-tokenizer,findings-history,history-confirmation,doctor-rules}.test.ts`,
+`README.md`, and `docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.
+
+Final Windows validation: `pnpm.cmd typecheck` passed. With
+`QUORUM_CONTAINER_TESTS=0`, `pnpm.cmd test` rebuilt the CLI and passed all
+52 test files: **1,328 passed, 7 skipped** (96.72 seconds). The seven skips are
+existing environment-gated cases. The first complete run found one help-text
+expectation mismatch; preserving its wording while explaining error-severity
+rules fixed it. The final full run also includes the added 50-match reporting
+cap and CLI history-window cases. `git diff --check` passed. No new logs were
+left in the repository; pre-existing `.quorum/` contents were not removed.

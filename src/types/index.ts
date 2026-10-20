@@ -22,6 +22,7 @@ export interface Finding {
   verified?: boolean;
   // Computed by the cascade from verified sources, never accepted from provider JSON.
   confirmationFamilies?: Family[];
+  confirmed?: boolean;
   singleSource?: boolean;
   clause?: string;
   clauseNote?: string;
