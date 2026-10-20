@@ -68,10 +68,11 @@ it('decodes quoted paths, handles multiple hunks and ignores binary content', ()
 });
 
 it('rejects invalid JSON and failure to read an existing rules blob', async () => {
+  const listed = { exitCode: 0, stdout: '100644 blob abc\tquorum.rules.json\0', stderr: '' };
   const runner = vi.fn<CommandRunner>()
-    .mockResolvedValueOnce({ exitCode: 0, stdout: 'exists', stderr: '' })
+    .mockResolvedValueOnce(listed)
     .mockResolvedValueOnce({ exitCode: 0, stdout: '{broken', stderr: '' })
-    .mockResolvedValueOnce({ exitCode: 0, stdout: 'exists', stderr: '' })
+    .mockResolvedValueOnce(listed)
     .mockResolvedValueOnce({ exitCode: 128, stdout: '', stderr: 'blob unreadable' });
   await expect(loadRulesAt('base', process.cwd(), runner)).rejects.toThrow('not valid JSON');
   await expect(loadRulesAt('base', process.cwd(), runner)).rejects.toThrow('blob unreadable');
@@ -86,4 +87,37 @@ it('terminates catastrophic patterns within five seconds and warns without faili
   expect(result.passed).toBe(true);
   expect(result.results[0]?.timedOut).toBe(true);
   expect(result.notes).toContain('rule no-foo timed out; skipped');
+});
+
+it('refuses a git symlink as the rules file (its target path would be read as the content)', async () => {
+  // Found by Gemini's review: mode 120000 was accepted and `git show` returned the link target as text.
+  const runner = vi.fn<CommandRunner>().mockResolvedValueOnce({ exitCode: 0, stdout: '120000 blob abc\tquorum.rules.json\0', stderr: '' })
+    .mockResolvedValue({ exitCode: 0, stdout: '{"rules":[]}', stderr: '' });
+  await expect(loadRulesAt('base123', process.cwd(), runner)).rejects.toThrow('regular file');
+  expect(runner).toHaveBeenCalledTimes(1);
+  runner.mockReset().mockResolvedValueOnce({ exitCode: 0, stdout: '100755 blob abc\tquorum.rules.json\0', stderr: '' })
+    .mockResolvedValue({ exitCode: 0, stdout: JSON.stringify({ rules: [rule] }), stderr: '' });
+  expect(await loadRulesAt('base123', process.cwd(), runner)).toEqual([rule]);
+});
+
+it('a rule whose worker fails costs that rule only, not the whole review', async () => {
+  vi.resetModules();
+  vi.doMock('node:worker_threads', async importOriginal => {
+    const real = await importOriginal<typeof import('node:worker_threads')>();
+    let calls = 0;
+    class FailingFirst extends real.Worker {
+      constructor(...args: ConstructorParameters<typeof real.Worker>) {
+        super(calls++ === 0 ? 'throw new Error("synthetic worker failure")' : args[0], calls === 1 ? { eval: true } : args[1]);
+      }
+    }
+    return { ...real, Worker: FailingFirst };
+  });
+  const { runRules: run, validateRules: validate } = await import('../../src/rules/index.js');
+  const rules = validate({ rules: [{ ...rule, id: 'first' }, { ...rule, id: 'second' }] });
+  const diff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1 @@\n+const foo = 1;\n';
+  const result = await run(rules, { diff });
+  vi.doUnmock('node:worker_threads');
+  expect(result.notes.some(note => note.includes('rule first failed'))).toBe(true);
+  expect(result.results.find(item => item.rule.id === 'second')?.totalMatches).toBe(1);
+  expect(result.passed).toBe(false);
 });

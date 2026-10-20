@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir as userHome } from 'node:os';
 import { resolveCommand } from '../checks/resolver.js';
@@ -20,7 +20,11 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
   const results: DoctorCheck[] = [];
   try {
-    const text = await readFile(path.join(context.repoRoot, RULES_FILE_NAME), 'utf8');
+    const rulesPath = path.join(context.repoRoot, RULES_FILE_NAME);
+    // Review reads this file from git and refuses a symlink; doctor must say the same thing.
+    const stat = await lstat(rulesPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new ConfigError([`${RULES_FILE_NAME} must be a regular file, not a symlink`], 'Invalid quorum rules');
+    const text = await readFile(rulesPath, 'utf8');
     const rules = validateRules(JSON.parse(text.replace(/^\uFEFF/, '')));
     results.push({ id: 'rules', status: 'PASS', message: `${RULES_FILE_NAME} is valid (${rules.length} rules).` });
   } catch (error) {

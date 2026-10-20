@@ -187,8 +187,10 @@ export async function proposeRules(
     candidate.pattern = pattern;
     repo ??= await headLines(root, options.runner ?? runCommand);
     const noise = await safeMatch(pattern, '', repo.lines, { maxMatches: 2000, stopAfterMatches: 2000 });
+    // The history may hold Windows-style paths while git lists forward slashes.
+    const slashed = (value: string) => value.replace(/\\/g, '/');
     const knownSites = noise.matches.filter(match => members.some(member =>
-      member.file === match.file && Math.abs(member.line - match.line) <= 2)).length;
+      slashed(member.file) === slashed(match.file) && Math.abs(member.line - match.line) <= 2)).length;
     candidate.noise = {
       matches: noise.totalMatches, knownSites,
       noisy: knownSites === 0 || noise.totalMatches > 50 || noise.timedOut || repo.scanCapped || repo.filesCapped,

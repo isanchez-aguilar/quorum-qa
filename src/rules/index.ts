@@ -71,6 +71,10 @@ export async function loadRulesAt(commit: string, root: string, runner: CommandR
   const listing = await git(['ls-tree', '-z', commit, '--', RULES_FILE_NAME], root, runner);
   if (listing.exitCode !== 0) throw new Error(`Cannot load rules: ${listing.stderr}`);
   if (!listing.stdout) return [];
+  // A git symlink (mode 120000) would make `git show` return its target path as text.
+  if (!/^100(?:644|755) blob /.test(listing.stdout)) {
+    throw new ConfigError(['quorum.rules.json must be a regular file, not a symlink'], 'Invalid quorum rules');
+  }
   const result = await git(['show', `${commit}:${RULES_FILE_NAME}`], root, runner);
   if (result.exitCode !== 0) throw new Error(`Cannot load rules: ${result.stderr}`);
   let raw: unknown;
@@ -159,8 +163,16 @@ export async function runRules(rules: Rule[], context: Pick<ReviewContext, 'diff
   const results: RuleResult[] = [];
   const notes: string[] = [];
   for (const rule of rules) {
-    const result = await safeMatch(rule.pattern, rule.flags ?? '', lines.filter(line =>
-      rule.paths === undefined || rule.paths.some(glob => matchesTestGlob(line.file, glob))));
+    let result: MatchResult;
+    try {
+      result = await safeMatch(rule.pattern, rule.flags ?? '', lines.filter(line =>
+        rule.paths === undefined || rule.paths.some(glob => matchesTestGlob(line.file, glob))));
+    } catch (error) {
+      // A worker that dies (out of memory, internal error) must cost one rule, not the whole review.
+      notes.push(`rule ${rule.id} failed (${error instanceof Error ? error.message.slice(0, 120) : 'unknown error'}); skipped`);
+      results.push({ rule, matches: [], totalMatches: 0, timedOut: true, skippedLongLines: 0 });
+      continue;
+    }
     results.push({ rule, ...result });
     if (result.timedOut) notes.push(`rule ${rule.id} timed out; skipped`);
     if (result.skippedLongLines) notes.push(`rule ${rule.id}: skipped ${result.skippedLongLines} lines longer than 2000 characters`);
