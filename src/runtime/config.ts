@@ -83,7 +83,7 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
     } else result.start = [...block.start] as string[];
   }
   if (block.readyUrl !== undefined) {
-    if (typeof block.readyUrl !== 'string' || /[\s\\\u0000-\u001f]/.test(block.readyUrl) || !loopbackUrl(block.readyUrl)) {
+    if (typeof block.readyUrl !== 'string' || block.readyUrl.length > 2048 || /[\s\\\u0000-\u001f]/.test(block.readyUrl) || !loopbackUrl(block.readyUrl)) {
       issues.push('runtime.readyUrl must be an http URL on 127.0.0.1, localhost or [::1], without userinfo');
     } else result.readyUrl = block.readyUrl;
   }
@@ -101,8 +101,11 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
         const validName = string(flow.name, `${flowPath}.name`, 1, 60) && /^[A-Za-z0-9 _.-]+$/.test(flow.name);
         if (!validName) issues.push(`${flowPath}.name must use only letters, digits, spaces, _, . or -`);
         const name = validName ? flow.name as string : '';
-        if (names.has(name)) issues.push(`${flowPath}.name must be unique`);
-        names.add(name);
+        if (validName) {
+          const folded = name.toLowerCase();
+          if (names.has(folded)) issues.push(`${flowPath}.name must be unique (case-insensitive)`);
+          names.add(folded);
+        }
         const steps: Step[] = [];
         if (!Array.isArray(flow.steps) || flow.steps.length < 1 || flow.steps.length > 50) issues.push(`${flowPath} (${name}).steps must contain 1-50 steps`);
         else flow.steps.forEach((rawStep, index) => {
@@ -115,7 +118,7 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
             if (!own(step, 'wait') || step.wait === undefined) issues.push(`${stepPath}.wait is required`);
             number(step.wait, `${stepPath}.wait`, 1, 1, 5000);
           } else if (action === 'goto' || action === 'waitForUrl') {
-            if (typeof step[action] !== 'string' || !navigation(step[action])) issues.push(`${stepPath}.${action} must be a path or loopback http URL without userinfo or .. segments`);
+            if (typeof step[action] !== 'string' || step[action].length > 2048 || !navigation(step[action])) issues.push(`${stepPath}.${action} must be a path or loopback http URL of at most 2048 characters without userinfo or .. segments`);
           } else string(step[action], `${stepPath}.${action}`, 1, 300);
           if (action === 'fill') string(step.value, `${stepPath}.value`, 0, 500);
           else if (own(step, 'value')) issues.push(`${stepPath}.value is only allowed with fill`);

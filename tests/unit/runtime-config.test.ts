@@ -78,3 +78,17 @@ it('bounds flows, names and steps and rejects unknown flow keys', () => {
   }
   expect(() => read({ flows: Array.from({ length: 20 }, (_, i) => ({ name: `${i}`.padEnd(60, 'a'), steps: Array(50).fill({ wait: 1 }) })) })).not.toThrow();
 });
+it('treats flow names case-insensitively and does not report invalid names as duplicates', () => {
+  expect(() => read({ flows: [{ name: 'Home', steps: [{ wait: 1 }] }, { name: 'home', steps: [{ wait: 1 }] }] })).toThrow('unique');
+  let message = '';
+  try { read({ flows: [{ name: 'bad/1', steps: [{ wait: 1 }] }, { name: 'bad/2', steps: [{ wait: 1 }] }] }); } catch (error) { message = String(error); }
+  expect(message).toContain('letters, digits');
+  expect(message).not.toContain('unique');
+});
+it('bounds navigation and readiness URLs to 2048 characters', () => {
+  const long = '/p?' + 'a'.repeat(2046);
+  expect(() => step({ goto: long })).toThrow('2048');
+  expect(() => step({ waitForUrl: long })).toThrow('2048');
+  expect(() => step({ goto: '/p?' + 'a'.repeat(2045) })).not.toThrow();
+  expect(() => read({ readyUrl: 'http://127.0.0.1:4173/?' + 'a'.repeat(2048) })).toThrow('readyUrl');
+});
