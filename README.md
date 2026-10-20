@@ -148,7 +148,16 @@ Refactor reports **NOT EQUIVALENT** (exit 1), **SUSPECT** (exit 0),
 Tests and model review cannot prove equivalence. Test edits/removals and missing
 test dependents remain suspect; tests fixed at HEAD are reported without implying
 equivalence. `--allow-api-change` lists API breakage as an allowed note.
-Mutation sampling is reserved for part 2.
+Use `--mutation` to sample changed source lines deterministically in the disposable
+HEAD worktree. It adds up to `maxMutants` suite runs (default 8), with no provider
+calls of its own. Combine it with `--deterministic-only` for zero provider quota.
+Optional configuration: `"mutation": { "maxMutants": 8, "budgetSeconds": 300 }`
+inside `refactor`; ranges are 1–25 mutants and 30–3600 seconds. Configuration
+alone does not enable sampling. Survivors warn that tests do not pin the changed
+code and yield SUSPECT, never NOT EQUIVALENT by themselves. Invalid mutants,
+skips and budget exhaustion are notes only. This is lexical sampling, not proof
+of equivalence; ambiguous syntax, interpolated templates and long lines may be
+omitted.
 
 - **Deterministic checks:** Configured linters, typecheckers, and test suites run first in a disposable worktree before calling any model.
 - **Cascade:** Diff chunks go to a cheap triage model first. A finding escalates to the confirm tier when it is a BLOCKER, touches a focus area (money, auth, permissions), has low confidence, or comes only from a local model; unparseable answers go to the review tier.
@@ -178,6 +187,7 @@ Mutation sampling is reserved for part 2.
 |---|---|---|
 | `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor>` | Review mode |
 | `review` | `--deterministic-only` | Refactor evidence without provider calls |
+| `review` | `--mutation` | Refactor only: up to maxMutants extra suite runs (default 8); survivors yield SUSPECT |
 | `review` | `--allow-api-change` | List refactor API breakage without failing for it |
 | `review` | `--radius <n>` | Bughunt lines before/after each hunk; default 40, clamped to 1-200 |
 | `review` | `--diff <range>` | Git range to review, e.g. origin/main...HEAD |

@@ -72,7 +72,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const mode = flags.mode ?? 'feature';
   const deterministicOnly = mode === 'refactor' && flags.deterministicOnly === true;
   if (mode === 'refactor' && flags.noChecks) throw new UsageError('Refactor mode cannot work without running tests; --no-checks is not supported.');
-  if (mode !== 'refactor' && (flags.deterministicOnly || flags.allowApiChange)) throw new UsageError('--deterministic-only and --allow-api-change require refactor mode.');
+  if (mode !== 'refactor' && (flags.deterministicOnly || flags.allowApiChange || flags.mutation)) throw new UsageError('--deterministic-only, --allow-api-change and --mutation require refactor mode.');
   if (mode === 'refactor' && (flags.spec || flags.inventory)) throw new UsageError('--spec and --inventory are not supported in refactor mode.');
   if (mode === 'contract' && !flags.rules) throw new UsageError('--rules is required for contract mode.');
   if (mode !== 'contract' && flags.copy) throw new UsageError('--copy requires contract mode.');
@@ -173,6 +173,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         + `  Disposable worktree at HEAD: ${head}\n`
         + `  Setup in each worktree: ${JSON.stringify(config.setup ?? [])}\n`
         + `  Test command in each worktree: ${JSON.stringify(resolveRefactorTestCommand(config))}\n`
+        + `  Mutation sampling: ${flags.mutation ? 'on' : 'off (use --mutation)'}; max mutants: ${config.refactor?.mutation?.maxMutants ?? 8}; budget: ${config.refactor?.mutation?.budgetSeconds ?? 300} seconds (up to ${config.refactor?.mutation?.maxMutants ?? 8} extra suite runs)\n`
         + `  Test timeout: ${config.refactor?.timeoutSeconds ?? 600} seconds\n`
         + `  Model review: ${deterministicOnly ? 'off (--deterministic-only)' : 'on (normal cascade)'}\n`);
     }
@@ -190,7 +191,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);
   ruleChecks?.notes.forEach(warn);
   const evidence = mode === 'refactor' ? await runRefactorEvidence(context, config, {
-    root, gitRunner: runner, checkRunner: dependencies.checkRunner ?? runCommand, warn,
+    root, mutation: flags.mutation === true, gitRunner: runner, checkRunner: dependencies.checkRunner ?? runCommand, warn,
     announce: message => io.err(message.endsWith('\n') ? message : message + '\n'),
     ...(deterministicOnly ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
   }) : undefined;

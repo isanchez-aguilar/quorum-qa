@@ -1211,7 +1211,9 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 24. **v2 rule mining (2026-10-19):** Final reported verified findings, including unconfirmed and bughunt change-point sections but excluding confirmation rejections, append to local `.quorum/findings.jsonl` under the ledger's atomic lock. Quotes are capped at 400 characters; exceeding 5 MiB retains the newest complete records within 2.5 MiB. `quorum rules propose` clusters single-line evidence shapes with 3–40 tokens, defaults to three occurrences in 90 days, and requires two distinct runs and files. OPTIONAL/improvement findings never qualify. Proposals self-verify and measure noise on bounded tracked HEAD text without models. Humans accept rules into `quorum.rules.json`; it is never generated automatically. Review reads that file from the same trusted commit as config (merge-base, or committed HEAD with `--trust-head-config`) and checks added lines before models. Each regex runs in a worker with a one-second deadline; lines over 2000 characters are skipped with a note, and timeouts warn. Matches stay outside model findings, cache, verification, dedupe and cascade. Error matches exit 1 even with incomplete coverage; warnings preserve existing coverage/BLOCKER exit semantics. `--no-checks` skips rules; dry-run and doctor disclose them.
 
-25. **v2 refactor, part 1 (2026-10-19):** `--mode refactor` collects deterministic evidence in disposable merge-base and HEAD worktrees, running trusted setup and the suite test command through the checks resolver/runner. Shared machine-readable reporter arguments and `parseTestReport` supply test identities; human output is never evidence. Optional `refactor.testCommand` overrides the reproduction-derived suite command; `timeoutSeconds` defaults to 600 (30–3600). Tests compare regression/fixed/removed/added/failing-both/skipped changes and disclose edited test files. A bounded lexical TS/JS export scanner, package-field diff and two-hop reverse relative imports report API breakage and blast radius. The normal cascade receives an untrusted deterministic summary in its stable, cache-keyed prefix; `--deterministic-only` skips provider calls. Verdicts are NOT EQUIVALENT (1), SUSPECT (0), NO BEHAVIOUR CHANGE FOUND (0), and UNKNOWN (2); unavailable evidence stays UNKNOWN unless a verified BLOCKER forces 1. `--allow-api-change` makes API breakage a note; `--no-checks` exits 2. Mutation sampling is part 2 and is not implemented here.
+25. **v2 refactor, part 1 (2026-10-19):** `--mode refactor` collects deterministic evidence in disposable merge-base and HEAD worktrees, running trusted setup and the suite test command through the checks resolver/runner. Shared machine-readable reporter arguments and `parseTestReport` supply test identities; human output is never evidence. Optional `refactor.testCommand` overrides the reproduction-derived suite command; `timeoutSeconds` defaults to 600 (30–3600). Tests compare regression/fixed/removed/added/failing-both/skipped changes and disclose edited test files. A bounded lexical TS/JS export scanner, package-field diff and two-hop reverse relative imports report API breakage and blast radius. The normal cascade receives an untrusted deterministic summary in its stable, cache-keyed prefix; `--deterministic-only` skips provider calls. Verdicts are NOT EQUIVALENT (1), SUSPECT (0), NO BEHAVIOUR CHANGE FOUND (0), and UNKNOWN (2); unavailable evidence stays UNKNOWN unless a verified BLOCKER forces 1. `--allow-api-change` makes API breakage a note; `--no-checks` exits 2. Part 2 mutation sampling is described in decision 26.
+26. **v2 refactor, mutation sampling (2026-10-20):** Only `--mutation` enables deterministic lexical mutation sampling of added/modified source lines. `refactor.mutation` optionally configures maxMutants (1–25, default 8) and budgetSeconds (30–3600, default 300). Mutants run sequentially in the disposable HEAD worktree after a clean head suite, with fresh machine reports and verified restoration in finally. SHA-1 ordering within operators and operator round-robin make selection repeatable. Survivors yield SUSPECT: an undetected artificial bug exposes weak test evidence, not a regression in the actual refactor, so survivors never independently yield NOT EQUIVALENT. Invalid mutants, skipped work and budget exhaustion are report notes only; restoration failure makes evidence unavailable. No new dependencies or provider calls.
+
 
 ## Review corrections
 
@@ -2746,8 +2748,7 @@ left in the repository; pre-existing `.quorum/` contents were not removed.
 Round 5 retains asserted/satisfies array initializers and public class-property literals, resolves referenced namespace-local types with lexical scope, and explains every segment of recognized member changes without false incomplete-coverage notes.
 
 Decision 25 adds `--mode refactor`, `--deterministic-only` and
-`--allow-api-change`, without dependencies. Mutation sampling is part 2 and
-is deliberately absent.
+`--allow-api-change`, without dependencies. Part 2 mutation sampling is described below.
 
 - The review diff and both test revisions use merge-base and committed HEAD.
   Trusted-base configuration (or explicit `--trust-head-config`) supplies setup
@@ -3031,3 +3032,52 @@ pushes or branch switches were added. Changes remain uncommitted on
 `feat/v2-refactor`. External cross-family review was not run because provider
 execution was prohibited. Linux/macOS and opt-in container execution remain
 unverified; the lexical limitations listed above still apply.
+
+## v2 refactor (part 2) as built
+
+`src/refactor/mutation.ts` parses head-side diff additions, skips test/non-source
+files and applies one lexical replacement per mutant. Candidate text is lazy;
+selection is stable SHA-1 order within alphabetically ordered operator buckets,
+visited round-robin up to the configured limit. Equality, comparison, boolean,
+logical, binary arithmetic, integer, return and balanced if mutations are sampled.
+Only sources read from the disposable HEAD tree are eligible. Before every write,
+paths are boundary-checked, link-checked, regular-file checked and compared with
+the generation snapshot. Mutated UTF-8 content cannot exceed the 256 KiB API cap.
+Every attempt restores in finally and verifies restoration. A replaced link or
+failed restore aborts the phase and records a verdict reason. Reports use unique
+temporary paths and are removed after each attempt. Missing/invalid reports,
+suite errors, timeouts, unexplained exit failures and changed test counts are
+invalid; failed tests kill mutants; clean matching-count reports survive.
+
+The wall budget includes generation and bounds each suite timeout. Exhaustion
+stops subsequent runs. Markdown shows counts, survivors, skipped notes and budget
+state; SARIF emits located note-level `quorum-refactor/mutant-survived` results.
+JSON includes the evidence object; model summaries include totals and at most five
+survivors, sharing the existing 4096-byte shrink loop. Skips and invalid mutants
+do not change verdicts. Config alone leaves sampling off.
+
+Limits: this is lexical JavaScript/TypeScript sampling, not parsing, type inference,
+coverage instrumentation or exhaustive mutation testing. Generic-looking lines
+and type/import/decorator lines are omitted. Compound return/if replacements over 4096 characters
+are omitted, while small operators on long lines remain eligible; limits are noted. Slash ambiguities omit the remainder of their line;
+interpolated templates conservatively omit the remaining file. Comments and
+quoted text are opaque. Equivalent mutants may survive, and a killed mutant does
+not establish coverage of every behavior on its line. Existing tests execute
+repository code through the existing machine-command runner, not a new sandbox.
+
+Validation uses only synthetic files, temporary Git repositories and fake command
+runners. No provider CLI, branch switch, commit or push was performed. External
+cross-family review was not run because this task explicitly forbids provider
+execution. Linux/macOS execution remains unverified.
+
+Part 2 Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+rebuilt the CLI and passed **67 files, 1,754 tests, 7 skipped** in 122.68 seconds.
+`git -c core.safecrlf=false diff --check` passed. The first new mutation test
+suite was run before implementation and failed collection because
+`src/refactor/mutation.ts` did not exist (no individual assertions ran then).
+A subsequent CLI flag test failed because its helper duplicated `--mode`;
+the fixture was corrected to invoke `main()` directly. The final suite includes
+256 KiB adversarial inputs with a 300 ms generation bound, cap enforcement,
+deterministic selection, execution/restore failures, budget limits, configuration,
+verdicts, report/summary bounds and killed/surviving end-to-end CLI cases.
+Changes remain uncommitted on `feat/v2-refactor-mutation`.

@@ -66,3 +66,22 @@ it('explains changed local types in Markdown and SARIF', () => {
   expect(sarif.runs[0].results.find((row: { ruleId: string }) => row.ruleId === 'quorum-refactor/changed').message.text)
     .toContain('uses Props, which changed');
 });
+
+it('reports mutation warnings, notes, locations and JSON without losing summary bounds', async () => {
+  const { summarizeEvidence } = await import('../../src/refactor/index.js');
+  const report = result();
+  report.refactor!.mutation = { requested: true, candidates: 25, attempted: 25, killed: 0, invalid: 0, budgetExhausted: true, maxMutants: 25,
+    survived: Array.from({ length: 25 }, () => ({ file: 'é'.repeat(2000) + '.ts', line: 4, operator: 'boolean', before: 'true', after: 'false' })), skipped: ['sample note'] };
+  const markdown = generateMarkdownReport(report);
+  expect(markdown).toContain('sampled 25 of 25'); expect(markdown).toContain('Budget exhausted: yes'); expect(markdown).toContain('sample note');
+  const sarif = JSON.parse(generateSarifReport([], report));
+  expect(sarif.runs[0].results[0]).toMatchObject({ ruleId: 'quorum-refactor/mutant-survived', level: 'note',
+    locations: [{ physicalLocation: { region: { startLine: 4 } } }] });
+  expect(JSON.parse(JSON.stringify(report)).refactor.mutation.survived).toHaveLength(25);
+  const summary = summarizeEvidence(report.refactor!);
+  expect(Buffer.byteLength(summary)).toBeLessThanOrEqual(4096);
+  expect(JSON.parse(summary).mutation.survived).toBe(25);
+  expect(JSON.parse(summary).mutationSurvivors.length).toBeLessThanOrEqual(5);
+  delete report.refactor!.mutation;
+  expect(generateMarkdownReport(report)).toContain('Mutation sampling: off (use --mutation)');
+});

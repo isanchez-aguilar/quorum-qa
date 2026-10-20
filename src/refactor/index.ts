@@ -12,6 +12,8 @@ import { createReviewWorktree } from '../worktree/index.js';
 import { API_INPUT_BYTES, compareApi, scanExports, unsupportedSource, type ApiEvidence } from './api.js';
 import { buildBlastRadius, isTestFile, sourceExtensions, type BlastRadius } from './blast.js';
 
+import { emptyMutation, runMutation, type MutationEvidence } from './mutation.js';
+
 export type RefactorTest = TestReport['tests'][number];
 export interface TestCounts { passed: number; failed: number; skipped: number; total: number }
 export interface TestComparison {
@@ -21,6 +23,7 @@ export interface TestComparison {
   editedFiles: string[];
 }
 export interface RefactorEvidence {
+  mutation?: MutationEvidence;
   available: boolean; reasons: string[]; tests: TestComparison;
   api: ApiEvidence; blastRadius: BlastRadius; summary: string;
 }
@@ -97,9 +100,11 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
     editedTests: evidence.tests.editedFiles.slice(0, 5).map(short),
     api: evidence.api.changes.filter(change => change.breaking).slice(0, 5).map(change => ({ file: short(change.file), name: short(change.name), kind: change.kind })),
     packageChanges: evidence.api.packageChanges.map(change => change.field), withoutTests: evidence.blastRadius.withoutTests.slice(0, 5).map(short),
+    mutationSurvivors: (evidence.mutation?.survived ?? []).slice(0, 5).map(item => short(`${item.file}:${item.line} ${item.operator}`)),
+    mutation: evidence.mutation ? { candidates: evidence.mutation.candidates, attempted: evidence.mutation.attempted, killed: evidence.mutation.killed, invalid: evidence.mutation.invalid, survived: evidence.mutation.survived.length } : undefined,
     totals: { regressions: evidence.tests.regressions.length, removedTests: evidence.tests.removed.length, editedTests: evidence.tests.editedFiles.length,
       breakingApi: evidence.api.changes.filter(change => change.breaking).length, withoutTests: evidence.blastRadius.withoutTests.length } };
-  const lists = [summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests, summary.testsUnknown];
+  const lists = [summary.mutationSurvivors, summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests, summary.testsUnknown];
   while (Buffer.byteLength(JSON.stringify(summary)) > 4096) {
     const largest = [...lists].sort((a, b) => b.length - a.length)[0];
     if (!largest?.length) break;
@@ -110,9 +115,11 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
 
 export async function runRefactorEvidence(context: ReviewContext, config: QuorumConfig, options: {
   root: string; gitRunner: CommandRunner; checkRunner: CommandRunner;
-  skipCodegraph?: boolean; contextRunner?: CommandRunner;
+  mutation?: boolean; skipCodegraph?: boolean; contextRunner?: CommandRunner;
   warn?: (message: string) => void; announce?: (message: string) => void;
 }): Promise<RefactorEvidence> {
+  let mutation = options.mutation ? emptyMutation(config.refactor?.mutation?.maxMutants) : undefined;
+  if (mutation) mutation.skipped!.push('mutation skipped: head report unavailable; 0 mutants ran');
   const reasons: string[] = []; const notes: string[] = [];
   const reports = { base: emptyReport(), head: emptyReport() };
   const sources = { base: new Map<string, string>(), head: new Map<string, string>() };
@@ -199,6 +206,9 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
       if (new Set(report.tests.map(testIdentity)).size !== report.tests.length) reasons.push(`${side}: duplicate test identities make comparison ambiguous.`);
       if (!checked.passed && !report.tests.some(test => test.status === 'failed')) reasons.push(`${side}: test command failed without a reported failing test.`);
       if (side === 'head') {
+        if (options.mutation) mutation = await runMutation({ root: tree.path, sources: sources.head, diff: context.diff,
+          ...(checked.passed || report.tests.some(test => test.status === 'failed') ? { head: report } : {}),
+          command, runner: options.checkRunner, timeoutMs, ...config.refactor?.mutation, testGlobs: config.reproduce.testGlobs, reasons });
         blastRadius = await buildBlastRadius(tree.path, context.touchedFiles, {
           testFiles: [...(report.suiteFiles ?? []), ...report.tests.map(test => test.file)],
           ...(!options.skipCodegraph && config.context?.provider === 'codegraph' ? {
@@ -218,6 +228,6 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
   const api = compareApi(sources.base, sources.head, packages.base, packages.head);
   api.notes.push(...notes);
   api.incomplete ||= notes.length > 0;
-  const evidence = { available: reasons.length === 0, reasons, tests, api, blastRadius };
+  const evidence = { ...(mutation ? { mutation } : {}), available: reasons.length === 0, reasons, tests, api, blastRadius };
   return { ...evidence, summary: summarizeEvidence(evidence) };
 }

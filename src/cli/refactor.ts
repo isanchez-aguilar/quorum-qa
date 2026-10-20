@@ -9,6 +9,7 @@ export function evaluateRefactorVerdict(
   allowApiChange = false,
 ): { verdict: RefactorVerdict; exitCode: number; reasons: string[] } {
   const reasons = [...evidence.reasons];
+  if (evidence.mutation?.survived.length) reasons.push(`${evidence.mutation.survived.length} of ${evidence.mutation.attempted} sampled mutants of the changed lines survived the test suite: the tests do not pin this code (${evidence.mutation.survived.slice(0, 3).map(item => `${item.file}:${item.line} ${item.operator}`).join(', ')})`);
   if (evidence.api.incomplete || evidence.api.unscanned?.length) {
     reasons.push(...(evidence.api.notes.length ? evidence.api.notes : ['Public API scan is incomplete.']));
   }

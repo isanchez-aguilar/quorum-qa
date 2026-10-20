@@ -43,7 +43,15 @@ export function refactorMarkdown(report: RefactorReport): string[] {
     `Non-source files changed: ${(blastRadius.nonSource ?? []).map(cell).join(', ') || 'None.'}`,
     ...blastRadius.notes.map(cell),
     '### Verdict reasons', list(report.reasons),
-    `Model review: ${report.modelReview ? 'on' : 'off (--deterministic-only)'}. Mutation sampling: part 2, not performed.`,
+    `Model review: ${report.modelReview ? 'on' : 'off (--deterministic-only)'}.`,
+    '## Mutation sampling',
+    ...(report.mutation ? [
+      `Candidates: ${report.mutation.candidates}; sampled ${report.mutation.attempted} of ${report.mutation.candidates} candidates (max ${report.mutation.maxMutants}); killed: ${report.mutation.killed}; invalid: ${report.mutation.invalid}; survived: ${report.mutation.survived.length}.`,
+      `Budget exhausted: ${report.mutation.budgetExhausted ? 'yes' : 'no'}.`,
+      ...(report.mutation.attempted ? [] : ['No mutants ran.']),
+      ...((report.mutation.skipped ?? []).map(cell)),
+      '### Survivors', list(report.mutation.survived.map(item => `${item.file}:${item.line} ${item.operator}: ${item.before} → ${item.after}`)),
+    ] : ['Mutation sampling: off (use --mutation)']),
   ];
 }
 
@@ -54,6 +62,11 @@ export function refactorSarif(report?: RefactorReport) {
     region: { startLine: Math.max(1, line) },
   } }];
   return [
+    ...(report.mutation?.survived ?? []).map(item => ({
+      ruleId: 'quorum-refactor/mutant-survived', level: 'note',
+      message: { text: `${item.operator}: ${item.before} → ${item.after}; the tests do not pin this code` },
+      locations: location(item.file, item.line), properties: { deterministic: true },
+    })),
     ...report.tests.regressions.map(test => ({
       ruleId: 'quorum-refactor/regression', level: 'error',
       message: { text: `Passed at base, failed at head: ${test.name}` }, locations: location(test.file),
