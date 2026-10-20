@@ -2743,6 +2743,8 @@ left in the repository; pre-existing `.quorum/` contents were not removed.
 
 ## v2 refactor (part 1) as built
 
+Round 5 retains asserted/satisfies array initializers and public class-property literals, resolves referenced namespace-local types with lexical scope, and explains every segment of recognized member changes without false incomplete-coverage notes.
+
 Decision 25 adds `--mode refactor`, `--deterministic-only` and
 `--allow-api-change`, without dependencies. Mutation sampling is part 2 and
 is deliberately absent.
