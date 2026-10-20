@@ -57,3 +57,12 @@ it('caps human evidence lists and lists explicitly allowed API changes as notes'
   const sarif = JSON.parse(generateSarifReport([], report));
   expect(sarif.runs[0].results.find((row: { ruleId: string }) => row.ruleId === 'quorum-refactor/renamed').level).toBe('note');
 });
+it('explains changed local types in Markdown and SARIF', () => {
+  const report = result();
+  report.refactor!.api.changes = [{ file: 'sample.ts', name: 'Button', kind: 'changed', line: 1, breaking: true,
+    before: 'function Button(props: Props)', after: 'function Button(props: Props)', detail: 'uses Props, which changed' }];
+  expect(generateMarkdownReport(report)).toContain('uses Props, which changed');
+  const sarif = JSON.parse(generateSarifReport([], report));
+  expect(sarif.runs[0].results.find((row: { ruleId: string }) => row.ruleId === 'quorum-refactor/changed').message.text)
+    .toContain('uses Props, which changed');
+});

@@ -2769,8 +2769,13 @@ is deliberately absent.
   balanced declaration headers, including multiline parameters and nested types.
   It handles abstract/default/declare declarations, const enums, export assignment,
   import aliases, namespace exports, lists and re-exports. Type aliases and
-  interfaces retain their types; annotated variables retain the annotation but
-  not their initializer. Class, abstract-class, interface, enum, namespace/module
+  interfaces retain their types; annotated variables retain the annotation.
+  Variable and class-property arrow initializers retain parameters, optional
+  async/generics and return annotations, excluding the implementation. Ambiguous
+  callable return annotations conservatively retain initializer text with a note
+  and incomplete coverage. Exported const object initializers followed by `as const`
+  or `satisfies` retain their literal text (8000-character cap); plain values remain
+  excluded. Class, abstract-class, interface, enum, namespace/module
   and object-type alias declarations compare their header and member skeletons.
   Skeleton comparison keeps up to 8000 characters (other headers keep 2000);
   display keeps 300. Any header or member-signature difference is conservatively breaking,
@@ -2784,6 +2789,17 @@ is deliberately absent.
   statements, including aliases and default identifier exports. Missing bindings
   retain `<unresolved>` and an incompleteness note. Re-exports retain their source
   specifiers; adding a binding does not break unchanged exports.
+  Signatures reference top-level local type/interface/enum/class skeletons by
+  identifier, transitively to depth 4 with cycle protection and an 8000-character
+  dependency budget per export. Skeletons and reference sets are cached. Changed
+  dependencies report the exported symbol and `uses Props, which changed` in JSON,
+  Markdown and SARIF. Unreferenced locals are ignored. Depth/budget exhaustion
+  produces a note and incomplete coverage. Matching is lexical, so shadowed names
+  or property names can conservatively produce extra changes.
+  `declare global` and quoted `declare module` augmentations retain the entire
+  body under the names `global` / `module 'x'`, with the 8000-character cap.
+  Their merging/implicit-export semantics remain unresolved and always produce
+  an incompleteness note, even when the retained text is unchanged.
   Package fields compare structurally: object key order is ignored, array order
   is retained, including inside conditional `exports`.
 - CommonJS scanning covers `module.exports = identifier`, shallow object exports,
@@ -2793,7 +2809,9 @@ is deliberately absent.
   spreads) produce named incompleteness notes instead of silent omissions.
   Class members retain modifiers, optionality and annotations, excluding private
   and `#private` members, method bodies, static initialization blocks and property
-  initializers. Interface/object-type members retain type text; enum members retain
+  non-arrow initializers. Statement-start regex literals after `;`, `{` and `}`
+  remain opaque to brace pairing; division after an operand remains division.
+  Interface/object-type members retain type text; enum members retain
   names and initializer text. Namespace/module exports are skeletonized recursively,
   including local export lists. Member comparison uses multisets: order is ignored,
   duplicates count. Markdown and SARIF identify qualified member names and

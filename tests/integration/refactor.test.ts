@@ -65,6 +65,7 @@ async function review(args: string[] = [], dependencies: CliDependencies = {}) {
   return { code, out, err, provider, quota, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
 it.each([
+  ['referenced local interface', 'sample.ts', 'interface Props { label: string; } export function Button(props: Props) { return props.label; }', 'interface Props { label: number; } export function Button(props: Props) { return props.label; }'],
   ['class method', 'sample.ts', 'export class S { run(); stop(); }', 'export class S { run(); }'],
   ['enum member', 'sample.ts', 'export enum E { A = 1, B = 2 }', 'export enum E { A = 1 }'],
   ['package type', 'package.json', '{"type":"commonjs"}', '{"type":"module"}'],

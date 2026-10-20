@@ -1,11 +1,11 @@
 export interface ApiExport {
   name: string; signature: string; line: number; renameSignature: string; comparisonSignature?: string;
-  headerSignature?: string; members?: ApiExport[];
+  headerSignature?: string; members?: ApiExport[]; localSignatures?: Record<string, string>;
 }
 export interface ApiChange {
   file: string; name: string; kind: 'added' | 'removed' | 'changed' | 'renamed';
   before?: string; after?: string; previousName?: string; line: number; breaking: boolean;
-  overloads?: { before: number; after: number };
+  overloads?: { before: number; after: number }; detail?: string;
 }
 export interface PackageChange { field: string; before: unknown; after: unknown }
 export interface ApiEvidence { changes: ApiChange[]; packageChanges: PackageChange[]; breaking: boolean; notes: string[]; incomplete?: boolean; unscanned?: string[] }
@@ -31,7 +31,7 @@ function tokens(source: string): Token[] {
       while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) { if (source[i] === '\n') line++; i++; }
       i = Math.min(i + 2, source.length); continue;
     }
-    if (char === '/' && ['=', '(', '[', ':', ',', 'return', 'throw', 'yield', 'await', 'void', 'typeof', 'delete', 'case', '!', '?', '>', '&', '|', '+', '-', '*', '%', '~', '^'].includes(result.at(-1)?.value ?? '=')) {
+    if (char === '/' && [';', '{', '}', '=', '(', '[', ':', ',', 'return', 'throw', 'yield', 'await', 'void', 'typeof', 'delete', 'case', '!', '?', '>', '&', '|', '+', '-', '*', '%', '~', '^'].includes(result.at(-1)?.value ?? '=')) {
       i++; let bracket = false;
       while (i < source.length && source[i] !== '\n') {
         if (source[i] === '\\') { i += 2; continue; }
@@ -152,6 +152,65 @@ function scanFile(input: string, file: string): ScanResult {
   const endOffset = (end: number) => lex[end]?.start ?? source.length;
   const text = (begin: number, end: number) => source.slice(lex[begin]!.start, endOffset(end));
   const key = (begin: number, end: number) => lex.slice(begin, end).map(tokenKey).join(' ');
+  const renamedKey = (signature: string, name: string) => {
+    const token = tokens(signature).find(token => isName(token) && token.value === name);
+    return token ? signature.slice(0, token.start) + '<name>' + signature.slice(token.end) : signature;
+  };
+  // Only an initializer's callable header is API. Groups are skipped through
+  // the shared pair index, never searched again for every nested parameter.
+  const arrowHeader = (begin: number, limit = lex.length): number | undefined => {
+    let j = begin;
+    if (value(j) === 'async') j++;
+    if (value(j) === '<') {
+      let angle = 1;
+      for (j++; j < limit && angle; j++) {
+        if (value(j) === '<') angle++;
+        if (value(j) === '>' && value(j - 1) !== '=') angle--;
+        const close = pairs.get(j);
+        if (close !== undefined) j = close;
+      }
+    }
+    if (value(j) === '(' && pairs.has(j)) j = pairs.get(j)! + 1;
+    else if (isName(lex[j])) j++;
+    else return undefined;
+    if (value(j) === '=' && value(j + 1) === '>') return j;
+    if (value(j) !== ':') return undefined;
+    let angle = 0;
+    for (j++; j < limit; j++) {
+      if (value(j) === '<') angle++;
+      if (value(j) === '>' && value(j - 1) !== '=' && angle) angle--;
+      if (!angle && value(j) === '=' && value(j + 1) === '>') {
+        if (value(j - 1) === ')') {
+          note('API arrow return type is ambiguous; initializer text retained.');
+          const end = statementEnd(begin, limit);
+          return value(end - 1) === ';' ? end - 1 : end;
+        }
+        return j;
+      }
+      if (value(j) === ';' || !angle && value(j) === ',') break;
+      const close = pairs.get(j);
+      if (close !== undefined) j = close;
+    }
+    return undefined;
+  };
+  const initializerEnd = (end: number, kind: string): number => {
+    if (value(end) !== '=') return end;
+    const arrow = arrowHeader(end + 1);
+    if (arrow !== undefined) return arrow;
+    if (kind === 'const' && value(end + 1) === '{') {
+      const close = pairs.get(end + 1);
+      if (close !== undefined && (value(close + 1) === 'as' && value(close + 2) === 'const'
+        || value(close + 1) === 'satisfies')) return headerEnd(close + 1, 'type');
+    }
+    return end;
+  };
+  const variableSignature = (begin: number, end: number, kind: string) => {
+    const last = initializerEnd(end, kind);
+    const signature = key(begin, last);
+    const cap = last !== end ? 8000 : 2000;
+    if (signature.length >= cap) note(`API signature cap: ${cap} characters kept for comparison.`);
+    return signature.slice(0, cap);
+  };
   const skeletonKinds = new Set(['class', 'interface', 'enum', 'namespace', 'module']);
   const declarationKinds = new Set([...skeletonKinds, 'function', 'const', 'let', 'var', 'type', 'import']);
   const modifiers = new Set(['export', 'default', 'declare', 'abstract', 'async']);
@@ -264,6 +323,10 @@ function scanFile(input: string, file: string): ScanResult {
     }
     if (body < 0) {
       const prefix = nameIndex > cursor + 1 && value(cursor + 1) !== '*' ? key(cursor, cursor + 1) : key(begin, nameIndex);
+      if (['const', 'let', 'var'].includes(kind)) {
+        const signature = prefix + ' ' + variableSignature(nameIndex, end, kind);
+        return makeExport(name, consume(signature, budget), lex[begin]!.line);
+      }
       const signature = decl.importEnd ? key(cursor, end) : prefix + ' ' + key(nameIndex, end);
       return makeExport(name, budget.depth ? consume(keep(signature), budget) : keep(signature), lex[begin]!.line);
     }
@@ -341,11 +404,14 @@ function scanFile(input: string, file: string): ScanResult {
           if (!angle && (v === ';' || v === ',')) break;
           if (!angle && v === ':') annotation = true;
           if (!angle && kind === 'class' && v === '=' && value(next + 1) !== '>') {
-            last = next;
-            // Discard the whole initializer, including arrows and nested groups.
+            const initializer = next;
+            const arrow = arrowHeader(next + 1, limit);
+            last = arrow ?? next;
+            // Keep arrow parameters/return annotation, discard its implementation.
             for (next++; next < limit; next++) {
-              if ([';', ','].includes(value(next) ?? '')
-                || next > last + 1 && lex[next]!.line > lex[next - 1]!.line) break;
+              if (next >= last && [';', ','].includes(value(next) ?? '')
+                || next > (arrow === undefined ? initializer + 1 : last + 2)
+                  && lex[next]!.line > lex[next - 1]!.line) break;
               const stop = pairs.get(next);
               if (stop !== undefined) next = stop;
             }
@@ -433,6 +499,21 @@ function scanFile(input: string, file: string): ScanResult {
   for (let i = 0; i < lex.length; i++) {
     const start = lex[i]!;
     if (start.quoted) continue;
+    if (value(i) === 'declare' && (value(i + 1) === 'global'
+      || value(i + 1) === 'module' && lex[i + 2]?.quoted)) {
+      // Ambient bodies have implicit exports and arbitrary merging rules. Keep
+      // all their text conservatively and explicitly report the modeling gap.
+      const body = value(i + 1) === 'global' ? i + 2 : i + 3;
+      const close = pairs.get(body);
+      const name = value(i + 1) === 'global' ? 'global' : `module '${lex[i + 2]!.value}'`;
+      note(`API ambient augmentation ${name} is conservatively scanned, not resolved.`);
+      const signature = key(i, close === undefined ? lex.length : close + 1);
+      if (signature.length >= 8000) note('API skeleton cap: 8000 characters kept for comparison.');
+      if (result.length >= 2000) note('API export cap: 2000 exports per file.');
+      else result.push(makeExport(name, signature.slice(0, 8000), start.line));
+      i = close ?? lex.length;
+      continue;
+    }
     if (value(i) === 'Object' && value(i + 1) === '.' && value(i + 2) === 'assign' && value(i + 3) === '(') {
       let target = i + 4;
       if (value(target) === 'module' && value(target + 1) === '.') target += 2;
@@ -577,7 +658,7 @@ function scanFile(input: string, file: string): ScanResult {
       const item = skeleton;
       item.name = isDefault ? 'default' : nameToken!.value;
       item.renameSignature = isDefault ? item.comparisonSignature!
-        : item.comparisonSignature!.replace(new RegExp(`\\b${nameToken?.value}\\b`), '<name>');
+        : renamedKey(item.comparisonSignature!, nameToken!.value);
       if (result.length >= 2000) note('API export cap: 2000 exports per file.');
       else result.push(item);
       // Find the declaration's outer body rather than scanning exports inside it twice.
@@ -595,7 +676,11 @@ function scanFile(input: string, file: string): ScanResult {
     const signature = text(begin, end);
     const renamed = !isDefault && nameToken
       ? source.slice(start.start, nameToken.start) + '<name>' + source.slice(nameToken.end, endOffset(end)) : signature;
-    add(isDefault ? 'default' : nameToken!.value, signature, start.line, renamed);
+    if (['const', 'let', 'var'].includes(next ?? '')) {
+      const kept = variableSignature(begin, end, next!);
+      add(isDefault ? 'default' : nameToken!.value, kept, start.line,
+        renamedKey(kept, nameToken!.value), kept);
+    } else add(isDefault ? 'default' : nameToken!.value, signature, start.line, renamed);
     if (next === 'function' && value(end) === '{' && pairs.has(end)) {
       ignoreImplementation(end + 1, pairs.get(end)!);
     }
@@ -610,12 +695,44 @@ function scanFile(input: string, file: string): ScanResult {
           const binding = lex[j + 1];
           if (!isName(binding)) { note('API variable binding not understood.'); continue; }
           const last = headerEnd(j + 1);
-          add(binding!.value, `export ${next} ${text(j + 1, last)}`, binding!.line,
-            `export ${next} <name>${source.slice(binding!.end, endOffset(last))}`);
+          const kept = `export ${next} ${variableSignature(j + 1, last, next!)}`;
+          add(binding!.value, kept, binding!.line, renamedKey(kept, binding!.value), kept);
           j = last - 1;
         }
         i = j;
       }
+    }
+  }
+  // Expand only local types referenced by a public signature. Cache skeletons
+  // and identifier sets, and share a per-export budget to bound wide graphs.
+  const localTypes = new Map([...locals].filter(([, declarations]) =>
+    declarations.some(decl => !decl.exported && ['type', 'interface', 'enum', 'class'].includes(value(decl.cursor)!))));
+  const references = new Map<string, string[]>();
+  const namesIn = (signature: string) => localTypes.size ? [...new Set(tokens(signature)
+    .filter(token => isName(token) && localTypes.has(token.value)).map(token => token.value))] : [];
+  for (const item of result) {
+    const dependencies: Record<string, string> = Object.create(null) as Record<string, string>;
+    const visited = new Set<string>();
+    let remaining = 8000;
+    const visit = (name: string, depth: number) => {
+      if (visited.has(name)) return;
+      if (depth > 4) { note('API local reference depth cap: 4 levels.'); return; }
+      if (remaining <= 0) { note('API local reference cap: 8000 characters.'); return; }
+      visited.add(name);
+      const signature = resolve(name).map(local => local.comparisonSignature!).join(' ; ');
+      dependencies[name] = signature.slice(0, remaining);
+      if (signature.length >= remaining) note('API local reference cap: 8000 characters.');
+      remaining -= signature.length;
+      if (!references.has(name)) references.set(name, namesIn(signature).filter(other => other !== name));
+      for (const other of references.get(name)!) visit(other, depth + 1);
+    };
+    for (const name of namesIn(item.comparisonSignature!)) visit(name, 1);
+    if (visited.size) {
+      item.localSignatures = dependencies;
+      const suffix = JSON.stringify(Object.entries(dependencies).sort(([a], [b]) => a.localeCompare(b)));
+      item.comparisonSignature += suffix;
+      item.renameSignature += suffix;
+      if (item.headerSignature !== undefined) item.headerSignature += suffix;
     }
   }
   // A second, deliberately broader view catches syntax the declaration scanner
@@ -686,7 +803,8 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
       unscanned.push(file); notes.add(`public API not checked for ${file} (language not supported)`); continue;
     }
     const before = scanFile(base.get(file) ?? '', file);
-    const after = scanFile(head.get(file) ?? '', file);
+    const after = (base.get(file) ?? '') === (head.get(file) ?? '')
+      ? before : scanFile(head.get(file) ?? '', file);
     for (const scan of [before, after]) { incomplete ||= scan.incomplete; scan.notes.forEach(note => notes.add(note)); }
     const group = (items: ApiExport[]) => {
       const groups = new Map<string, ApiExport[]>();
@@ -710,7 +828,12 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
         const found = remaining.shift();
         if (found) {
           if (item.members && found.members && item.headerSignature === found.headerSignature) compareMembers(file, name, item.members, found.members);
-          else changes.push({ file, name, kind: 'changed', before: item.signature, after: found.signature, line: found.line, breaking: true, overloads });
+          else {
+            const localNames = new Set([...Object.keys(item.localSignatures ?? {}), ...Object.keys(found.localSignatures ?? {})]);
+            const detail = [...localNames].filter(local => item.localSignatures?.[local] !== found.localSignatures?.[local])
+              .map(local => `uses ${local}, which changed`).join('; ') || undefined;
+            changes.push({ file, name, kind: 'changed', before: item.signature, after: found.signature, line: found.line, breaking: true, overloads, detail });
+          }
         }
         else {
           const rename = previous.length === 1 ? added.find(candidate => current.get(candidate.name)?.length === 1 && candidate.renameSignature === item.renameSignature) : undefined;

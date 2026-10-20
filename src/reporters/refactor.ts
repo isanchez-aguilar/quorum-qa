@@ -32,6 +32,7 @@ export function refactorMarkdown(report: RefactorReport): string[] {
     ...(api.changes.length ? [list(api.changes.map(change => `${change.kind}: ${change.file}:${change.line} — ${change.previousName ? change.previousName + ' → ' : ''}${change.name}`
       + `${change.breaking ? report.allowApiChange ? ' (allowed API change)' : ' (breaking)' : ''}`
       + `${change.overloads ? `; overloads: ${change.overloads.before} before, ${change.overloads.after} after` : ''}`
+      + `${change.detail ? `; ${change.detail}` : ''}`
       + `; before: ${change.before ?? '(absent)'}; after: ${change.after ?? '(absent)'}`))] : ['No export changes.']),
     '### Package fields', list(api.packageChanges.map(change => `${change.field}: ${json(change.before)} → ${json(change.after)}${report.allowApiChange ? ' (allowed API change)' : ' (breaking)'}`)),
     ...api.notes.map(cell),
@@ -60,7 +61,7 @@ export function refactorSarif(report?: RefactorReport) {
     })),
     ...report.api.changes.map(change => ({
       ruleId: `quorum-refactor/${change.kind}`, level: !change.breaking || report.allowApiChange ? 'note' : 'error',
-      message: { text: `${change.kind} export ${change.previousName ? change.previousName + ' → ' : ''}${change.name}: ${change.before ?? '(absent)'} → ${change.after ?? '(absent)'}` },
+      message: { text: `${change.kind} export ${change.previousName ? change.previousName + ' → ' : ''}${change.name}: ${change.before ?? '(absent)'} → ${change.after ?? '(absent)'}${change.detail ? `; ${change.detail}` : ''}` },
       locations: location(change.file, change.line), properties: { deterministic: true, allowedApiChange: report.allowApiChange },
     })),
     ...report.api.packageChanges.map(change => ({
