@@ -46,13 +46,13 @@ it.each(['', 'async '])('ignores default %sarrow bodies but compares parameters 
     `export default ${async}(a: number) => a + 2;`)).toMatchObject({ changes: [], incomplete: false });
 });
 it('makes an unrecognised API miss visible per file, even beside a recognised change', () => {
-  const before = 'export { x as default };\nexport declare const enum Odd { ??? a }';
-  const after = before.replace('??? a', '??? b');
+  const before = 'export mystery Alpha;';
+  const after = 'export mystery Beta;';
   const api = compareApi(new Map([['unknown.ts', before], ['known.ts', 'export const x = 1;']]),
     new Map([['unknown.ts', after], ['known.ts', 'export const y = 1;']]));
   expect(api.incomplete).toBe(true);
   expect(api.unscanned).toContain('unknown.ts');
-  expect(api.notes).toContain('export-related lines changed but no API change was recognised: unknown.ts');
+  expect(api.notes).toContain('unknown.ts: export-related lines changed but no API change was recognised for: export mystery Alpha');
   expect(evaluateRefactorVerdict(evidence(compare(before, after)), cascade).verdict).toBe('SUSPECT');
 });
 it('does not add safety-net noise for a recognised change', () => {

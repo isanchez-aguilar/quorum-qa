@@ -58,8 +58,8 @@ export function refactorSarif(report?: RefactorReport) {
       message: { text: `Passed at base, failed at head: ${test.name}` }, locations: location(test.file),
       properties: { deterministic: true },
     })),
-    ...report.api.changes.filter(change => change.breaking).map(change => ({
-      ruleId: `quorum-refactor/${change.kind}`, level: report.allowApiChange ? 'note' : 'error',
+    ...report.api.changes.map(change => ({
+      ruleId: `quorum-refactor/${change.kind}`, level: !change.breaking || report.allowApiChange ? 'note' : 'error',
       message: { text: `${change.kind} export ${change.previousName ? change.previousName + ' → ' : ''}${change.name}: ${change.before ?? '(absent)'} → ${change.after ?? '(absent)'}` },
       locations: location(change.file, change.line), properties: { deterministic: true, allowedApiChange: report.allowApiChange },
     })),

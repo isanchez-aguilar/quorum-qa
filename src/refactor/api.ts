@@ -1,4 +1,7 @@
-export interface ApiExport { name: string; signature: string; line: number; renameSignature: string; comparisonSignature?: string }
+export interface ApiExport {
+  name: string; signature: string; line: number; renameSignature: string; comparisonSignature?: string;
+  headerSignature?: string; members?: ApiExport[];
+}
 export interface ApiChange {
   file: string; name: string; kind: 'added' | 'removed' | 'changed' | 'renamed';
   before?: string; after?: string; previousName?: string; line: number; breaking: boolean;
@@ -42,12 +45,36 @@ function tokens(source: string): Token[] {
     const start = i; const startLine = line;
     if (char === '"' || char === "'" || char === '`') {
       i++;
-      while (i < source.length && source[i] !== char) {
-        if (source[i] === '\n') line++;
-        if (source[i] === '\\') i++;
+      // An iterative stack keeps nested template expressions opaque to the
+      // declaration lexer, without recursion on adversarial nesting.
+      const quoted: Array<{ quote: string; braces: number }> = [{ quote: char, braces: 0 }];
+      while (i < source.length && quoted.length) {
+        const frame = quoted.at(-1)!; const current = source[i]!;
+        if (current === '\n') line++;
+        if (frame.quote) {
+          if (current === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+          if (current === frame.quote) { quoted.pop(); i++; continue; }
+          if (frame.quote === '`' && current === '$' && source[i + 1] === '{') {
+            quoted.push({ quote: '', braces: 1 }); i += 2; continue;
+          }
+        } else {
+          if (current === '"' || current === "'" || current === '`') quoted.push({ quote: current, braces: 0 });
+          else if (current === '{') frame.braces++;
+          else if (current === '}' && --frame.braces === 0) quoted.pop();
+          else if (current === '/' && source[i + 1] === '/') {
+            while (i < source.length && source[i] !== '\n') i++;
+            continue;
+          } else if (current === '/' && source[i + 1] === '*') {
+            i += 2;
+            while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+              if (source[i] === '\n') line++; i++;
+            }
+            i = Math.min(source.length, i + 2); continue;
+          }
+        }
         i++;
       }
-      result.push({ value: source.slice(start + 1, i), start, end: Math.min(++i, source.length), line: startLine, quoted: true });
+      result.push({ value: source.slice(start + 1, quoted.length ? i : i - 1), start, end: i, line: startLine, quoted: true });
     } else if (identifier(char)) {
       while (i < source.length && identifier(source[i]!)) i++;
       result.push({ value: source.slice(start, i), start, end: i, line });
@@ -124,6 +151,253 @@ function scanFile(input: string, file: string): ScanResult {
   };
   const endOffset = (end: number) => lex[end]?.start ?? source.length;
   const text = (begin: number, end: number) => source.slice(lex[begin]!.start, endOffset(end));
+  const key = (begin: number, end: number) => lex.slice(begin, end).map(tokenKey).join(' ');
+  const skeletonKinds = new Set(['class', 'interface', 'enum', 'namespace', 'module']);
+  const declarationKinds = new Set([...skeletonKinds, 'function', 'const', 'let', 'var', 'type', 'import']);
+  const modifiers = new Set(['export', 'default', 'declare', 'abstract', 'async']);
+  const memberModifiers = new Set(['public', 'private', 'protected', 'static', 'readonly', 'abstract', 'async', 'declare', 'override', 'accessor']);
+  const statementEnd = (begin: number, limit = lex.length) => {
+    for (let j = begin; j < limit; j++) {
+      if (value(j) === ';') return j + 1;
+      if (j > begin && lex[j]!.line > lex[j - 1]!.line) return j;
+      const close = pairs.get(j);
+      if (close !== undefined) j = close;
+    }
+    return limit;
+  };
+  interface Declaration { begin: number; cursor: number; nameIndex: number; end: number; importEnd?: number; exported?: boolean }
+  // Only shallow declarations enter a scope table. Groups are indexed and skipped,
+  // including function bodies, so an inner binding can never resolve an outer export.
+  const scopeTable = (begin: number, limit: number) => {
+    const table = new Map<string, Declaration[]>();
+    const record = (name: string, item: Declaration) => {
+      item.exported ??= value(item.begin) === 'export';
+      const list = table.get(name) ?? []; list.push(item); table.set(name, list);
+    };
+    for (let j = begin; j < limit; j++) {
+      const first = j;
+      while (modifiers.has(value(j) ?? '')) j++;
+      if (value(j) === 'const' && value(j + 1) === 'enum') j++;
+      const kind = value(j);
+      if (kind === 'import') {
+        const end = statementEnd(j, limit);
+        // Names preceding `from` (or `=` for TS import aliases) are bindings.
+        for (let k = j + 1; k < end && value(k) !== 'from' && value(k) !== '='; k++) {
+          if (isName(lex[k]) && !['type', 'as'].includes(value(k)!)
+            && value(k + 1) !== 'as') record(value(k)!, { begin: first, cursor: j, nameIndex: k, end, importEnd: end });
+        }
+        j = end - 1; continue;
+      }
+      if (declarationKinds.has(kind ?? '')) {
+        const nameIndex = value(j + 1) === '*' ? j + 2 : j + 1;
+        if (isName(lex[nameIndex])) {
+          let end = headerEnd(j, kind === 'type' ? 'type' : kind === 'interface' ? 'interface' : 'header');
+          if (value(end) === '{') end = (pairs.get(end) ?? limit - 1) + 1;
+          record(value(nameIndex)!, { begin: first, cursor: j, nameIndex, end });
+          if (['const', 'let', 'var'].includes(kind!)) {
+            // Each declarator has its own annotation; initializer commas in groups
+            // are skipped rather than mistaken for a second binding.
+            const initializer = end;
+            for (let k = end; k < limit; k++) {
+              if (value(k) === ';') { end = k + 1; break; }
+              if (k > initializer && lex[k]!.line > lex[k - 1]!.line
+                && !['=', ',', '|', '&', '+', '-', '>', '.'].includes(value(k - 1) ?? '')) { end = k; break; }
+              if (value(k) === 'export') { end = k; break; }
+              if (value(k) === ',' && isName(lex[k + 1])) {
+                const last = headerEnd(k + 1);
+                record(value(k + 1)!, { begin: k + 1, cursor: j, nameIndex: k + 1, end: last, exported: value(first) === 'export' });
+              }
+              const close = pairs.get(k);
+              if (close !== undefined) k = close;
+              end = k + 1;
+            }
+          }
+          j = Math.max(j, end - 1); continue;
+        }
+      }
+      const close = pairs.get(j);
+      if (close !== undefined) j = close;
+      else if (value(j) === '{') break;
+    }
+    return table;
+  };
+  const locals = scopeTable(0, lex.length);
+  interface CaptureBudget { remaining: number; depth: number }
+  const consume = (signature: string, budget: CaptureBudget) => {
+    if (signature.length >= budget.remaining) note('API skeleton cap: 8000 characters kept for comparison.');
+    const kept = signature.slice(0, budget.remaining);
+    budget.remaining = Math.max(0, budget.remaining - signature.length);
+    return kept;
+  };
+  const memberName = (begin: number, end: number) => {
+    let j = begin;
+    while (j + 1 < end && memberModifiers.has(value(j) ?? '') && !['(', ':', '?', '=', ';'].includes(value(j + 1) ?? '')) j++;
+    if (['get', 'set'].includes(value(j) ?? '') && isName(lex[j + 1])) j++;
+    if (value(j) === '*') j++;
+    if (value(j) === '[') return key(j, (pairs.get(j) ?? j) + 1);
+    return lex[j]?.quoted ? lex[j]!.value : value(j) ?? '<call>';
+  };
+  const makeExport = (name: string, signature: string, line: number, headerSignature?: string, members?: ApiExport[]): ApiExport => ({
+    name, signature: signature.slice(0, 300), comparisonSignature: signature, renameSignature: signature,
+    line, headerSignature, members,
+  });
+  const capture = (decl: Declaration, budget: CaptureBudget = { remaining: 8000, depth: 0 }): ApiExport => {
+    const { cursor, nameIndex } = decl;
+    const kind = value(cursor)!;
+    const name = lex[nameIndex]!.value;
+    const begin = decl.begin;
+    const mode = kind === 'type' ? 'type' : kind === 'interface' ? 'interface' : kind === 'import' ? 'expression' : 'header';
+    const end = decl.importEnd ?? headerEnd(nameIndex + 1, mode);
+    let body = -1;
+    if (skeletonKinds.has(kind) || kind === 'type') {
+      let angle = 0;
+      for (let j = value(nameIndex) === '{' || value(nameIndex) === '<' ? nameIndex : nameIndex + 1; j < lex.length; j++) {
+        const v = value(j);
+        if (v === '<') angle++;
+        if (v === '>' && value(j - 1) !== '=' && angle) angle--;
+        if (!angle && v === '{') { body = j; break; }
+        if (!angle && (v === ';' || v === 'export')) break;
+        if (kind === 'type' && !angle && v === '=' && value(j + 1) !== '{') break;
+        const close = pairs.get(j);
+        if (close !== undefined) j = close;
+      }
+    }
+    if (body < 0) {
+      const prefix = nameIndex > cursor + 1 && value(cursor + 1) !== '*' ? key(cursor, cursor + 1) : key(begin, nameIndex);
+      const signature = decl.importEnd ? key(cursor, end) : prefix + ' ' + key(nameIndex, end);
+      return makeExport(name, budget.depth ? consume(keep(signature), budget) : keep(signature), lex[begin]!.line);
+    }
+    const close = pairs.get(body);
+    if (close === undefined) note('API declaration has an unclosed group.');
+    const limit = close ?? lex.length;
+    const suffix = kind === 'type' && close !== undefined ? key(close + 1, end) : '';
+    const header = consume(key(begin, body) + (suffix ? ` ${suffix}` : ''), budget);
+    const members: ApiExport[] = [];
+    if (budget.depth >= 32) { note('API skeleton nesting cap: 32 declaration levels.'); budget.remaining = 0; }
+    const namespace = kind === 'namespace' || kind === 'module';
+    if (namespace && budget.remaining) {
+      const table = scopeTable(body + 1, limit);
+      for (const declarations of table.values()) for (const child of declarations) {
+        if (!child.exported) continue;
+        if (!budget.remaining) break;
+        budget.depth++;
+        members.push(capture(child, budget));
+        budget.depth--;
+      }
+      // Namespace export lists resolve in this scope, never in the file's scope.
+      for (let j = body + 1; j < limit && budget.remaining; j++) {
+        if (value(j) === 'export' && value(j + 1) === '{') {
+          const end = pairs.get(j + 1);
+          if (end === undefined) { note('API export list is unclosed.'); break; }
+          const from = value(end + 1) === 'from' ? lex[end + 2] : undefined;
+          for (let k = j + 2; k < end && budget.remaining;) {
+            if (value(k) === ',') { k++; continue; }
+            const original = value(k++);
+            const alias = value(k) === 'as' ? value(k + 1) : original;
+            if (value(k) === 'as') k += 2;
+            if (!original || !alias) { note('API namespace export binding not understood.'); break; }
+            if (from?.quoted) members.push(makeExport(alias, consume(JSON.stringify([original, from.value]), budget), lex[j]!.line));
+            else {
+              const declarations = table.get(original);
+              if (!declarations) {
+                note(`API binding ${original} is <unresolved>.`);
+                members.push(makeExport(alias, consume('<unresolved>', budget), lex[j]!.line));
+              } else for (const declaration of declarations) {
+                if (!budget.remaining) break;
+                budget.depth++;
+                members.push({ ...capture(declaration, budget), name: alias });
+                budget.depth--;
+              }
+            }
+            while (k < end && value(k) !== ',') k++;
+          }
+          j = end;
+        } else if (value(j) === 'export') {
+          let cursor = j + 1;
+          while (modifiers.has(value(cursor) ?? '')) cursor++;
+          if (!declarationKinds.has(value(cursor) ?? '')) note('API namespace export form not understood.');
+        }
+        const stop = pairs.get(j);
+        if (stop !== undefined) j = stop;
+      }
+    } else if (budget.remaining) {
+      for (let j = body + 1; j < limit && budget.remaining;) {
+        if ([';', ','].includes(value(j) ?? '')) { j++; continue; }
+        const first = j;
+        if (kind === 'class' && value(j) === 'static' && value(j + 1) === '{') {
+          const stop = pairs.get(j + 1);
+          if (stop === undefined) note('API member has an unclosed group.');
+          j = stop === undefined ? limit : stop + 1; continue;
+        }
+        let last = j; let next = j;
+        let angle = 0; let sawParameters = false; let annotation = false;
+        for (; next < limit; next++) {
+          const v = value(next);
+          if (!angle && next > first && lex[next]!.line > lex[next - 1]!.line
+            && ![':', '?', '=', '|', '&', ',', '.', '(', '<'].includes(value(next - 1) ?? '')
+            && ![';', ',', '{', '(', '|', '&', '.', '?', ':'].includes(v ?? '')) break;
+          if (v === '<') angle++;
+          if (v === '>' && value(next - 1) !== '=' && angle) angle--;
+          if (!angle && (v === ';' || v === ',')) break;
+          if (!angle && v === ':') annotation = true;
+          if (!angle && kind === 'class' && v === '=' && value(next + 1) !== '>') {
+            last = next;
+            // Discard the whole initializer, including arrows and nested groups.
+            for (next++; next < limit; next++) {
+              if ([';', ','].includes(value(next) ?? '')
+                || next > last + 1 && lex[next]!.line > lex[next - 1]!.line) break;
+              const stop = pairs.get(next);
+              if (stop !== undefined) next = stop;
+            }
+            break;
+          }
+          if (v === '(' && !angle && !annotation) sawParameters = true;
+          if (v === '(' || v === '[' || v === '{') {
+            const stop = pairs.get(next);
+            if (stop === undefined) { note('API member has an unclosed group.'); next = limit; break; }
+            const typeBrace = angle > 0 || [':', '|', '&', '='].includes(value(next - 1) ?? '')
+              || value(next - 1) === '>' && value(next - 2) === '=';
+            if (kind === 'class' && v === '{' && sawParameters && !typeBrace) {
+              last = next; next = stop + 1; break;
+            }
+            next = stop;
+          }
+          last = next + 1;
+        }
+        let nameStart = first; let hidden = false;
+        while (nameStart + 1 < last && memberModifiers.has(value(nameStart) ?? '')
+          && !['(', ':', '?', '=', ';'].includes(value(nameStart + 1) ?? '')) {
+          hidden ||= value(nameStart) === 'private'; nameStart++;
+        }
+        hidden ||= value(nameStart) === '#';
+        if (last > first && !hidden) {
+          const signature = consume(key(first, last), budget);
+          members.push(makeExport(memberName(first, last), signature, lex[first]!.line));
+        }
+        j = Math.max(first + 1, next);
+      }
+    }
+    const sorted = members.map(member => `${JSON.stringify(member.name)}: ${member.comparisonSignature!}`).sort();
+    const signature = (header + ' { ' + sorted.join(' ; ') + ' }').slice(0, 8000);
+    if (header.length + sorted.join(' ; ').length + 5 >= 8000) note('API skeleton cap: 8000 characters kept for comparison.');
+    return makeExport(name, signature, lex[begin]!.line, header, members);
+  };
+  const resolved = new Map<string, ApiExport[]>();
+  const resolve = (name: string) => {
+    if (resolved.has(name)) return resolved.get(name)!;
+    const declarations = locals.get(name);
+    const items = declarations?.map(decl => capture(decl)) ?? [];
+    if (!items.length) { note(`API binding ${name} is <unresolved>.`); items.push(makeExport(name, '<unresolved>', 1)); }
+    resolved.set(name, items);
+    return items;
+  };
+  const addResolved = (name: string, original: string, line: number, typeOnly = false) => {
+    for (const item of resolve(original)) {
+      if (result.length >= 2000) { note('API export cap: 2000 exports per file.'); break; }
+      result.push({ ...item, name, line, comparisonSignature: JSON.stringify([original, typeOnly, item.comparisonSignature]),
+        headerSignature: item.headerSignature === undefined ? undefined : JSON.stringify([original, typeOnly, item.headerSignature]) });
+    }
+  };
   const commonUnknown = () => notes.add(`CommonJS export form not understood: ${file}`);
   const rhs = (begin: number, name: string, line: number) => {
     if (!lex[begin]) { commonUnknown(); return; }
@@ -155,7 +429,7 @@ function scanFile(input: string, file: string): ScanResult {
     }
     return end;
   };
-  const declarations = new Set(['function', 'class', 'const', 'let', 'var', 'type', 'interface', 'enum', 'namespace', 'import']);
+  const declarations = declarationKinds;
   for (let i = 0; i < lex.length; i++) {
     const start = lex[i]!;
     if (start.quoted) continue;
@@ -198,7 +472,11 @@ function scanFile(input: string, file: string): ScanResult {
       } else { commonUnknown(); i = cursor - 1; }
       continue;
     }
-    if (start.value !== 'export') continue;
+    if (start.value !== 'export') {
+      const close = pairs.get(i);
+      if (close !== undefined) i = close;
+      continue;
+    }
     const begin = i;
     let cursor = i + 1;
     const isDefault = value(cursor) === 'default';
@@ -212,16 +490,25 @@ function scanFile(input: string, file: string): ScanResult {
       // Look only at the outer header: arrows nested in parameter/return types
       // cannot delimit this function's implementation.
       let arrow = cursor;
+      let lastArrow = -1;
+      let annotated = false;
       let angle = 0;
       for (; arrow < lex.length; arrow++) {
         const v = value(arrow);
         if (v === '<') angle++;
         else if (v === '>' && value(arrow - 1) !== '=' && angle) angle--;
-        if (!angle && v === '=' && value(arrow + 1) === '>') break;
+        if (!angle && v === ':' && lastArrow < 0) annotated = true;
+        if (!angle && v === '=' && value(arrow + 1) === '>') {
+          lastArrow = arrow;
+          if (!annotated) break;
+        }
         if (v === ';' || v === 'export') break;
+        if (lastArrow >= 0 && lex[arrow]!.line > lex[lastArrow]!.line) break;
+        if (lastArrow >= 0 && v === '{') break;
         const close = pairs.get(arrow);
         if (close !== undefined) arrow = close;
       }
+      if (lastArrow >= 0) arrow = lastArrow;
       if (value(arrow) === '=' && value(arrow + 1) === '>') {
         add('default', text(begin, arrow), start.line);
         const body = arrow + 2;
@@ -230,6 +517,11 @@ function scanFile(input: string, file: string): ScanResult {
         ignoreImplementation(body, end);
         i = Math.max(arrow + 1, end - 1);
         continue;
+      }
+      if (isName(lex[cursor]) && ([';', undefined].includes(value(cursor + 1))
+        || lex[cursor + 1]!.line > lex[cursor]!.line)) {
+        addResolved('default', lex[cursor]!.value, start.line);
+        i = cursor; continue;
       }
     }
     if (next === '{') {
@@ -247,7 +539,8 @@ function scanFile(input: string, file: string): ScanResult {
         const original = lex[j++]!;
         let exported = original;
         if (value(j) === 'as') { exported = lex[j + 1] ?? original; j += 2; }
-        if (isName(exported)) add(exported.value, signature, start.line,
+        if (isName(exported) && spec === undefined) addResolved(exported.value, original.value, start.line, typeOnly || bindingType);
+        else if (isName(exported)) add(exported.value, signature, start.line,
           `export { ${original === exported ? '<name>' : original.value} as <name> } from ${JSON.stringify(spec)}`,
           JSON.stringify([original.value, exported.value, spec, typeOnly || bindingType]));
         else note('API export binding not understood.');
@@ -279,6 +572,26 @@ function scanFile(input: string, file: string): ScanResult {
     if (!isDefault && !isName(nameToken)) { note('API export declaration name not understood.'); continue; }
     const mode = next === 'type' ? 'type' : next === 'interface' ? 'interface' : next === 'import' ? 'expression' : 'header';
     const end = headerEnd(cursor, mode);
+    const skeleton = skeletonKinds.has(next ?? '') || next === 'type' ? capture({ begin, cursor, nameIndex, end }) : undefined;
+    if (skeleton?.members) {
+      const item = skeleton;
+      item.name = isDefault ? 'default' : nameToken!.value;
+      item.renameSignature = isDefault ? item.comparisonSignature!
+        : item.comparisonSignature!.replace(new RegExp(`\\b${nameToken?.value}\\b`), '<name>');
+      if (result.length >= 2000) note('API export cap: 2000 exports per file.');
+      else result.push(item);
+      // Find the declaration's outer body rather than scanning exports inside it twice.
+      let body = cursor; let angle = 0;
+      for (; body < lex.length; body++) {
+        if (value(body) === '<') angle++;
+        if (value(body) === '>' && value(body - 1) !== '=' && angle) angle--;
+        if (value(body) === '{' && !angle && pairs.has(body)) { i = pairs.get(body)!; break; }
+        const close = pairs.get(body);
+        if (close !== undefined) body = close;
+      }
+      if (body === lex.length) i = lex.length;
+      continue;
+    }
     const signature = text(begin, end);
     const renamed = !isDefault && nameToken
       ? source.slice(start.start, nameToken.start) + '<name>' + source.slice(nameToken.end, endOffset(end)) : signature;
@@ -314,9 +627,16 @@ function scanFile(input: string, file: string): ScanResult {
   const flush = () => {
     if (line[0]?.value === 'export' && !line[0].quoted
       || line[0]?.value === 'exports' && !line[0].quoted && ['.', '['].includes(line[1]?.value ?? '')
-      || line.some((token, j) => !token.quoted && token.value === 'module'
-        && line[j + 1]?.value === '.' && line[j + 2]?.value === 'exports')) {
-      exportLines.add(line.map(tokenKey).join(' '));
+      || line[0]?.value === 'module' && !line[0].quoted && line[1]?.value === '.' && line[2]?.value === 'exports') {
+      let depth = 0;
+      const header: Token[] = [];
+      for (const token of line) {
+        if (!token.quoted && !depth && ['{', '=', ';'].includes(token.value)) break;
+        if (!token.quoted && ['(', '[', '<'].includes(token.value)) depth++;
+        if (!token.quoted && [')', ']', '>'].includes(token.value)) depth = Math.max(0, depth - 1);
+        header.push(token);
+      }
+      exportLines.add(header.map(tokenKey).join(' '));
     }
     line = [];
   };
@@ -333,6 +653,32 @@ function scanFile(input: string, file: string): ScanResult {
 
 export function compareApi(base: Map<string, string>, head: Map<string, string>, basePackage: Record<string, unknown> = {}, headPackage: Record<string, unknown> = {}): ApiEvidence {
   const changes: ApiChange[] = []; const notes = new Set<string>(); const unscanned: string[] = [];
+  const compareMembers = (file: string, name: string, before: ApiExport[], after: ApiExport[]) => {
+    const names = new Set([...before, ...after].map(member => member.name));
+    const oldGroups = new Map<string, ApiExport[]>(); const newGroups = new Map<string, ApiExport[]>();
+    for (const [items, groups] of [[before, oldGroups], [after, newGroups]] as const) {
+      for (const item of items) { const list = groups.get(item.name) ?? []; list.push(item); groups.set(item.name, list); }
+    }
+    for (const member of names) {
+      const old = oldGroups.get(member) ?? []; const next = newGroups.get(member) ?? [];
+      const signatures = new Map<string, ApiExport[]>();
+      for (const item of next) {
+        const list = signatures.get(item.comparisonSignature!) ?? [];
+        list.push(item); signatures.set(item.comparisonSignature!, list);
+      }
+      const removed = old.filter(item => !signatures.get(item.comparisonSignature!)?.pop());
+      const added = [...signatures.values()].flat();
+      const overloads = old.length > 1 || next.length > 1 ? { before: old.length, after: next.length } : undefined;
+      for (let i = 0; i < Math.max(removed.length, added.length); i++) {
+        const previous = removed[i]; const current = added[i]; const qualified = `${name}.${member}`;
+        if (previous?.members && current?.members && previous.headerSignature === current.headerSignature) {
+          compareMembers(file, qualified, previous.members, current.members);
+        } else changes.push({ file, name: qualified, kind: previous ? current ? 'changed' : 'removed' : 'added',
+          before: previous?.signature, after: current?.signature, line: (current ?? previous)!.line,
+          breaking: !!previous, overloads });
+      }
+    }
+  };
   let incomplete = false;
   for (const file of [...new Set([...base.keys(), ...head.keys()])].sort()) {
     const changeStart = changes.length;
@@ -362,7 +708,10 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
       const remaining = [...bySignature.values()].flat();
       for (const item of removed) {
         const found = remaining.shift();
-        if (found) changes.push({ file, name, kind: 'changed', before: item.signature, after: found.signature, line: found.line, breaking: true, overloads });
+        if (found) {
+          if (item.members && found.members && item.headerSignature === found.headerSignature) compareMembers(file, name, item.members, found.members);
+          else changes.push({ file, name, kind: 'changed', before: item.signature, after: found.signature, line: found.line, breaking: true, overloads });
+        }
         else {
           const rename = previous.length === 1 ? added.find(candidate => current.get(candidate.name)?.length === 1 && candidate.renameSignature === item.renameSignature) : undefined;
           if (rename) {
@@ -375,12 +724,17 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
     }
     for (const item of added) changes.push({ file, name: item.name, kind: 'added', after: item.signature, line: item.line, breaking: false,
       ...(current.get(item.name)!.length > 1 ? { overloads: { before: 0, after: current.get(item.name)!.length } } : {}) });
-    if (/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && changes.length === changeStart
-      && before.semanticSource !== after.semanticSource
-      && (before.exportLines.size !== after.exportLines.size || [...before.exportLines].some(line => !after.exportLines.has(line)))) {
-      notes.add(`export-related lines changed but no API change was recognised: ${file}`);
-      incomplete = true;
-      unscanned.push(file);
+    if (/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && before.semanticSource !== after.semanticSource) {
+      const changedLines = [...before.exportLines].filter(line => !after.exportLines.has(line))
+        .concat([...after.exportLines].filter(line => !before.exportLines.has(line)));
+      const explained = new Set(changes.slice(changeStart).flatMap(change =>
+        [change.name.split('.')[0]!, ...(change.previousName ? [change.previousName] : [])]));
+      for (const line of changedLines) {
+        if (line.split(/\W+/).some(word => explained.has(word))) continue;
+        notes.add(`${file}: export-related lines changed but no API change was recognised for: ${line}`);
+        incomplete = true;
+        if (!unscanned.includes(file)) unscanned.push(file);
+      }
     }
   }
   const stable = (value: unknown): string => {
@@ -388,9 +742,9 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
     if (value !== null && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`).join(',')}}`;
     return JSON.stringify(value) ?? 'undefined';
   };
-  const packageChanges = ['main', 'module', 'types', 'exports', 'bin', 'version']
-    .filter(field => (field === 'exports' ? JSON.stringify(basePackage[field]) !== JSON.stringify(headPackage[field])
-      : stable(basePackage[field]) !== stable(headPackage[field])))
+  const packageChanges = ['main', 'module', 'types', 'typings', 'exports', 'imports', 'bin', 'version', 'type', 'engines', 'files',
+    'sideEffects', 'browser', 'typesVersions', 'peerDependencies', 'workspaces']
+    .filter(field => stable(basePackage[field]) !== stable(headPackage[field]))
     .map(field => ({ field, before: basePackage[field], after: headPackage[field] }));
   return { changes, packageChanges, breaking: packageChanges.length > 0 || changes.some(change => change.breaking), notes: [...notes], incomplete, unscanned };
 }

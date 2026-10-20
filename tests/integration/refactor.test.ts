@@ -65,6 +65,9 @@ async function review(args: string[] = [], dependencies: CliDependencies = {}) {
   return { code, out, err, provider, quota, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
 it.each([
+  ['class method', 'sample.ts', 'export class S { run(); stop(); }', 'export class S { run(); }'],
+  ['enum member', 'sample.ts', 'export enum E { A = 1, B = 2 }', 'export enum E { A = 1 }'],
+  ['package type', 'package.json', '{"type":"commonjs"}', '{"type":"module"}'],
   ['next-line union', 'sample.ts', "export type Mode =\n  | 'a'\n  | 'b';", "export type Mode =\n  | 'a';"],
   ['CommonJS brackets', 'sample.ts', "exports['x'] = 1;\nexports['beta'] = 2;", "exports['beta'] = 2;"],
   ['overload', 'sample.ts', 'export function parse(x: string): string;\nexport function parse(x: number): number;\nexport function parse(x: string | number) { return x; }',
@@ -83,11 +86,14 @@ it.each([
   expect(r.result?.refactor?.verdict).toBe('NOT EQUIVALENT');
   expect(r.provider.calls).toHaveLength(0); expect(r.quota).not.toHaveBeenCalled();
 });
-it('ignores default-arrow body changes end to end with unchanged tests', async () => {
-  await writeFile(path.join(root, 'sample.ts'), 'export default (a: number) => { return a + 1; };');
+it.each([
+  ['default arrow', 'export default (a: number) => { return a + 1; };'],
+  ['class method', 'export class S { run(a: number) { return a + 1; } }'],
+])('ignores %s body changes end to end with unchanged tests', async (_name, before) => {
+  await writeFile(path.join(root, 'sample.ts'), before);
   await git('add', '.'); await git('commit', '-m', 'arrow base');
   const base = await git('rev-parse', 'HEAD');
-  await writeFile(path.join(root, 'sample.ts'), 'export default (a: number) => { return a + 2; };');
+  await writeFile(path.join(root, 'sample.ts'), before.replace('+ 1', '+ 2'));
   await git('add', '.'); await git('commit', '-m', 'arrow head');
   const r = await review(['--deterministic-only', '--diff', `${base}...HEAD`]);
   expect(r.code, r.err).toBe(0);

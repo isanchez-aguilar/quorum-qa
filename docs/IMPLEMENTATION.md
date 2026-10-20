@@ -2770,28 +2770,45 @@ is deliberately absent.
   It handles abstract/default/declare declarations, const enums, export assignment,
   import aliases, namespace exports, lists and re-exports. Type aliases and
   interfaces retain their types; annotated variables retain the annotation but
-  not their initializer. Comparison keeps up to 2000 normalized characters;
-  display keeps 300. Any textual signature difference is conservatively breaking,
+  not their initializer. Class, abstract-class, interface, enum, namespace/module
+  and object-type alias declarations compare their header and member skeletons.
+  Skeleton comparison keeps up to 8000 characters (other headers keep 2000);
+  display keeps 300. Any header or member-signature difference is conservatively breaking,
   including compatible widening or an added optional parameter. Help and reports
   explicitly ask the reviewer to assess compatibility.
   Overloads compare signature multisets per name: order does not matter, duplicate
   counts do, and removed/changed signatures include before/after overload counts.
   A rename compares headers with the declared name replaced by a placeholder,
   preserving the original before/after text for reporting.
-  Named lists retain their list text; comparison uses individual bindings and
-  source specifiers so adding a binding does not break unchanged exports.
-  Package conditional `exports` ordering remains significant.
+  Named lists resolve individual bindings against top-level declarations or import
+  statements, including aliases and default identifier exports. Missing bindings
+  retain `<unresolved>` and an incompleteness note. Re-exports retain their source
+  specifiers; adding a binding does not break unchanged exports.
+  Package fields compare structurally: object key order is ignored, array order
+  is retained, including inside conditional `exports`.
 - CommonJS scanning covers `module.exports = identifier`, shallow object exports,
   `module.exports.name`/`exports.name` assignments and literal-name
   `Object.defineProperty` exports in JS and TS. Unknown CommonJS forms and
   unsupported export declarations (including destructured bindings and object
   spreads) produce named incompleteness notes instead of silent omissions.
-  This remains a lexical scanner, not type inference: class/namespace bodies and
-  enum members are not compared as independent exports.
+  Class members retain modifiers, optionality and annotations, excluding private
+  and `#private` members, method bodies, static initialization blocks and property
+  initializers. Interface/object-type members retain type text; enum members retain
+  names and initializer text. Namespace/module exports are skeletonized recursively,
+  including local export lists. Member comparison uses multisets: order is ignored,
+  duplicates count. Markdown and SARIF identify qualified member names and
+  added/removed/changed status; removal or change is breaking, addition is not.
+  This remains a lexical scanner, not type inference: it does not resolve inherited
+  members, inferred variable/property types, computed member names or enum constant
+  expressions semantically, or follow imports/re-exports to other files. Decorators,
+  dynamic CommonJS and arbitrary TypeScript syntax are not fully modeled.
 - API input is bounded to 256 KiB per file, with a bounded worktree read.
   Input truncation, the 2000-export limit, 4096-character export-list limit and
-  2000-character comparison-signature limit all name the file/cap and set
+  2000-character header / 8000-character skeleton comparison limits all name the file/cap and set
   `api.incomplete`. The 300-character display limit does not truncate comparison.
+  Recursive namespace capture shares the skeleton budget and stops at 32 declaration
+  levels with an incompleteness note. Structural bracket pairing and template-string
+  scanning are iterative, including deeply nested implementation braces.
   Touched unsupported source languages (`.py .go .rs .java .kt .cs .rb .php
   .swift .c .cc .cpp .h .hpp .m .scala .dart`) populate `api.unscanned` and name
   each unchecked file. These omissions appear in Verdict reasons and make an
@@ -2936,3 +2953,61 @@ No dependencies, provider commands, quota usage, repository logs, branch
 switches, pushes or external review were added; provider execution was
 explicitly prohibited. Linux/macOS and opt-in container execution remain
 unverified.
+
+Round 3 fixes (declaration skeletons):
+
+- Classes, interfaces, object-type aliases, enums and namespaces/modules now use
+  the member comparison described above. Qualified member changes include
+  nested names such as `N.Inner.S.stop`; additive members appear as SARIF notes.
+  Top-level local declarations (including overloads, `declare`, `abstract` and
+  multiple variable declarators) supply signatures for export lists and default
+  identifier exports. Imported bindings use their import statement, so a source
+  module edit is visible. Namespace export lists use their own scope table.
+- A default arrow with an arrow-containing return annotation captures through
+  the last shallow arrow on the statement line. This deliberately favors extra
+  evidence: an implementation edit in that ambiguous shape can be reported as
+  an API change. Ordinary default arrows still exclude their bodies.
+- Package comparison covers `main`, `module`, `types`, `typings`, `exports`,
+  `imports`, `bin`, `version`, `type`, `engines`, `files`, `sideEffects`, `browser`,
+  `typesVersions`, `peerDependencies` and `workspaces`. Every structural change
+  is breaking and names the field.
+- Safety net v2 compares export-looking line headers, cutting before shallow
+  `{`, `=`, `=>` or `;`. Body/value edits on the same line no longer generate
+  false incompleteness. Each changed header must contain an identifier explained
+  by a recorded change in that file (including the containing declaration for
+  member changes). Otherwise the note is
+  `<file>: export-related lines changed but no API change was recognised for: <line header>`,
+  with `incomplete` and `unscanned` set. A recognized change elsewhere in the
+  file cannot suppress this note. Comments and equivalent token wrapping remain
+  ignored. This replaces the round 2 whole-line/per-file fallback.
+
+The initial regression run against the unchanged round 2 implementation had
+**68 failures and 41 passes** across the new skeleton tests and refactor CLI
+integration tests. Failures included all reproduced silent misses and body/value
+noise, class/enum member matrices, local/import/unresolved bindings, new package
+fields and structural object ordering, member reporting and the skeleton cap.
+The four new CLI scenarios failed too: public-method removal, enum-member removal
+and package `type` edits must be NOT EQUIVALENT; a class method-body edit must be
+NO BEHAVIOUR CHANGE FOUND. Follow-up failing tests covered semicolon-free default
+identifier exports, namespace export lists, nested non-exported namespaces,
+anonymous default classes, object-type intersection suffixes, namespace aliases
+and multiple exported variables. Adversarial fixtures cover 50,000 member-like
+tokens, 10,000 brace levels, an unclosed body, repeated aliases that would expand
+a declaration beyond 3 MB, commas, and quoted/template braces, each with a
+256 KiB input and a 300 ms comparison limit.
+
+Round 3 final Windows validation: `pnpm typecheck` passed; `pnpm test` rebuilt
+the CLI and passed **63 test files, 1,615 tests, 7 skipped** in 100.79 seconds.
+The skips remain existing environment gates. Compiled `compareApi` probes took
+**89.5 / 10.1 / 9.6 / 34.2 / 102.0 / 10.0 ms**, respectively, for the six
+adversarial cases above. `git diff --check` passed.
+
+Round 3 changed `src/refactor/api.ts`, `src/reporters/refactor.ts`,
+`tests/unit/refactor-skeleton.test.ts` (97 new cases),
+`tests/unit/refactor-api.test.ts`, `tests/unit/refactor.test.ts`,
+`tests/integration/refactor.test.ts` (four new CLI cases), and this document.
+No dependencies, provider commands, quota usage, repository logs, commits,
+pushes or branch switches were added. Changes remain uncommitted on
+`feat/v2-refactor`. External cross-family review was not run because provider
+execution was prohibited. Linux/macOS and opt-in container execution remain
+unverified; the lexical limitations listed above still apply.

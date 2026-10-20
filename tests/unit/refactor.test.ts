@@ -89,7 +89,7 @@ export * as ns from './all';`).map(item => item.name);
     expect(api.breaking).toBe(true);
     expect(compareApi(new Map([['a.ts', 'export function f(x: number) {}']]), new Map([['a.ts', 'export function f(x: string) {}']])).changes[0]?.kind).toBe('changed');
     expect(compareApi(new Map(), new Map(), { exports: { default: './generic.js', node: './node.js' } },
-      { exports: { node: './node.js', default: './generic.js' } }).packageChanges).toHaveLength(1);
+      { exports: { node: './node.js', default: './generic.js' } }).packageChanges).toHaveLength(0);
   });
   it.each(['export ' + ' '.repeat(65536), 'export {' + ','.repeat(65536), 'export const value' + 'x'.repeat(65536),
     'import ' + 'a '.repeat(32768), 'require(' + ' '.repeat(65536), '/*' + 'x'.repeat(65536), '"export ' + 'x'.repeat(65536)])('bounds adversarial scanner input', source => {
