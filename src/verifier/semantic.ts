@@ -11,9 +11,9 @@
 
 import { levenshtein } from './quote.js';
 
-type TokenKind = 'ident' | 'word' | 'number' | 'operator' | 'string' | 'template';
+type TokenKind = 'ident' | 'word' | 'number' | 'operator' | 'string' | 'template' | 'punctuation';
 
-interface CodeToken {
+export interface CodeToken {
   kind: TokenKind;
   // For a string, its content without the delimiters. For a template, which part of it this is.
   text: string;
@@ -74,7 +74,12 @@ function isDigit(code: number): boolean {
   return code >= 48 && code <= 57;
 }
 
-function tokenize(text: string): CodeToken[] {
+const MINING_KEYWORDS = new Set(('const let var function class new this super typeof instanceof void delete in of ' +
+  'for while do switch case default try catch finally async yield import export from as extends implements ' +
+  'interface type public private protected static readonly get set def lambda with pass assert is ' +
+  'enum namespace package using int string bool boolean null true false').split(' '));
+
+export function tokenize(text: string, preservePunctuation = false): CodeToken[] {
   const tokens: CodeToken[] = [];
   const length = text.length;
   // One entry per open `${` of a template: how many `{` opened inside it are still open.
@@ -163,7 +168,7 @@ function tokenize(text: string): CodeToken[] {
         matched = IDENTIFIER.exec(text)?.[0];
         if (matched !== undefined) {
           const lower = matched.toLowerCase();
-          if (WORDS.has(lower)) tokens.push({ kind: 'word', text: lower });
+          if (WORDS.has(lower) || (preservePunctuation && MINING_KEYWORDS.has(matched))) tokens.push({ kind: 'word', text: preservePunctuation ? matched : lower });
           else tokens.push({ kind: 'ident', text: matched });
         } else {
           OPERATOR.lastIndex = at;
@@ -171,7 +176,8 @@ function tokenize(text: string): CodeToken[] {
           if (matched !== undefined) tokens.push({ kind: 'operator', text: matched });
         }
       }
-      // Punctuation and anything else that is not a token is skipped one character at a time.
+      if (preservePunctuation && matched === undefined) tokens.push({ kind: 'punctuation', text: text[at]! });
+      // Verification skips punctuation; mining keeps it to avoid conflating different shapes.
       at += matched === undefined || matched.length === 0 ? 1 : matched.length;
     }
   }

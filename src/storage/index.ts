@@ -87,7 +87,7 @@ async function assertRealParents(file: string, repoRoot: string): Promise<void> 
   }
 }
 
-export async function appendLedger(entries: readonly unknown[], file: string, repoRoot = process.cwd()): Promise<void> {
+export async function appendLedger(entries: readonly unknown[], file: string, repoRoot = process.cwd(), maxBytes?: number): Promise<void> {
   if (!entries.length) return;
   await assertRealParents(file, repoRoot);
   await mkdir(path.dirname(file), { recursive: true });
@@ -114,7 +114,14 @@ export async function appendLedger(entries: readonly unknown[], file: string, re
     let previous = '';
     try { previous = await readFile(file, 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    await atomicWrite(file, previous + entries.map(entry => JSON.stringify(entry) + '\n').join(''), repoRoot);
+    let text = previous + entries.map(entry => JSON.stringify(entry) + '\n').join('');
+    if (maxBytes !== undefined && Buffer.byteLength(text) > maxBytes) {
+      // Retain whole newest records, bounded by half the cap in UTF-8 bytes.
+      const bytes = Buffer.from(text);
+      const boundary = bytes.indexOf(10, bytes.length - Math.floor(maxBytes / 2) - 1);
+      text = boundary < 0 ? '' : bytes.subarray(boundary + 1).toString('utf8');
+    }
+    await atomicWrite(file, text, repoRoot);
   } finally {
     let cleanupError: unknown;
     try { await lock.close(); } catch (error) { cleanupError = error; }

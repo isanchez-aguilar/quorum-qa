@@ -12,6 +12,8 @@ export interface ParsedFlags {
   version?: boolean;
   mode?: (typeof REVIEW_MODES)[number];
   radius?: number;
+  min?: number;
+  days?: number;
   diff?: string;
   spec?: string;
   inventory?: string;
@@ -41,7 +43,7 @@ export interface ParsedArgs {
 }
 
 type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
-type ValueFlag = 'mode' | 'radius' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif';
+type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   help: 'help',
@@ -58,6 +60,8 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
 };
 
 const VALUE_FLAGS: Record<string, ValueFlag> = {
+  min: 'min',
+  days: 'days',
   radius: 'radius',
   mode: 'mode',
   diff: 'diff',
@@ -134,6 +138,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       } else if (key === 'radius') {
         if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new UsageError('--radius must be an integer.');
         flags.radius = Math.min(200, Math.max(1, Number(value)));
+      } else if (key === 'min' || key === 'days') {
+        const [min, max] = key === 'min' ? [2, 50] : [1, 3650];
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min! || Number(value) > max!) {
+          throw new UsageError(`--${key} must be an integer between ${min} and ${max}.`);
+        }
+        flags[key] = Number(value);
       } else {
         flags[key] = value;
       }

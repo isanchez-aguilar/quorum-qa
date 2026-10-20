@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir as userHome } from 'node:os';
 import { resolveCommand } from '../checks/resolver.js';
@@ -9,6 +10,8 @@ import { checkPermissions, checkQwenModels, command, readProbe } from './checks.
 import { QwenProvider } from '../providers/qwen.js';
 import { CodeGraphContextProvider, hasCodeGraphIndex } from '../context/codegraph.js';
 import type { DoctorCheck } from './checks.js';
+import { ConfigError } from '../config/schema.js';
+import { RULES_FILE_NAME, validateRules } from '../rules/index.js';
 
 export type { DoctorCheck } from './checks.js';
 export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
@@ -16,6 +19,17 @@ export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
   const results: DoctorCheck[] = [];
+  try {
+    const text = await readFile(path.join(context.repoRoot, RULES_FILE_NAME), 'utf8');
+    const rules = validateRules(JSON.parse(text.replace(/^\uFEFF/, '')));
+    results.push({ id: 'rules', status: 'PASS', message: `${RULES_FILE_NAME} is valid (${rules.length} rules).` });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      const problem = error instanceof ConfigError ? error.issues[0]
+        : error instanceof SyntaxError ? 'invalid JSON' : String(error);
+      results.push({ id: 'rules', status: 'WARN', message: `${RULES_FILE_NAME}: ${problem}` });
+    }
+  }
   if (config?.checks.length && !config.setup?.length && existsSync(path.join(context.repoRoot, 'package.json'))) {
     results.push({ id: 'checks.setup', status: 'WARN', message: 'checks run in a fresh worktree without node_modules',
       fix: 'Configure setup argv commands to install dependencies before checks.' });
