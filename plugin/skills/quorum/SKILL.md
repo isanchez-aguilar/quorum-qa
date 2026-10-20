@@ -1,7 +1,7 @@
 ---
 name: quorum
 description: Review a change with Quorum, which runs several AI reviewers (Gemini through Antigravity, Codex, Claude Code, a local model) over a git diff and reports only findings verified against the code. Use when the user asks for a multi-model review, a review "with Quorum", a feature-parity check of a redesign, or wants a BLOCKER proven with a failing test.
-argument-hint: "[feature|redesign] [diff range]"
+argument-hint: "[feature|redesign|bughunt|contract|refactor|runtime] [diff range]"
 ---
 
 # /quorum
@@ -14,7 +14,7 @@ Use `quorum` if it is on PATH. Otherwise ask the user where Quorum is checked ou
 
 ## 2. Check the setup (no quota)
 
-Run `quorum doctor` in the repository to review. A FAIL line comes with a fix; show it to the user. The repository needs a committed `quorum.config.json`: Quorum reads it from the merge-base of the range, never from the change itself.
+For model review, run `quorum doctor` in the repository to review. Skip provider diagnostics for runtime R0, which only validates and prints a plan. A FAIL line comes with a fix; show it to the user. The repository needs a committed `quorum.config.json`: Quorum reads it from the merge-base of the range, never from the change itself.
 
 `quorum doctor --probe` spends one call per provider. Run it only if the user agrees.
 
@@ -24,6 +24,7 @@ Pick the mode from what the user asked:
 
 - `--mode feature --spec <file>`: the spec must have acceptance criteria as Markdown checkboxes or a list under a heading that contains "acceptance".
 - `--mode redesign --inventory <file>`, optionally with `--images <dir>` and `--rules <file>`.
+- `--mode runtime --dry-run`: validate the runtime config and print its app/flow plan without field values. Only R0 is built; execution exits 2 until R1-R3 are built. Runtime requires running the app and rejects `--no-checks`.
 
 The default range is the config's base `...HEAD`; pass `--diff <range>` or `--since <sha>` when the user names one. Pass `--author <name>` when you know which model wrote the change (`claude` if it was you), so Quorum picks reviewers from other model families.
 

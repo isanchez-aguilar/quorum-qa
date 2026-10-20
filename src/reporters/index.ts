@@ -8,7 +8,7 @@ import { refactorMarkdown, refactorSarif, type RefactorReport } from './refactor
 export interface ReviewResult extends CascadeResult {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
   refactor?: RefactorReport;
   range: string;
   headSha: string;

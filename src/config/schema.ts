@@ -1,3 +1,4 @@
+import { readRuntimeConfig } from '../runtime/config.js';
 import type { Family, QuorumConfig, Tier } from '../types/index.js';
 
 export class ConfigError extends Error {
@@ -42,7 +43,7 @@ export function resolveAuthorFamily(author: string): Family {
   );
 }
 
-export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author' | 'refactor'>> {
+export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author' | 'refactor' | 'runtime'>> {
   return {
     context: { provider: 'git' },
     base: 'origin/main',
@@ -190,6 +191,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     'budget',
     'reproduce',
     'refactor',
+    'runtime',
     'jules',
     'qwen',
     'context',
@@ -320,6 +322,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
       integer: true,
     });
   }
+  const runtime = readRuntimeConfig(top.runtime, r.issues);
   const refactorRaw = r.object(top.refactor, 'refactor', ['testCommand', 'timeoutSeconds', 'mutation']);
   const mutationRaw = r.object(refactorRaw?.mutation, 'refactor.mutation', ['maxMutants', 'budgetSeconds']);
   const refactor: QuorumConfig['refactor'] = refactorRaw === undefined ? undefined : {
@@ -373,6 +376,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     budget,
     reproduce,
     ...(refactor === undefined ? {} : { refactor }),
+    ...(runtime === undefined ? {} : { runtime }),
     jules,
     qwen,
   };

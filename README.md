@@ -185,7 +185,7 @@ omitted.
 
 | Command | Flag | Description |
 |---|---|---|
-| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor>` | Review mode |
+| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Review mode (runtime: R0 validation/dry-run only) |
 | `review` | `--deterministic-only` | Refactor evidence without provider calls |
 | `review` | `--mutation` | Refactor only: up to maxMutants extra suite runs (default 8); survivors yield SUSPECT |
 | `review` | `--allow-api-change` | List refactor API breakage without failing for it |
@@ -211,6 +211,22 @@ omitted.
 | `doctor` | `--json` | Print the diagnostic check list as JSON |
 | General | `--help` | Print this help |
 | General | `--version` | Print the version |
+
+## Runtime preview (R0)
+
+`quorum review --mode runtime --dry-run` validates the trusted config's `runtime`
+block and prints the start argv, readiness URL, flow/step counts, timeouts, image
+and resource limits. It never prints fill values. `start`, `readyUrl` and `flows`
+are required only in runtime mode; a block alone does not select the mode.
+See [RUNTIME-PLAN.md](docs/RUNTIME-PLAN.md) for the declarative flow format.
+Use synthetic test data and idempotent flows.
+
+Only configuration, validation, dry-run and the synthetic fixture app are built.
+The collector, container orchestration and verdict/reporting remain planned
+(R1-R3): execution currently exits 2 without running the app, checks or providers.
+`--no-checks` is incompatible because runtime mode must run the app.
+`--spec`, `--inventory`, `--images`, `--rules`, `--deterministic-only`,
+`--allow-api-change` and `--mutation` are rejected in runtime mode.
 
 ## Your logins, not ours
 

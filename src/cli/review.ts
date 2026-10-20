@@ -33,6 +33,7 @@ import type { CliIo } from './index.js';
 import { UsageError, type ParsedFlags } from './args.js';
 import { runRefactorEvidence, resolveRefactorTestCommand } from '../refactor/index.js';
 import { evaluateRefactorVerdict } from './refactor.js';
+import { runtimeReview } from './runtime.js';
 
 export interface ReviewDependencies {
   contextRunner?: CommandRunner;
@@ -70,6 +71,12 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  if (mode === 'runtime') {
+    if (flags.noChecks) throw new UsageError('runtime mode must run the app; --no-checks is not supported.');
+    for (const flag of ['spec', 'inventory', 'images', 'rules'] as const) {
+      if (flags[flag] !== undefined) throw new UsageError(`--${flag} is not supported in runtime mode.`);
+    }
+  }
   const deterministicOnly = mode === 'refactor' && flags.deterministicOnly === true;
   if (mode === 'refactor' && flags.noChecks) throw new UsageError('Refactor mode cannot work without running tests; --no-checks is not supported.');
   if (mode !== 'refactor' && (flags.deterministicOnly || flags.allowApiChange || flags.mutation)) throw new UsageError('--deterministic-only, --allow-api-change and --mutation require refactor mode.');
@@ -104,6 +111,11 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const parts = /^(.+?)(\.{2,3})([^.].*)$/.exec(range);
   if (!parts) throw new UsageError('Invalid range; expected <base>..HEAD or <base>...HEAD.');
   if (await revParse(parts[3]!, root, runner) !== head) throw new UsageError('The review range must end at HEAD.');
+  if (mode === 'runtime') {
+    const base = flags.since && !headConfig ? (await bootstrapConfig()).base : parts[1]!;
+    const trusted = headConfig ?? await configAt(await mergeBase(await revParse(base, root, runner), head, root, runner), root, runner);
+    return runtimeReview(trusted.runtime, flags.dryRun === true, io);
+  }
   const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner, exactBase: mode !== 'refactor' && parts[2] === '..' });
   if (mode === 'bughunt') context.radius = flags.radius ?? 40;
   if (!context.touchedFiles.length) throw new UsageError('nothing to review: the selected range touches no files.');

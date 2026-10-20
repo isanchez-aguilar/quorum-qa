@@ -84,7 +84,7 @@ export interface ReviewContext {
   contextProvider?: { requested: 'git' | 'codegraph'; available: boolean; effective: string };
   contextNotes?: string[];
   diffTruncated?: boolean;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
   diff: string;
   baseCommit: string;
   mergeBaseCommit?: string;
@@ -101,6 +101,7 @@ export interface ReviewContext {
 }
 
 export interface QuorumConfig {
+  runtime?: import('../runtime/config.js').RuntimeConfig;
   refactor?: { testCommand?: string[]; timeoutSeconds?: number; mutation?: { maxMutants?: number; budgetSeconds?: number } };
   context?: { provider: 'git' | 'codegraph' };
   base: string;
