@@ -101,7 +101,7 @@ export interface ReviewContext {
 }
 
 export interface QuorumConfig {
-  refactor?: { testCommand?: string[]; timeoutSeconds?: number };
+  refactor?: { testCommand?: string[]; timeoutSeconds?: number; mutation?: { maxMutants?: number; budgetSeconds?: number } };
   context?: { provider: 'git' | 'codegraph' };
   base: string;
   // Required, no default. Each check is an argv array, never a shell string.

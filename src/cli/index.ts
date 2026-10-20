@@ -37,6 +37,7 @@ Commands:
 Options for review:
   --mode <feature|redesign|bughunt|contract|refactor>  Review mode
   --deterministic-only      Refactor evidence only; no provider calls or logins
+  --mutation               Refactor only: sample changed lines; up to maxMutants extra suite runs (default 8)
   --allow-api-change        List breaking API changes without failing refactor review
                             Any textual signature change is breaking, including compatible
                             widening or an added optional parameter; review compatibility
@@ -114,6 +115,7 @@ export async function main(
       return EXIT_OK;
     }
 
+    if (flags.mutation && (command !== 'review' || flags.mode !== 'refactor')) throw new UsageError('--mutation requires refactor mode.');
     switch (command) {
       case 'rules': {
         if (positionals.length !== 1 || positionals[0] !== 'propose') throw new UsageError('Use quorum rules propose.');

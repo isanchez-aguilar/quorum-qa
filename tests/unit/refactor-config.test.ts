@@ -21,3 +21,24 @@ it('tracks explicit test commands separately from reproduction defaults for doct
   expect(hasConfiguredTestCommand(validateConfig({ checks: [], reproduce: { testCommand: ['node', 'runner.cjs'] } }))).toBe(true);
   expect(hasConfiguredTestCommand(validateConfig({ checks: [], refactor: { testCommand: ['node', 'runner.cjs'] } }))).toBe(true);
 });
+
+it.each([
+  { maxMutants: 0 }, { maxMutants: 26 }, { maxMutants: 1.5 }, { maxMutants: '8' },
+  { budgetSeconds: 29 }, { budgetSeconds: 3601 }, { unexpected: true },
+])('rejects invalid mutation configuration %j', mutation => {
+  expect(() => validateConfig({ checks: [], refactor: { mutation } })).toThrow();
+});
+it('defaults and validates mutation limits without enabling sampling', () => {
+  expect(validateConfig({ checks: [], refactor: { mutation: {} } }).refactor?.mutation).toEqual({ maxMutants: 8, budgetSeconds: 300 });
+  expect(validateConfig({ checks: [], refactor: { mutation: { maxMutants: 25, budgetSeconds: 3600 } } }).refactor?.mutation)
+    .toEqual({ maxMutants: 25, budgetSeconds: 3600 });
+});
+
+it('parses mutation as a boolean flag and rejects it for other commands', async () => {
+  const { main } = await import('../../src/cli/index.js');
+  expect(parseArgs(['review', '--mode', 'refactor', '--mutation']).flags.mutation).toBe(true);
+  expect(() => parseArgs(['review', '--mutation=true'])).toThrow();
+  let err = '';
+  expect(await main(['doctor', '--mutation'], { out: () => {}, err: text => { err += text; } })).toBe(2);
+  expect(err).toContain('--mutation requires refactor mode');
+});

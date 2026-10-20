@@ -54,3 +54,17 @@ it('tool failures and incomplete model coverage exit 2', () => {
   c.errors = []; c.coverage.complete = false;
   expect(evaluateRefactorVerdict(evidence(), c).exitCode).toBe(2);
 });
+
+it.each([0, 1])('survivors alone only downgrade to SUSPECT (%s)', survivors => {
+  const e = evidence();
+  e.mutation = { requested: true, candidates: 2, attempted: 2, killed: 2 - survivors, invalid: 0, budgetExhausted: false, maxMutants: 8,
+    survived: survivors ? [{ file: 'a.ts', line: 1, operator: 'integer', before: '0', after: '1' }] : [] };
+  expect(evaluateRefactorVerdict(e, cascade())).toMatchObject({ verdict: survivors ? 'SUSPECT' : 'NO BEHAVIOUR CHANGE FOUND', exitCode: 0 });
+  e.tests.regressions.push({ file: 'a.test.ts', name: 'value', status: 'failed' });
+  expect(evaluateRefactorVerdict(e, cascade())).toMatchObject({ verdict: 'NOT EQUIVALENT', exitCode: 1 });
+});
+it('invalid, skipped and budget notes alone do not change the verdict', () => {
+  const e = evidence();
+  e.mutation = { requested: true, candidates: 1, attempted: 0, killed: 0, invalid: 0, survived: [], budgetExhausted: true, skipped: ['0 mutants ran'], maxMutants: 8 };
+  expect(evaluateRefactorVerdict(e, cascade()).verdict).toBe('NO BEHAVIOUR CHANGE FOUND');
+});

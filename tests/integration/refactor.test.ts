@@ -216,3 +216,49 @@ it.each(['IMPORTANT', 'BLOCKER'] as const)('uses FakeProvider and verified %s ev
   expect(agy.calls[0]?.prompt).toContain('UNTRUSTED DETERMINISTIC EVIDENCE');
   expect(agy.calls[0]?.prompt).toContain('observable behaviour');
 });
+
+it.each([true, false])('samples mutants end to end with zero quota (pinned: %s)', async pinned => {
+  let calls = 0;
+  const checkRunner: CommandRunner = async (_command, args, options) => {
+    if (!args.some(arg => arg.startsWith('--outputFile='))) return { exitCode: 0, stdout: '', stderr: '' };
+    calls++;
+    const text = await readFile(path.join(options!.cwd!, 'sample.ts'), 'utf8');
+    const failed = pinned && ![source, source.replace('return 2', 'return 1')].includes(text);
+    await writeFile(args.find(arg => arg.startsWith('--outputFile='))!.slice('--outputFile='.length), JSON.stringify({ testResults: [{
+      name: path.join(options!.cwd!, 'sample.test.ts'), assertionResults: [{ title: 'value', status: failed ? 'failed' : 'passed', failureMessages: failed ? ['AssertionError: wrong value'] : [] }],
+    }] }));
+    return { exitCode: failed ? 1 : 0, stdout: '', stderr: '' };
+  };
+  const r = await review(['--deterministic-only', '--mutation', '--sarif', '.quorum/mutation.sarif'], { checkRunner });
+  expect(r.code, r.err).toBe(0);
+  expect(r.result?.refactor?.verdict).toBe(pinned ? 'NO BEHAVIOUR CHANGE FOUND' : 'SUSPECT');
+  expect(r.result?.refactor?.mutation).toMatchObject({ attempted: 2, killed: pinned ? 2 : 0, invalid: 0 });
+  expect(r.result?.refactor?.mutation?.survived).toHaveLength(pinned ? 0 : 2);
+  expect(calls).toBe(4); expect(r.provider.calls).toHaveLength(0); expect(r.quota).not.toHaveBeenCalled();
+  expect(await readFile(path.join(root, 'sample.ts'), 'utf8')).toBe(source);
+  expect(await readFile(path.join(root, '.quorum/report.md'), 'utf8')).toContain('## Mutation sampling');
+  const sarif = JSON.parse(await readFile(path.join(root, '.quorum/mutation.sarif'), 'utf8'));
+  expect(sarif.runs[0].results.filter((item: { ruleId: string }) => item.ruleId === 'quorum-refactor/mutant-survived')).toHaveLength(pinned ? 0 : 2);
+});
+it('dry-run prints mutation limits without running checks', async () => {
+  const checkRunner = vi.fn<CommandRunner>();
+  const r = await review(['--deterministic-only', '--mutation', '--dry-run'], { checkRunner });
+  expect(r.out).toContain('max mutants: 8'); expect(r.out).toContain('budget: 300 seconds');
+  expect(checkRunner).not.toHaveBeenCalled(); expect(r.quota).not.toHaveBeenCalled();
+});
+it('rejects mutation outside refactor mode before executing anything', async () => {
+  let err = '';
+  const forbidden = vi.fn<CommandRunner>(async () => { throw new Error('must not run'); });
+  const code = await main(['review', '--mode', 'bughunt', '--mutation'], { out: () => {}, err: text => { err += text; } }, { gitRunner: forbidden });
+  expect(code).toBe(2); expect(err).toContain('--mutation require'); expect(forbidden).not.toHaveBeenCalled();
+});
+
+it('mutation configuration alone does not enable sampling', async () => {
+  const config = JSON.parse(await readFile(path.join(root, 'quorum.config.json'), 'utf8'));
+  config.refactor.mutation = { maxMutants: 1, budgetSeconds: 30 };
+  await writeFile(path.join(root, 'quorum.config.json'), JSON.stringify(config));
+  await git('add', '.'); await git('commit', '-m', 'configure mutation limits');
+  const r = await review(['--deterministic-only', '--trust-head-config']);
+  expect(r.code, r.err).toBe(0); expect(r.result?.refactor?.mutation).toBeUndefined();
+  expect(r.quota).not.toHaveBeenCalled();
+});

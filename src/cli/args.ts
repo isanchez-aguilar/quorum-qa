@@ -33,6 +33,7 @@ export interface ParsedFlags {
   noCache?: boolean;
   noChecks?: boolean;
   trustHeadConfig?: boolean;
+  mutation?: boolean;
   deterministicOnly?: boolean;
   allowApiChange?: boolean;
 }
@@ -44,10 +45,11 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
+type BooleanFlag = 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
 type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
+  mutation: 'mutation',
   help: 'help',
   version: 'version',
   'dry-run': 'dryRun',

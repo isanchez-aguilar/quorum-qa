@@ -320,8 +320,13 @@ export function validateConfig(raw: unknown): QuorumConfig {
       integer: true,
     });
   }
-  const refactorRaw = r.object(top.refactor, 'refactor', ['testCommand', 'timeoutSeconds']);
+  const refactorRaw = r.object(top.refactor, 'refactor', ['testCommand', 'timeoutSeconds', 'mutation']);
+  const mutationRaw = r.object(refactorRaw?.mutation, 'refactor.mutation', ['maxMutants', 'budgetSeconds']);
   const refactor: QuorumConfig['refactor'] = refactorRaw === undefined ? undefined : {
+    ...(mutationRaw === undefined ? {} : { mutation: {
+      maxMutants: r.number(mutationRaw.maxMutants, 'refactor.mutation.maxMutants', 8, { min: 1, max: 25, integer: true }),
+      budgetSeconds: r.number(mutationRaw.budgetSeconds, 'refactor.mutation.budgetSeconds', 300, { min: 30, max: 3600 }),
+    } }),
     timeoutSeconds: r.number(refactorRaw.timeoutSeconds, 'refactor.timeoutSeconds', 600, { min: 30, max: 3600 }),
     ...(refactorRaw.testCommand === undefined ? {} : {
       testCommand: r.stringArray(refactorRaw.testCommand, 'refactor.testCommand', [], false),
