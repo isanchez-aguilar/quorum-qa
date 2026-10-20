@@ -23,13 +23,18 @@ export async function assertNoLinks(file: string, boundary?: string): Promise<vo
   let cursor = path.resolve(file);
   const stop = boundary === undefined ? path.dirname(cursor) : path.resolve(boundary);
   if (!inside(relative(stop, cursor))) throw new UsageError('Input is outside its boundary.');
-  if (cursor === stop) {
+  // path.relative ignores case on Windows, so the stop test must too: a drive letter written as c: and
+  // C: is the same place, and a strict comparison never matched and walked up to the disk root forever.
+  const same = (a: string, b: string) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  if (same(cursor, stop)) {
     if ((await lstat(cursor)).isSymbolicLink()) throw new UsageError('Input must not contain a symlink.');
     return;
   }
-  while (cursor !== stop) {
+  while (!same(cursor, stop)) {
     if ((await lstat(cursor)).isSymbolicLink()) throw new UsageError('Input must not contain a symlink.');
-    cursor = path.dirname(cursor);
+    const parent = path.dirname(cursor);
+    if (parent === cursor) throw new UsageError('Input is outside its boundary.');
+    cursor = parent;
   }
 }
 
@@ -64,7 +69,8 @@ function importSpecifiers(source: string): string[] {
         if (source[i] === '\\') i++;
         i++;
       }
-      if (kind && i < deadline && source[i] === char && char !== '`' && braces === 0
+      // A template literal is a plain specifier only when it has no ${...} substitution.
+      if (kind && i < deadline && source[i] === char && (char !== '`' || !source.slice(start, i).includes('${')) && braces === 0
         && (from || kind === 'import' || (kind === 'require' && call))) specs.push(source.slice(start, i));
       reset();
       if (source[i] === char) i++;

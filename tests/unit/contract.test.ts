@@ -171,3 +171,29 @@ it('rejects an external rules document selected as copy', async () => {
   await put('rules.md', '- Charge a deposit');
   await expect(loadCopy(path.join(root, 'rules.md'), path.join(root, 'repo'), path.join(root, 'rules.md'))).rejects.toThrow('rules document');
 });
+
+it('stops at a boundary written with a different drive-letter case instead of walking to the disk root', async t => {
+  // Found by Gemini's re-review and reproduced: with c: against C:, the strict comparison never matched.
+  if (process.platform !== 'win32') { t.skip('Drive-letter case only differs on Windows'); return; }
+  await put('repo/sub/a.ts', 'x');
+  const file = path.join(root, 'repo/sub/a.ts');
+  const flip = (value: string) => (value[0] === value[0]!.toUpperCase() ? value[0]!.toLowerCase() : value[0]!.toUpperCase()) + value.slice(1);
+  const settled = await Promise.race([
+    assertNoLinks(file, flip(path.join(root, 'repo'))).then(() => 'returned'),
+    new Promise<string>(resolve => setTimeout(() => resolve('hang'), 2000)),
+  ]);
+  expect(settled).toBe('returned');
+});
+it('throws instead of looping when the file is not below the boundary', async () => {
+  await put('repo/a.ts', 'x'); await put('other/b.ts', 'x');
+  await expect(assertNoLinks(path.join(root, 'other/b.ts'), path.join(root, 'repo'))).rejects.toThrow('outside its boundary');
+});
+it('finds dynamic imports and requires written as template literals without substitutions', async () => {
+  await put('a.ts', 'export const a = 1;');
+  await put('sample.ts', 'const m = await import(`./a`);');
+  expect((await buildContractContext(context(root), root)).groups[0]?.imports.map(f => f.file)).toEqual(['a.ts']);
+  await put('sample.ts', 'const m = require(`./a`);');
+  expect((await buildContractContext(context(root), root)).groups[0]?.imports.map(f => f.file)).toEqual(['a.ts']);
+  await put('sample.ts', 'const name = "a"; const m = await import(`./${name}`);');
+  expect((await buildContractContext(context(root), root)).groups[0]?.imports).toEqual([]);
+});
