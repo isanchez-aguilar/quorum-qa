@@ -91,6 +91,12 @@ node bin/quorum.js review --mode contract --rules docs/business-rules.md --copy 
 # Hunt pre-existing bugs in unchanged code around the diff (default radius: 40 lines)
 node bin/quorum.js review --mode bughunt --diff origin/main...HEAD --radius 40
 
+# Compare tests, public exports and dependents without provider calls or logins
+node bin/quorum.js review --mode refactor --diff origin/main...HEAD --deterministic-only
+
+# Add the normal model cascade to the refactor evidence
+node bin/quorum.js review --mode refactor --diff origin/main...HEAD
+
 # Redesign review auditing feature parity and visual assets
 node bin/quorum.js review --mode redesign --diff origin/main...HEAD --inventory docs/old-features.md --images shots/
 
@@ -124,6 +130,26 @@ proposals. Generated rules start as warnings and still need human review.
 
 ## How a review works
 
+Refactor mode runs setup and the test command in separate merge-base and HEAD
+worktrees. Optional `refactor` configuration accepts `testCommand` (an argv array)
+and `timeoutSeconds` (default 600, range 30–3600). Without an explicit command,
+the reproduction command supplies the suite runner with file-specific selectors
+removed: positional test paths/names, `{file}`/`{testFile}`, `-t`,
+`--testNamePattern`, `--testPathPattern(s)`, `--runTestsByPath`, and old
+`--outputFile` destinations. Launcher prefixes and common suite options such as
+`--config` are preserved; use an explicit command for custom launchers, for
+example `"refactor": { "testCommand": ["pnpm", "vitest", "run"], "timeoutSeconds": 600 }`.
+Both runners must write Vitest/Jest-compatible JSON; console prose is
+never treated as test evidence. Configure setup to install each revision's own
+dependencies. `--no-checks` is incompatible with refactor and exits 2.
+
+Refactor reports **NOT EQUIVALENT** (exit 1), **SUSPECT** (exit 0),
+**NO BEHAVIOUR CHANGE FOUND** (exit 0), or **UNKNOWN** (exit 2).
+Tests and model review cannot prove equivalence. Test edits/removals and missing
+test dependents remain suspect; tests fixed at HEAD are reported without implying
+equivalence. `--allow-api-change` lists API breakage as an allowed note.
+Mutation sampling is reserved for part 2.
+
 - **Deterministic checks:** Configured linters, typecheckers, and test suites run first in a disposable worktree before calling any model.
 - **Cascade:** Diff chunks go to a cheap triage model first. A finding escalates to the confirm tier when it is a BLOCKER, touches a focus area (money, auth, permissions), has low confidence, or comes only from a local model; unparseable answers go to the review tier.
 - **Verifier:** Every finding must point at a real file inside the repo, and its quote must match the code (exactly, or near-exactly with the same operators, literals and identifiers). Anything else is dropped.
@@ -150,7 +176,9 @@ proposals. Generated rules start as warnings and still need human review.
 
 | Command | Flag | Description |
 |---|---|---|
-| `review` | `--mode <feature\|redesign\|bughunt>` | Review mode |
+| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor>` | Review mode |
+| `review` | `--deterministic-only` | Refactor evidence without provider calls |
+| `review` | `--allow-api-change` | List refactor API breakage without failing for it |
 | `review` | `--radius <n>` | Bughunt lines before/after each hunk; default 40, clamped to 1-200 |
 | `review` | `--diff <range>` | Git range to review, e.g. origin/main...HEAD |
 | `review` | `--spec <file>` | Spec with the acceptance criteria (feature) |

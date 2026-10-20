@@ -3,7 +3,7 @@ import { copyFile, lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:f
 import path from 'node:path';
 import { DEFAULT_CATALOG, parseModelRef, withQwenModel } from '../catalog/index.js';
 import type { QuotaSnapshot } from '../catalog/groups.js';
-import { createExecutionPlan, formatDryRun, runCascade } from '../cascade/index.js';
+import { createExecutionPlan, formatDryRun, runCascade, type CascadeResult } from '../cascade/index.js';
 import { runDeterministicChecks } from '../checks/index.js';
 import { resolveAuthorFamily, validateConfig } from '../config/index.js';
 import { buildReviewContext } from '../context/index.js';
@@ -31,6 +31,8 @@ import { checkoutDifference, checkoutSnapshot } from '../worktree/checkout.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
 import type { CliIo } from './index.js';
 import { UsageError, type ParsedFlags } from './args.js';
+import { runRefactorEvidence, resolveRefactorTestCommand } from '../refactor/index.js';
+import { evaluateRefactorVerdict } from './refactor.js';
 
 export interface ReviewDependencies {
   contextRunner?: CommandRunner;
@@ -68,6 +70,10 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  const deterministicOnly = mode === 'refactor' && flags.deterministicOnly === true;
+  if (mode === 'refactor' && flags.noChecks) throw new UsageError('Refactor mode cannot work without running tests; --no-checks is not supported.');
+  if (mode !== 'refactor' && (flags.deterministicOnly || flags.allowApiChange)) throw new UsageError('--deterministic-only and --allow-api-change require refactor mode.');
+  if (mode === 'refactor' && (flags.spec || flags.inventory)) throw new UsageError('--spec and --inventory are not supported in refactor mode.');
   if (mode === 'contract' && !flags.rules) throw new UsageError('--rules is required for contract mode.');
   if (mode !== 'contract' && flags.copy) throw new UsageError('--copy requires contract mode.');
   if (mode === 'contract' && (flags.spec || flags.inventory)) throw new UsageError('--spec and --inventory are not supported in contract mode.');
@@ -98,7 +104,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const parts = /^(.+?)(\.{2,3})([^.].*)$/.exec(range);
   if (!parts) throw new UsageError('Invalid range; expected <base>..HEAD or <base>...HEAD.');
   if (await revParse(parts[3]!, root, runner) !== head) throw new UsageError('The review range must end at HEAD.');
-  const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner, exactBase: parts[2] === '..' });
+  const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner, exactBase: mode !== 'refactor' && parts[2] === '..' });
   if (mode === 'bughunt') context.radius = flags.radius ?? 40;
   if (!context.touchedFiles.length) throw new UsageError('nothing to review: the selected range touches no files.');
   const trustBase = flags.since && !headConfig
@@ -128,7 +134,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     throw new UsageError('No acceptance criteria detected. Use Markdown checkboxes (- [ ] criterion), or a list under a heading containing "acceptance".');
   }
   const catalog = withQwenModel(dependencies.catalog ?? DEFAULT_CATALOG, config.qwen?.model);
-  const selected = await selectContextProvider(config.context?.provider ?? 'git', root,
+  const selected = await selectContextProvider(deterministicOnly ? 'git' : config.context?.provider ?? 'git', root,
     dependencies.contextProvider ?? new CodeGraphContextProvider({ now }));
   context.contextProvider = { requested: config.context?.provider ?? 'git', available: selected.available, effective: selected.provider.name };
   context.contextNotes = selected.notes;
@@ -153,12 +159,23 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (copy.files.some(file => file.file === context.rulesFile)) throw new UsageError('--copy must not include the rules document.');
     context.contract!.copy = copy.files; context.contract!.notes.push(...copy.notes);
   }
-  const plan = createExecutionPlan(context, config, catalog);
+  const plan = deterministicOnly ? undefined : createExecutionPlan(context, config, catalog);
   const quotaFile = path.join(root, '.quorum', 'quota.json');
   let snapshot = await readQuota(quotaFile);
   if (flags.dryRun) {
     const clock = { now, setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>) };
-    io.out(formatDryRun(createExecutionPlan(context, flags.noChecks ? { ...config, checks: [], setup: [] } : config, catalog, snapshot, { clock })) + '\n');
+    const plannedConfig = flags.noChecks ? { ...config, checks: [], setup: [] }
+      : mode === 'refactor' ? { ...config, checks: [resolveRefactorTestCommand(config)] } : config;
+    if (!deterministicOnly) io.out(formatDryRun(createExecutionPlan(context, plannedConfig, catalog, snapshot, { clock })) + '\n');
+    if (mode === 'refactor') {
+      io.out('Refactor evidence plan (no commands run):\n'
+        + `  Disposable worktree at merge-base: ${context.mergeBaseCommit ?? context.baseCommit}\n`
+        + `  Disposable worktree at HEAD: ${head}\n`
+        + `  Setup in each worktree: ${JSON.stringify(config.setup ?? [])}\n`
+        + `  Test command in each worktree: ${JSON.stringify(resolveRefactorTestCommand(config))}\n`
+        + `  Test timeout: ${config.refactor?.timeoutSeconds ?? 600} seconds\n`
+        + `  Model review: ${deterministicOnly ? 'off (--deterministic-only)' : 'on (normal cascade)'}\n`);
+    }
     if (flags.noChecks) io.out('Deterministic checks: skipped (--no-checks).\n');
     io.out(`Deterministic rules: ${flags.noChecks ? 0 : deterministicRules.length} (from ${rulesCommit}${flags.noChecks ? '; skipped --no-checks' : ''}).\n`);
     return 0;
@@ -169,13 +186,19 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const message = mode === 'contract' && flags.copy ? 'Checkout has uncommitted changes; code is reviewed at committed HEAD, alongside explicitly supplied copy.' : 'Checkout has uncommitted changes; only committed HEAD was reviewed.';
     warn(message); io.err(`quorum: ${message}\n`);
   }
-  plan.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
+  plan?.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
   const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);
   ruleChecks?.notes.forEach(warn);
+  const evidence = mode === 'refactor' ? await runRefactorEvidence(context, config, {
+    root, gitRunner: runner, checkRunner: dependencies.checkRunner ?? runCommand, warn,
+    announce: message => io.err(message.endsWith('\n') ? message : message + '\n'),
+    ...(deterministicOnly ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
+  }) : undefined;
+  if (evidence) context.refactorSummary = evidence.summary;
   const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider({ ...config.qwen, fetch: dependencies.fetch })]]);
   const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
   const groups = new Set<string>();
-  for (const ref of [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()]) {
+  for (const ref of deterministicOnly ? [] : [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()]) {
     const model = parseModelRef(ref, catalog);
     const entry = catalog.find(item => item.provider === model.provider && item.id === model.model)!;
     if (groups.has(entry.quotaGroup)) continue;
@@ -189,7 +212,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   }
   snapshot = readings;
   let checks: ReviewResult['checks'] = null;
-  if (!flags.noChecks) {
+  if (!flags.noChecks && mode !== 'refactor') {
     if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
     const checksTree = await createReviewWorktree(root, head, runner, warn);
     try {
@@ -203,9 +226,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     finally { try { await checksTree.cleanup(); } catch (error) { warn(`Checks worktree cleanup failed: ${String(error)}`); } }
   }
   context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)
-    .map(check => ({ name: check.argv.join(' '), stdout: check.stdoutTail, stderr: check.stderrTail }))).slice(0, 8192);
+    .map(check => ({ name: check.argv.join(' '), stdout: check.stdoutTail, stderr: check.stderrTail })) ?? []).slice(0, 8192);
   const budget = new RunBudget(config.budget, { ...systemClock, now });
-  const enrichment = await selected.provider.enrich(context, reviewChunks(context).chunks, {
+  // Refactor already queried bounded callers for its blast radius; do not spend that cap twice.
+  const enrichment = mode === 'refactor' ? { perFile: new Map<string, string>(), notes: [] } : await selected.provider.enrich(context, reviewChunks(context).chunks, {
     runner: dependencies.contextRunner ?? runCommand, deadlineMs: budget.remainingMs,
   });
   context.providerContext = enrichment.perFile;
@@ -217,13 +241,14 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   baseline = afterContext;
   const runId = `qrm-${randomUUID()}`;
   const timestamp = new Date(now()).toISOString();
-  const verificationTree = await createReviewWorktree(root, head, runner, warn);
-  const imageDirectory = `${verificationTree.path}-images`;
-  const copyDirectory = `${verificationTree.path}-copy`;
-  const cache = flags.noCache ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root);
+  const verificationTree = deterministicOnly ? undefined : await createReviewWorktree(root, head, runner, warn);
+  const attachmentRoot = verificationTree?.path ?? path.join(root, '.quorum', runId);
+  const imageDirectory = `${attachmentRoot}-images`;
+  const copyDirectory = `${attachmentRoot}-copy`;
+  const cache = flags.noCache || deterministicOnly ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root);
   let result: ReviewResult;
   try {
-    try { await atomicWrite(quotaFile, JSON.stringify(snapshot), root); } catch (error) { warn(`Quota write failed: ${String(error)}`); }
+    if (!deterministicOnly) try { await atomicWrite(quotaFile, JSON.stringify(snapshot), root); } catch (error) { warn(`Quota write failed: ${String(error)}`); }
     for (const file of context.contract?.copy ?? []) {
       const destination = path.join(copyDirectory, file.file);
       await mkdir(path.dirname(destination), { recursive: true });
@@ -233,13 +258,16 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changedBefore) throw new Error(changedBefore);
     if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
-    const cascade = await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, copyVerificationRoot: copyDirectory, cache,
+    const cascade: CascadeResult = deterministicOnly ? {
+      reviewedFamilies: [], cacheHits: 0, findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [],
+      coverage: { reviewedFiles: [...context.touchedFiles], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: evidence?.available === true },
+    } : await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree?.path, copyVerificationRoot: copyDirectory, cache,
       ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
         dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
           noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
     const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
-    const clean = await isClean(verificationTree.path, runner);
+    const clean = !verificationTree || await isClean(verificationTree.path, runner);
     if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
     const families = [...cascade.reviewedFamilies];
     // Cached reviews are still independent reviews by the original model family.
@@ -250,8 +278,11 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
     const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
       .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
-    const exitCode = failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
+    const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true) : undefined;
+    if (evidence && !evidence.available) cascade.coverage.complete = false;
+    const exitCode = verdict ? verdict.exitCode : failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
     result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
+      ...(evidence && verdict ? { refactor: { ...evidence, ...verdict, allowApiChange: flags.allowApiChange === true, modelReview: !deterministicOnly } } : {}),
       ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
       criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
     if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();
@@ -268,7 +299,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   } finally {
     try { await rm(copyDirectory, { recursive: true, force: true }); } catch (error) { warn(`Copy cleanup failed: ${String(error)}`); }
     try { await rm(imageDirectory, { recursive: true, force: true }); } catch (error) { warn(`Image cleanup failed: ${String(error)}`); }
-    try { await verificationTree.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
+    try { await verificationTree?.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
   }
   result.warnings.push(...warnings.filter(w => !result.warnings.includes(w)));
   async function save(file: string, render: () => string, label: string): Promise<void> {

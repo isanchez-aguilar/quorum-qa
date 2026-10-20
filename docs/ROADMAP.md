@@ -26,7 +26,7 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 
 ## v2: more modes
 - [x] **Precision:** confirm single-source IMPORTANT findings from the triage tier in batches of up to five using remaining budget (decision 22). Rejections are reported separately; unanswered findings carry a visible single-model tag.
-- **refactor:** the tests at base and at head, a diff of the public API surface, mutation testing on the touched code, and the blast radius.
+- **refactor (part 1 done, decision 25):** tests at merge-base and head, public API surface diff, blast radius and model review; `--deterministic-only` needs no provider calls. Mutation sampling remains part 2.
 - [x] **bughunt:** pre-existing bugs near the diff, reported separately, with bounded HEAD windows and independent BLOCKER confirmation.
 - **contract (done):** code compared against business-rules clauses and UI copy, with direct imports, verified evidence, Rules coverage and SARIF.
 - **runtime:** Playwright flows that collect console errors, 4xx/5xx responses, blank pages and technical text shown to users.

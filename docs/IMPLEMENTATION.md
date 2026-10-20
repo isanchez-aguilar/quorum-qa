@@ -1211,6 +1211,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 24. **v2 rule mining (2026-10-19):** Final reported verified findings, including unconfirmed and bughunt change-point sections but excluding confirmation rejections, append to local `.quorum/findings.jsonl` under the ledger's atomic lock. Quotes are capped at 400 characters; exceeding 5 MiB retains the newest complete records within 2.5 MiB. `quorum rules propose` clusters single-line evidence shapes with 3–40 tokens, defaults to three occurrences in 90 days, and requires two distinct runs and files. OPTIONAL/improvement findings never qualify. Proposals self-verify and measure noise on bounded tracked HEAD text without models. Humans accept rules into `quorum.rules.json`; it is never generated automatically. Review reads that file from the same trusted commit as config (merge-base, or committed HEAD with `--trust-head-config`) and checks added lines before models. Each regex runs in a worker with a one-second deadline; lines over 2000 characters are skipped with a note, and timeouts warn. Matches stay outside model findings, cache, verification, dedupe and cascade. Error matches exit 1 even with incomplete coverage; warnings preserve existing coverage/BLOCKER exit semantics. `--no-checks` skips rules; dry-run and doctor disclose them.
 
+25. **v2 refactor, part 1 (2026-10-19):** `--mode refactor` collects deterministic evidence in disposable merge-base and HEAD worktrees, running trusted setup and the suite test command through the checks resolver/runner. Shared machine-readable reporter arguments and `parseTestReport` supply test identities; human output is never evidence. Optional `refactor.testCommand` overrides the reproduction-derived suite command; `timeoutSeconds` defaults to 600 (30–3600). Tests compare regression/fixed/removed/added/failing-both/skipped changes and disclose edited test files. A bounded lexical TS/JS export scanner, package-field diff and two-hop reverse relative imports report API breakage and blast radius. The normal cascade receives an untrusted deterministic summary in its stable, cache-keyed prefix; `--deterministic-only` skips provider calls. Verdicts are NOT EQUIVALENT (1), SUSPECT (0), NO BEHAVIOUR CHANGE FOUND (0), and UNKNOWN (2); unavailable evidence stays UNKNOWN unless a verified BLOCKER forces 1. `--allow-api-change` makes API breakage a note; `--no-checks` exits 2. Mutation sampling is part 2 and is not implemented here.
+
 ## Review corrections
 
 Claude checked Gemini's draft on 2026-10-12. Each item below changed the draft:
@@ -2738,3 +2740,87 @@ expectation mismatch; preserving its wording while explaining error-severity
 rules fixed it. The final full run also includes the added 50-match reporting
 cap and CLI history-window cases. `git diff --check` passed. No new logs were
 left in the repository; pre-existing `.quorum/` contents were not removed.
+
+## v2 refactor (part 1) as built
+
+Decision 25 adds `--mode refactor`, `--deterministic-only` and
+`--allow-api-change`, without dependencies. Mutation sampling is part 2 and
+is deliberately absent.
+
+- The review diff and both test revisions use merge-base and committed HEAD.
+  Trusted-base configuration (or explicit `--trust-head-config`) supplies setup
+  and test argv. Each side gets a disposable worktree and fresh temporary JSON
+  report; setup precedes tests through the existing resolver/runner. Setup
+  failure, timeout, absent/malformed report or incomplete test-suite execution
+  makes evidence unavailable. Cleanup runs for both sides on failure too.
+- `refactor.testCommand` is optional. Its fallback starts with
+  `reproduce.testCommand`, retaining the runner/launcher and suite options while
+  removing positional test selectors, `{file}`/`{testFile}`, test-name/path
+  filters and old output destinations. Explicit refactor argv avoids this
+  heuristic for custom launchers. The timeout defaults to 600 seconds, bounded
+  to 30–3600. The shared `machineTestCommand` adds JSON/output-file arguments
+  for both reproduction and refactor; no human-readable output is parsed.
+- `parseTestReport` preserves describe segments and title when supplied, with
+  the existing full-name fallback. Comparison normalizes path separators and
+  dot segments, reports all requested transitions, and separately lists changed
+  test files. Duplicate identities make evidence unavailable rather than
+  overwriting results. Fixed tests never imply equivalence.
+- The hand-written lexical export scan excludes comments/strings and handles
+  declarations, defaults, lists and re-exports within bounded source input.
+  Headers stop at the specified delimiter and normalize whitespace to at most
+  300 characters. A rename compares headers with the declared name replaced by
+  a placeholder, preserving the original before/after text for reporting.
+  Named lists retain their list text; comparison uses individual bindings and
+  source specifiers so adding a binding does not break unchanged exports.
+  Package conditional `exports` ordering remains significant.
+- Reverse relative imports include two hops, cycle handling, test markers and
+  missing test dependents. Scanning skips links and dependency directories,
+  limits source to 64 KiB/file and 3000 files, and lists at most 200 dependents
+  with a note. Coverage omissions remain incomplete. Optional CodeGraph callers
+  are bounded untrusted supplemental data; stale test callers cannot establish
+  test coverage. No index is created.
+- Normal refactor review uses the existing cascade, verification, confirmation,
+  routes, budget, cache and ledger. A stable untrusted deterministic summary
+  and its hash participate in prompt identity. Findings display as suspected
+  behaviour changes, without origin labels. Deterministic-only performs no
+  provider quota, login, model or context-provider calls.
+- Markdown includes verdict, base/head counts, test transitions, API changes
+  and blast radius; long evidence lists are capped with remainder counts.
+  SARIF retains structured refactor evidence and deterministic results under
+  `quorum-refactor/<kind>`. Allowed API changes are notes. Refactor uses
+  decision 25's verdict/exit matrix; deterministic rule matches remain visible
+  but do not independently override that matrix.
+- Dry-run describes both evidence worktrees, setup, suite argv, timeout and
+  model-review state without creating worktrees or executing those commands.
+  `--no-checks` is rejected before Git/provider activity. Doctor warns when
+  neither test command is configured.
+
+Tests use synthetic JSON, repositories and Node test-runner scripts, plus
+FakeProvider and injected command runners. New command/parser, evidence,
+reporter and CLI tests were observed failing before their implementation.
+Internal read-only QA exercised scanner edge cases and final prompt bounds;
+it is the same model family and does not replace external cross-family review.
+No provider CLI, real Qwen/CodeGraph call, dependency installation, branch switch,
+commit or push was used. Linux/macOS and opt-in container execution remain
+unverified.
+
+Files changed for part 1:
+
+- Runtime: `src/refactor/{index,api,blast}.ts`, `src/cli/{args,index,review,refactor}.ts`,
+  `src/cascade/{index,prompts}.ts`, `src/config/schema.ts`,
+  `src/context/contract.ts`, `src/doctor/index.ts`, `src/modes/index.ts`,
+  `src/reporters/{index,refactor}.ts`,
+  `src/reproduce/{command,evaluate,index,isolation}.ts`, `src/types/index.ts`.
+- Tests: `tests/integration/refactor.test.ts`, `tests/unit/args.test.ts`,
+  `tests/unit/test-command.test.ts`, and
+  `tests/unit/refactor{,-blast,-config,-doctor,-prompts,-reporters,-verdict}.test.ts`.
+- Documentation: `README.md`, `docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.
+
+Final Windows validation: `pnpm.cmd typecheck` passed. With
+`QUORUM_CONTAINER_TESTS=0`, `pnpm.cmd test` rebuilt the CLI and passed all
+**61 test files: 1,402 passed, 7 skipped** (100.49 seconds). Skips are existing
+environment gates. The first complete run had one old argument test still
+expecting `refactor` to be invalid; its unknown-mode fixture now uses `runtime`.
+The final run includes all subsequent edge-case tests. `git diff --check`
+passed. No new repository logs were left. The branch remains
+`feat/v2-refactor`, with all changes uncommitted.

@@ -43,7 +43,7 @@ export async function assertNoLinks(file: string, boundary?: string): Promise<vo
  * Only named binding braces allow line breaks; a specifier never spans lines.
  * A pending keyword expires after 4 KiB, even inside a named binding list.
  */
-function importSpecifiers(source: string): string[] {
+export function importSpecifiers(source: string): string[] {
   const specs: string[] = [];
   let kind = ''; let deadline = 0; let braces = 0; let from = false; let call = false;
   const reset = () => { kind = ''; braces = 0; from = false; call = false; };

@@ -59,6 +59,11 @@ export function parseTestReport(raw: unknown, worktreeRoot = '/work'): TestRepor
       const name = typeof assertion.fullName === 'string' ? assertion.fullName : assertion.title;
       if (typeof name !== 'string') return null;
       const test: Test = { file, name, status: assertion.status === 'passed' ? 'passed' : assertion.status === 'failed' ? 'failed' : 'skipped' };
+      if (typeof assertion.title === 'string' && Array.isArray(assertion.ancestorTitles)
+        && assertion.ancestorTitles.every(title => typeof title === 'string')) {
+        test.title = assertion.title;
+        test.ancestorTitles = [...assertion.ancestorTitles] as string[];
+      }
       if (test.status === 'failed') {
         const messages = (assertion.failureMessages as string[]).map(cleanMessage);
         for (const message of messages) {

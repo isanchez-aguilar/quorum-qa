@@ -10,6 +10,7 @@ import type { CommandRunner, Finding, QuorumConfig, ReproductionProposal, Review
 import { createReviewWorktree } from '../worktree/index.js';
 import { evaluateReproduction, infrastructureFailure, parseTestReport, passedAtBase } from './evaluate.js';
 import { runIsolatedTest } from './isolation.js';
+import { machineTestCommand } from './command.js';
 import { writeProposedTest } from './write.js';
 
 export interface ReproductionOptions {
@@ -52,8 +53,7 @@ async function runHostTest(worktree: string, testFile: string, config: QuorumCon
   const directory = await mkdtemp(path.join(tmpdir(), 'quorum-host-report-'));
   const reportFile = path.join(directory, 'report.json');
   try {
-    const jest = config.testCommand.some(arg => /(?:^|[/\\])jest(?:\.[cm]?js)?$/.test(arg));
-    const argv = [...config.testCommand.slice(1), `./${testFile}`, ...(jest ? ['--json', `--outputFile=${reportFile}`] : ['--reporter=json', `--outputFile=${reportFile}`])];
+    const argv = machineTestCommand(config.testCommand, reportFile, testFile).slice(1);
     const env = hostEnvironment();
     const command = resolveCommand(config.testCommand[0]!, argv, { cwd: worktree, env });
     const result = await runner(command.file, command.args, { cwd: worktree, timeoutMs, windowsVerbatimArguments: command.windowsVerbatimArguments,
