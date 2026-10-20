@@ -1,9 +1,10 @@
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { contractClauses } from '../../src/modes/index.js';
-import { buildContractContext, loadCopy } from '../../src/context/contract.js';
+import { assertNoLinks, buildContractContext, loadCopy } from '../../src/context/contract.js';
 import { reviewChunks } from '../../src/cascade/prompts.js';
 import { parseArgs } from '../../src/cli/args.js';
 import { context } from '../fixtures/cascade.js';
@@ -11,6 +12,89 @@ let root: string;
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), 'quorum-contract-')); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 async function put(file: string, text: string) { await mkdir(path.dirname(path.join(root, file)), { recursive: true }); await writeFile(path.join(root, file), text); }
+it.each([
+  "import x from './a'", 'import {a, b} from "./a"', "import * as x from './a'",
+  "import './a'", "import('./a')", "require('./a')", "export * from './a'",
+  "export {x} from './a'", "import {\n a,\n b\n} from './a'",
+])('finds supported dependency syntax: %s', async source => {
+  await put('sample.ts', source); await put('a.ts', 'export const a = 1;');
+  expect((await buildContractContext(context(root), root)).groups[0]?.imports.map(f => f.file)).toEqual(['a.ts']);
+});
+it.each([['sample.ts', './'], ['nested/sample.ts', '../'], ['sample.ts', './.']])('resolves root index from %s via %s', async (file, spec) => {
+  await put(file!, `import '${spec}';`); await put('index.ts', 'export const a = 1;');
+  const c = { ...context(root), touchedFiles: [file!] };
+  expect((await buildContractContext(c, root)).groups[0]?.imports.map(f => f.file)).toEqual(['index.ts']);
+});
+it.each([
+  ['import spaces', 'import ', ' '], ['import words', 'import ', 'a '],
+  ['import commas', 'import {', ','], ['long line', '', 'a'],
+  ['require spaces', 'require(', ' '], ['export spaces', 'export ', ' '],
+])('scans 64 KiB %s in under 200 ms', async (_name, prefix, fill) => {
+  const source = (prefix + fill.repeat(65536)).slice(0, 65536);
+  await put('sample.ts', source);
+  const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    import(workerData.module).then(async ({ buildContractContext }) => {
+      const start = performance.now();
+      await buildContractContext(workerData.context, workerData.root);
+      parentPort.postMessage(performance.now() - start);
+    }).catch(error => { throw error; });
+  `, { eval: true, workerData: { module: new URL('../../dist/context/contract.js', import.meta.url).href, context: context(root), root } });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const elapsed = await new Promise<number>((resolve, reject) => {
+      timer = setTimeout(() => resolve(Infinity), 2000);
+      worker.once('message', resolve); worker.once('error', reject);
+    });
+    expect(elapsed).toBeLessThan(200);
+  } finally { clearTimeout(timer); await worker.terminate(); }
+});
+it('keeps clause extraction linear on adversarial lines', () => {
+  for (const text of [' '.repeat(65536), '- ' + ' '.repeat(65534), '1'.repeat(65536), '['.repeat(65536)]) {
+    const start = performance.now(); contractClauses(text);
+    expect(performance.now() - start).toBeLessThan(200);
+  }
+});
+it('bounds look-ahead and does not search other statements or ordinary lines', async () => {
+  await put('a.ts', 'export const a = 1;');
+  for (const source of ["import\n'./a'", "export *\nfrom './a'", "import ; './a'",
+    "import " + ' '.repeat(4096) + "'./a'", "// import './a'", `const s = "import './a'";`]) {
+    await put('sample.ts', source);
+    expect((await buildContractContext(context(root), root)).groups[0]?.imports).toEqual([]);
+  }
+});
+it('rejects outside imports even when the target exists', async () => {
+  await put('outside.ts', 'export const outside = 1;');
+  await put('repo/sample.ts', "import '../outside'; import '/index';");
+  const repo = path.join(root, 'repo');
+  expect((await buildContractContext(context(repo), repo)).groups[0]?.imports).toEqual([]);
+});
+it('accepts linked ancestors for worktrees and explicit inputs', async t => {
+  await put('real/repo/sample.ts', "import './a';"); await put('real/repo/a.ts', 'export const a = 1;');
+  await put('real/rules.md', '- A rule'); await put('real/copy/a.txt', 'Copy');
+  try { await symlink(path.join(root, 'real'), path.join(root, 'alias'), 'junction'); }
+  catch (error) { if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) { t.skip(`OS refused junction: ${(error as Error).message}`); return; } throw error; }
+  const repo = path.join(root, 'alias/repo');
+  expect((await buildContractContext(context(repo), repo)).groups[0]?.imports.map(f => f.file)).toEqual(['a.ts']);
+  await expect(assertNoLinks(path.join(root, 'alias/rules.md'))).resolves.toBeUndefined();
+  expect((await loadCopy(path.join(root, 'alias/copy'), repo)).files).toHaveLength(1);
+  expect((await loadCopy(path.join(root, 'alias/copy/a.txt'), repo)).files).toHaveLength(1);
+});
+it('rejects linked copy entries and worktree components below the root', async () => {
+  await put('real/a.ts', 'export const a = 1;'); await put('sample.ts', "import './linked/a';");
+  await mkdir(path.join(root, 'copy'));
+  await symlink(path.join(root, 'real'), path.join(root, 'linked'), 'junction');
+  await symlink(path.join(root, 'real'), path.join(root, 'copy/entry'), 'junction');
+  expect((await buildContractContext(context(root), root)).groups[0]?.imports).toEqual([]);
+  await expect(loadCopy(path.join(root, 'copy'), root)).rejects.toThrow('symlink');
+});
+it('rejects a symlink file itself', async t => {
+  await put('real.txt', 'Copy');
+  try { await symlink(path.join(root, 'real.txt'), path.join(root, 'link.txt'), 'file'); }
+  catch (error) { if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) { t.skip(`OS refused file symlink: ${(error as Error).message}`); return; } throw error; }
+  await expect(assertNoLinks(path.join(root, 'link.txt'))).rejects.toThrow('symlink');
+  await expect(loadCopy(path.join(root, 'link.txt'), root)).rejects.toThrow('symlink');
+});
 it('extracts list items, nested items and heading paragraphs, caps clauses', () => {
   expect(contractClauses('intro\n# Rules\nA paragraph\ncontinued.\n\n- One\n  - Nested\n1. Two\n\n' + 'x'.repeat(700))).toEqual(['A paragraph continued.', 'One', 'Nested', 'Two', 'x'.repeat(600)]);
   expect(contractClauses('# Empty\n')).toEqual([]);

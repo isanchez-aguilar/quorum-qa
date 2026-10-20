@@ -18,15 +18,74 @@ export const contractHash = (text: string) => createHash('sha256').update(text).
 const relative = (root: string, file: string) => path.relative(root, file).replace(/\\/g, '/');
 const inside = (file: string) => file !== '..' && !file.startsWith('../') && !path.isAbsolute(file);
 
-/** Reject links in every path component, including directory junctions. */
-export async function assertNoLinks(file: string): Promise<void> {
+/** Check only the input itself, or components strictly below a worktree boundary. */
+export async function assertNoLinks(file: string, boundary?: string): Promise<void> {
   let cursor = path.resolve(file);
-  while (true) {
+  const stop = boundary === undefined ? path.dirname(cursor) : path.resolve(boundary);
+  if (!inside(relative(stop, cursor))) throw new UsageError('Input is outside its boundary.');
+  if (cursor === stop) {
     if ((await lstat(cursor)).isSymbolicLink()) throw new UsageError('Input must not contain a symlink.');
-    const parent = path.dirname(cursor);
-    if (parent === cursor) return;
-    cursor = parent;
+    return;
   }
+  while (cursor !== stop) {
+    if ((await lstat(cursor)).isSymbolicLink()) throw new UsageError('Input must not contain a symlink.');
+    cursor = path.dirname(cursor);
+  }
+}
+
+/**
+ * A forward-only lexical scan, not a parser. Each character is visited once.
+ * Only named binding braces allow line breaks; a specifier never spans lines.
+ * A pending keyword expires after 4 KiB, even inside a named binding list.
+ */
+function importSpecifiers(source: string): string[] {
+  const specs: string[] = [];
+  let kind = ''; let deadline = 0; let braces = 0; let from = false; let call = false;
+  const reset = () => { kind = ''; braces = 0; from = false; call = false; };
+  const word = (char: string) => /[A-Za-z0-9_$]/.test(char);
+  for (let i = 0; i < source.length;) {
+    if (kind && i >= deadline) reset();
+    const char = source[i]!;
+    if (char === '/' && source[i + 1] === '/') {
+      while (i < source.length && source[i] !== '\n' && source[i] !== '\r') i++;
+      continue;
+    }
+    if (char === '/' && source[i + 1] === '*') {
+      i += 2;
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        if ((source[i] === '\n' || source[i] === '\r') && braces === 0) reset();
+        i++;
+      }
+      i = Math.min(i + 2, source.length); continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      const start = ++i;
+      while (i < source.length && source[i] !== char && source[i] !== '\n' && source[i] !== '\r') {
+        if (source[i] === '\\') i++;
+        i++;
+      }
+      if (kind && i < deadline && source[i] === char && char !== '`' && braces === 0
+        && (from || kind === 'import' || (kind === 'require' && call))) specs.push(source.slice(start, i));
+      reset();
+      if (source[i] === char) i++;
+      continue;
+    }
+    if (word(char)) {
+      const start = i++;
+      while (i < source.length && word(source[i]!)) i++;
+      const token = source.slice(start, i);
+      if (!kind && (token === 'import' || token === 'export' || token === 'require')) {
+        kind = token; deadline = i + 4096;
+      } else if (kind && token === 'from' && braces === 0) from = true;
+      continue;
+    }
+    if (char === ';' || ((char === '\n' || char === '\r') && braces === 0)) reset();
+    else if (kind && char === '{') braces++;
+    else if (kind && char === '}') braces = Math.max(0, braces - 1);
+    else if (kind && char === '(') call = true;
+    i++;
+  }
+  return specs;
 }
 
 export async function loadCopy(input: string, root: string, rulesPath?: string): Promise<{ files: ContractFile[]; notes: string[] }> {
@@ -65,7 +124,7 @@ export async function buildContractContext(context: ReviewContext, headRoot: str
     if (!inside(file) || file.split('/').includes('node_modules') || file === context.rulesFile) return;
     try {
       const full = path.resolve(headRoot, file);
-      await assertNoLinks(full);
+      await assertNoLinks(full, headRoot);
       const stat = await lstat(full);
       if (!stat.isFile() || stat.size > 64 * 1024) { result.notes.push(`${file}: not regular text within 64 KiB; skipped.`); return; }
       const content = await readFile(full, 'utf8');
@@ -78,14 +137,12 @@ export async function buildContractContext(context: ReviewContext, headRoot: str
     const source = await read(file);
     if (!source) { result.skippedFiles.push(file); result.notes.push(`${file}: HEAD file missing, unsafe, binary or over 64 KiB; skipped.`); continue; }
     const group = { file: source, imports: [] as ContractFile[] }; result.groups.push(group);
-    const specifiers = source.content.matchAll(/\b(?:import\s+(?:[^'";]*?\s+from\s*)?|(?:import|require)\s*\(\s*)['"]([^'"\r\n]+)['"]/g);
-    for (const match of specifiers) {
-      const spec = match[1]!;
+    for (const spec of importSpecifiers(source.content)) {
       if (!spec.startsWith('./') && !spec.startsWith('../')) continue;
       const target = relative(headRoot, path.resolve(headRoot, path.dirname(file), spec));
       if (!inside(target) || target.split('/').includes('node_modules')) continue;
       const ext = path.extname(target);
-      const candidates = ext ? (extensions.includes(ext) ? [target, ...(ext === '.js' ? [target.slice(0, -3) + '.ts', target.slice(0, -3) + '.tsx'] : ext === '.jsx' ? [target.slice(0, -4) + '.tsx'] : [])] : []) : [...extensions.map(e => target + e), ...extensions.map(e => `${target}/index${e}`)];
+      const candidates = ext ? (extensions.includes(ext) ? [target, ...(ext === '.js' ? [target.slice(0, -3) + '.ts', target.slice(0, -3) + '.tsx'] : ext === '.jsx' ? [target.slice(0, -4) + '.tsx'] : [])] : []) : [...(target ? extensions.map(e => target + e) : []), ...extensions.map(e => `${target ? target + '/' : ''}index${e}`)];
       let dependency: ContractFile | undefined;
       for (const candidate of candidates) { dependency = await read(candidate); if (dependency) break; }
       if (!dependency || dependency.file === file || group.imports.some(item => item.file === dependency!.file)) continue;

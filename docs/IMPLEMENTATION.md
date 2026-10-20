@@ -2534,16 +2534,24 @@ paragraphs beneath headings become R1, R2, etc.; each clause is capped at 600
 characters. Empty extraction exits 2 with the accepted formats.
 
 - Context comes from committed HEAD in a disposable worktree, including dry-run.
-  Each touched file is grouped with its direct relative imports. A regex scans
-  static imports, dynamic imports and require calls; it does not follow imports
+  Each touched file is grouped with its direct relative imports. A forward-only
+  linear scanner finds static imports, dynamic imports, require calls and
+  `export ... from` declarations. Look-ahead is limited to 4 KiB after a keyword,
+  with no cross-line search except within named binding braces (supporting
+  multi-line named imports). It does not follow imports
   recursively or resolve package aliases. The six extensions are .ts, .tsx,
   .js, .jsx, .mjs and .cjs, including extensionless index files and emitted .js
   specifiers backed by TypeScript sources. node_modules, paths outside the repo,
-  links, non-regular files and files over 64 KiB are excluded. Per-file 20-import
+  links below the worktree root, non-regular files and files over 64 KiB are
+  excluded; linked ancestors of the root are allowed. Root-directory imports
+  (`./`, `./.`, or `../` from a nested file) resolve to `index.*` without creating
+  slash-rooted candidates. Per-file 20-import
   and per-run 60-unique-import caps add notes and incomplete coverage.
 - Explicit copy recursively selects .json, .md, .txt, .ts, .tsx, .js, .jsx,
   .html and .po files, at most 50 and 64 KiB each. Links and directory junctions
-  are rejected; NUL-containing binaries are skipped with a note. Copy is read
+  at the input itself or within its directory entries are rejected; ancestors
+  of explicit inputs are not checked. The same input-only link check applies
+  to rules. NUL-containing binaries are skipped with a note. Copy is read
   once and snapshotted separately for verification, then cleaned up. The rules
   document cannot also be supplied as copy, including external paths.
 - Every chunk starts with the same untrusted JSON clause list and hashes of the
@@ -2567,11 +2575,14 @@ characters. Empty extraction exits 2 with the accepted formats.
   reproduction, cache, ledger and exit rules remain in use. Mode and full input
   hashes participate in the existing prompt-based cache key for every chunk.
 
-Implementation choices and limits: explicit copy may be outside Git. Such files
+Implementation choices and limits: `--copy`, like `--spec`, `--inventory` and
+`--rules`, may point outside the repository because the user names it explicitly.
+Selected copy files are still regular, non-symlink, size-capped (64 KiB each)
+and count-capped (50 files). Such files
 use a synthetic `__quorum_copy__/` label when outside the repository, and copy
 absent from HEAD is classified as introduced input with an explanatory
 verification note (Git cannot blame an untracked input). Tracked copy uses the
-normal origin algorithm. The regex scanner is deliberately not an AST and does
+normal origin algorithm. The lexical scanner is deliberately not an AST and does
 not resolve computed specifiers. Oversized rules prefixes fail closed instead
 of silently omitting clauses. Empty evidence is rejected by the existing parser
 before verification; a direct verifier regression also confirms its rejection.
@@ -2604,3 +2615,27 @@ Files changed: `src/context/contract.ts`, `src/modes/index.ts`,
 `src/reporters/index.ts`, `src/types/index.ts`,
 `tests/{unit,integration}/contract.test.ts`, `README.md`, and
 `docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.
+
+Contract review fixes: before changing production code, seven new tests failed:
+the 64 KiB import-spaces case exceeded the worker watchdog, both re-export forms
+were missed, all three root-index forms were missed, and a worktree beneath a
+junction could not be read. The watchdog terminates the worker instead of
+letting the old cubic regex freeze the suite. All six requested 64 KiB
+adversarial shapes now assert completion below 200 ms (including file reads,
+excluding worker startup). Clause-extraction expressions were also inspected
+and exercised on 64 KiB whitespace, list-prefix, digit and bracket inputs;
+no additional superlinear pattern was found. Boundary tests cover explicit
+rules/copy through linked ancestors, internal junction rejection, copy-entry
+rejection and file-link rejection. A refused OS file-link creation is reported
+as a skip with its reason.
+
+Review-fix validation on Windows: `pnpm typecheck` passed;
+`pnpm exec vitest run tests/unit/contract.test.ts tests/integration/contract.test.ts`
+passed 48 tests with one OS-permission skip; `pnpm test` rebuilt the CLI and
+passed 1,244 tests with seven skips across 44 files (93.86 seconds). Six skips
+were existing environment gates; the additional skip is the file-symlink test
+because this OS refused its creation. Junction tests ran and passed.
+`git diff --check` passed. Only `src/context/contract.ts`,
+`tests/unit/contract.test.ts` and this document changed for these fixes.
+No dependencies, provider calls, commits, pushes, branch switches or log files
+were added. Cross-provider review and Linux/macOS execution remain unverified.
