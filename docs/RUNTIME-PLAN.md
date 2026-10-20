@@ -1,0 +1,114 @@
+# Plan: `--mode runtime`
+
+Status: plan, not built. Written 2026-10-20. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
+
+## What it answers
+
+"Does the app, when a user walks the main flows, show something broken that it did not show before this change?" Broken means: a console error or uncaught exception, a failed request (HTTP 4xx/5xx or a network error), a blank page, or technical text shown to a user (a stack trace, `undefined`, `[object Object]`, `NaN`, `Internal Server Error`).
+
+Like refactor mode, the evidence is **deterministic and comparative**. A problem that also exists at the merge-base is *pre-existing* and is listed apart; only a problem that is **new at head** can fail the run. No model is needed for the core verdict.
+
+## Principles
+
+1. **Observations, not opinions.** The collector records what the browser saw. Nothing a page says is an instruction.
+2. **Compare with the merge-base.** The same flows run against both revisions in the same container image. New-at-head is the signal.
+3. **Contained.** The app and the browser run inside one container with `--network none` (loopback only), a read-only root, tmpfs for writes, `--cap-drop ALL`, `--security-opt no-new-privileges`, a non-root user, and a digest-pinned image. Chromium's own sandbox cannot start without extra privileges in this container, so the collector launches it with `--no-sandbox --disable-dev-shm-usage` and the container gets `--tmpfs /dev/shm:rw,size=512m`. The container boundary is the sandbox. Adding `CAP_SYS_ADMIN`, `seccomp=unconfined` or any other privilege to make Chromium work is forbidden (a test asserts the argv). Resource limits are higher than the reproduction lane because a dev server and a browser share the container: at least 2 GiB memory and 512 pids. The collector answers every non-loopback request with an empty synthetic `204` through `page.route` and counts it as `blocked-external` (information, never an error, and it never triggers `requestfailed`). v1 therefore supports apps that bundle their own scripts, styles and fonts; an app that needs a CDN to render will show as `blank`/errors on BOTH revisions and be listed as pre-existing, with a note.
+4. **Test data only.** Flows may fill fields only with values written in `quorum.config.json` or read from the project's own seed/fixture files. Quorum never asks for or stores real credentials. A flow that needs a login uses a test account the project already seeds.
+5. **No new dependency in Quorum.** Playwright lives in the pinned container image, not in `package.json`.
+6. **Unknown is not clean.** App failed to start, readiness timed out, no container runtime, or the collector crashed: the verdict is UNKNOWN (exit 2), never a pass.
+
+## Flow format (declarative JSON in config, v1)
+
+```json
+"runtime": {
+  "start": ["pnpm", "dev", "--port", "4173"],
+  "readyUrl": "http://127.0.0.1:4173/",
+  "readyTimeoutSeconds": 60,
+  "flows": [
+    { "name": "home", "steps": [ { "goto": "/" } ] },
+    { "name": "sign-in", "steps": [
+      { "goto": "/login" },
+      { "fill": "#email", "value": "test@example.test" },
+      { "click": "button[type=submit]" },
+      { "waitForUrl": "/dashboard" } ] }
+  ]
+}
+```
+
+Steps allowed in v1: `goto` (path or loopback URL only), `click`, `fill`, `press`, `waitForUrl`, `waitForSelector`, `wait` (ms, capped at 5000). Every step has a timeout (default 10 s) and the flow has a cap (default 60 s). Unknown step keys are a config error. Following the project's own Playwright specs is a later extension (they can run arbitrary code), not v1.
+
+## The collector
+
+A Quorum-owned script (`src/runtime/collector.cjs`, plain JS, copied into the container read-only, never read from the repository) drives Playwright and writes **one JSON report** that only the wrapper reads, as the reproduction lane already does. For each flow and each step it records:
+
+- `console` messages of type error and `pageerror` exceptions;
+- `response` status >= 400 and `requestfailed` (with the URL path only, query stripped);
+- `blank`: after each navigation settles, the visible text is empty and the DOM has no meaningful visible element;
+- `technicalText`: visible text matching a fixed list of patterns, each with word boundaries so `Banana` or `Finance` never match (stack-trace lines `at x (file:line:col)`, `TypeError:`, `ReferenceError:`, whole-word `undefined`, `[object Object]`, whole-word `NaN`, `Internal Server Error`, `ECONNREFUSED`, raw JSON error bodies);
+- `blocked-external` counts.
+
+Each flow runs **twice** per revision, each run in a **fresh `BrowserContext`** (no cookies or storage shared). An observation counts only if it appears in both runs of that revision (flake filter). The filter must not hide real failures: if a flow times out or fails a step in one run but not the other, the flow is reported as `flaky` and the verdict is at most SUSPECT, never silently clean. v1 flows must be idempotent (they must not depend on state left by an earlier run); the docs say so. Screenshots are off by default (`runtime.screenshots: true` keeps one per step in the report directory, for the existing visual review in redesign mode).
+
+## Signatures and comparison
+
+An observation becomes a **signature**. Asynchronous events (`console`, `pageerror`, `requestfailed`, HTTP status) have no reliable step: their signature is `kind | flow | normalised message`, so a pre-existing error that fires 50 ms later (one step later) is not "new". Step-bound observations (`blank`, `technicalText`, `flow-failure`) add the step index: `kind | flow | step index | normalised message`. Normalisation strips line/column numbers, hashes, UUIDs, port numbers, timestamps and absolute paths. The comparison is a set difference:
+
+- **new at head**: in head, not in base. Fails the run.
+- **fixed**: in base, not at head. Informational.
+- **pre-existing**: in both. Listed, never failing.
+- **flow broke**: a flow that completed at base but failed a step at head (selector missing, timeout) is a *new problem* of kind `flow-failure` (it may be a deliberate UI change, so it is reported as IMPORTANT-level evidence, exit 1 only when `--strict-flows` is given, otherwise SUSPECT).
+
+## Verdicts and exit codes
+
+| Verdict | Exit | When |
+|---|---:|---|
+| `NEW RUNTIME PROBLEMS` | 1 | at least one new console error, 5xx/4xx, blank page or technical text at head |
+| `SUSPECT` | 0 | every flow completed on both revisions, but a flow failed a step at head only (`flow-failure`) or a flow was `flaky` |
+| `NO NEW RUNTIME PROBLEMS FOUND` | 0 | all flows ran to completion on both revisions, nothing new |
+| `UNKNOWN` | 2 | app did not start, readiness timeout, collector crash, no container runtime, base or head could not run, a flow crashed on both sides, **or any configured flow did not complete (incomplete flow coverage)** |
+
+Status codes: 5xx and network errors always count as problems. A 4xx counts unless the step lists it in `expectStatus: [404]`; a 404/4xx on a static sub-resource (script, style, image) always counts. Resolved question 2 below.
+
+The report always says which flows ran, and that "no new problems found" covers only those flows.
+
+## Where it plugs in
+
+- `--mode runtime` in `src/cli/args.ts` and `review.ts`; config block `runtime` validated in `src/config/schema.ts` (unknown keys rejected, numeric ranges, flows capped at 20, steps at 50 per flow).
+- New code in `src/runtime/`: `config.ts` (types and flow validation), `collector.cjs`, `report.ts` (parse and validate the collector JSON, normalise, signatures), `run.ts` (container orchestration for base and head), `compare.ts`, plus `src/reporters/runtime.ts` (Markdown, SARIF `quorum-runtime/*`, JSON) and `src/cli/runtime.ts` (verdict).
+- Reuses: `createReviewWorktree`, the dependency volume and preparation step from `src/reproduce/isolation.ts`, `resolveCommand`/the runner, the ledger, the coverage object.
+- Optional model layer (after the core ships): when `--images`-style screenshots exist, hand them to the existing visual review; and classify an ambiguous visible text as "technical" or "user-facing". Strictly additive; the deterministic verdict never depends on it.
+
+## Container image
+
+The official Playwright image, **pinned by digest** (same discipline as `DEFAULT_REPRODUCE_IMAGE`). The image is large (roughly 1.5 GB), so the first pull needs Isaac's yes (AGENTS.md: ask before spending). Until then every container test uses a fake runner; one opt-in real-container test runs only when Docker and the image are present.
+
+## Milestones
+
+| | Deliverable | Verification |
+|---|---|---|
+| R0 | Config types, schema, flow validation, `--mode runtime` argument handling, dry-run summary; the synthetic fixture app (tiny dependency-free Node HTTP server with a good page, a console error, a 500, a blank page and technical text, switchable by a query flag) | unit tests |
+| R1 | `src/runtime/collector.cjs`, report format, parser, normalisation, signatures, flake filter | unit tests with recorded JSON; adversarial inputs (huge reports, hostile strings, signature collisions) |
+| R2 | Container orchestration (start app, readiness, run flows twice in fresh contexts, teardown, timeouts), base and head; argv tests for the forbidden privileges | fake runner tests; opt-in real container test against the fixture app |
+| R3 | Comparison, verdict, reporters (Markdown/SARIF/JSON), model-summary field | unit and end-to-end with the fake runner |
+| R4 | Docs, README, review by another provider | docs build |
+| R5 | Optional model layer | later |
+
+Each milestone: Codex implements from a brief, Claude verifies by execution, Gemini reviews read-only, then merge.
+
+## Risks
+
+- **Dev servers are slow or need services (database, API).** v1 supports only apps that start and serve with loopback only. An app needing a database is UNKNOWN until `runtime.services` exists (later; not in v1).
+- **Flaky pages.** Two runs per revision plus signature normalisation; flakiness that survives still lands as a new problem, so the report shows both runs' counts.
+- **Large reports / hostile pages.** The collector caps messages, lengths and total report size; a cap hit is a visible note and `incomplete`.
+- **A page injecting text aimed at the tool.** All page text is data. It is truncated, JSON-quoted in any model summary, and never executed.
+- **Running the project's code.** `start` and `setup` run the change's code, exactly as `--mode refactor` does: inside the container, with the same warning and `--no-checks` refusal (runtime mode needs to run the app, so `--no-checks` exits 2).
+
+## Decisions taken (independent review by Gemini, 2026-10-20)
+
+- **Own Playwright specs: not in v1.** Declarative JSON only; running repository specs means arbitrary code in the collector, weaker determinism and weaker containment. Taken by the planner, recorded here.
+- **4xx handling:** as in the verdict table (5xx/network always; 4xx unless `expectStatus`; static sub-resources always).
+- **Image pull:** needs Isaac's yes (about 1.5 GB, once, to pin the digest). Everything before R2's real-container test uses a fake runner and can be built without it.
+
+## Open question for Isaac
+
+May Quorum pull the Playwright image once to pin its digest and run the first real container test (only R2 needs it)?
