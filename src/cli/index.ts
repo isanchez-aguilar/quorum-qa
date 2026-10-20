@@ -35,7 +35,7 @@ Commands:
   rules propose  Propose deterministic rules from recurring verified findings (no model calls)
 
 Options for review:
-  --mode <feature|redesign|bughunt|contract|refactor>  Review mode
+  --mode <feature|redesign|bughunt|contract|refactor|runtime>  Review mode
   --deterministic-only      Refactor evidence only; no provider calls or logins
   --mutation               Refactor only: sample changed lines; up to maxMutants extra suite runs (default 8)
   --allow-api-change        List breaking API changes without failing refactor review

@@ -1,6 +1,6 @@
 # Plan: `--mode runtime`
 
-Status: plan, not built. Written 2026-10-20. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
+Status: R0 built (config, validation, dry-run and synthetic fixture); R1-R5 planned. Written 2026-10-20. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
 
 ## What it answers
 

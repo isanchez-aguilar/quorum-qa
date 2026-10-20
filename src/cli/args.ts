@@ -5,7 +5,7 @@ export class UsageError extends Error {
   }
 }
 
-export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor'] as const;
+export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'] as const;
 
 export interface ParsedFlags {
   help?: boolean;

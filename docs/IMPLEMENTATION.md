@@ -3081,3 +3081,41 @@ the fixture was corrected to invoke `main()` directly. The final suite includes
 deterministic selection, execution/restore failures, budget limits, configuration,
 verdicts, report/summary bounds and killed/surviving end-to-end CLI cases.
 Changes remain uncommitted on `feat/v2-refactor-mutation`.
+
+## v2 runtime R0 as built
+
+`--mode runtime` validates the optional `runtime` config block using handwritten
+types and validation in `src/runtime/config.ts`. Start argv, readiness URL and
+flows are required only for this mode. Unknown keys, invalid action companions,
+out-of-range limits, non-loopback HTTP URLs, userinfo, traversal and unpinned
+images are rejected with field paths; step errors identify the flow and index.
+Fill values are never included in validation errors or dry-run output.
+
+The CLI reads config from its existing trusted commit policy and returns before
+rules, checks, providers, context enrichment or worktree creation. Dry-run prints
+only start argv, readiness URL, flow/step counts, timeouts, image, resource limits
+and screenshot state, even for an empty diff. Runtime execution currently exits
+2 with the R1-R3 not-built message. `--no-checks` and unrelated mode flags are
+usage errors. The collector, container orchestration, comparison and reporters
+remain planned; no image is selected or pulled.
+
+The dependency-free CommonJS fixture server binds to `127.0.0.1` with `PORT`
+(default 4173), emits `Cache-Control: no-store`, and supports good, console-error,
+uncaught, http500, http404, blank, technical and external behaviors. Unit tests
+start it in-process on ephemeral loopback ports and inspect HTTP responses;
+they never execute the page scripts or request their external references.
+
+Decision (R0 fixture selector): use `QUORUM_FIXTURE` instead of the query flag
+in the original milestone row, as requested by the R0 brief. One server instance
+keeps one behavior across the page and its sub-resource/API requests.
+
+Before implementation, the new config/CLI suites had 78 failing tests (7 passed);
+the nine fixture tests then failed because the server module did not exist.
+External cross-family review is not run because this task prohibits provider
+execution and network access. No dependencies, logs, commits or pushes are added.
+
+R0 Windows validation: `pnpm typecheck` passed; `pnpm test` rebuilt the CLI and
+passed 70 test files, 1,862 tests, with 7 existing skips in 112.61 seconds.
+`QUORUM_CONTAINER_TESTS=0` explicitly kept the opt-in Docker test disabled.
+`git -c core.safecrlf=false diff --check` passed. Linux/macOS, browser and
+container execution remain unverified. Changes are uncommitted on `feat/runtime-r0`.
