@@ -1211,6 +1211,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 24. **v2 rule mining (2026-10-19):** Final reported verified findings, including unconfirmed and bughunt change-point sections but excluding confirmation rejections, append to local `.quorum/findings.jsonl` under the ledger's atomic lock. Quotes are capped at 400 characters; exceeding 5 MiB retains the newest complete records within 2.5 MiB. `quorum rules propose` clusters single-line evidence shapes with 3–40 tokens, defaults to three occurrences in 90 days, and requires two distinct runs and files. OPTIONAL/improvement findings never qualify. Proposals self-verify and measure noise on bounded tracked HEAD text without models. Humans accept rules into `quorum.rules.json`; it is never generated automatically. Review reads that file from the same trusted commit as config (merge-base, or committed HEAD with `--trust-head-config`) and checks added lines before models. Each regex runs in a worker with a one-second deadline; lines over 2000 characters are skipped with a note, and timeouts warn. Matches stay outside model findings, cache, verification, dedupe and cascade. Error matches exit 1 even with incomplete coverage; warnings preserve existing coverage/BLOCKER exit semantics. `--no-checks` skips rules; dry-run and doctor disclose them.
 
+25. **v2 refactor, part 1 (2026-10-19):** `--mode refactor` collects deterministic evidence in disposable merge-base and HEAD worktrees, running trusted setup and the suite test command through the checks resolver/runner. Shared machine-readable reporter arguments and `parseTestReport` supply test identities; human output is never evidence. Optional `refactor.testCommand` overrides the reproduction-derived suite command; `timeoutSeconds` defaults to 600 (30–3600). Tests compare regression/fixed/removed/added/failing-both/skipped changes and disclose edited test files. A bounded lexical TS/JS export scanner, package-field diff and two-hop reverse relative imports report API breakage and blast radius. The normal cascade receives an untrusted deterministic summary in its stable, cache-keyed prefix; `--deterministic-only` skips provider calls. Verdicts are NOT EQUIVALENT (1), SUSPECT (0), NO BEHAVIOUR CHANGE FOUND (0), and UNKNOWN (2); unavailable evidence stays UNKNOWN unless a verified BLOCKER forces 1. `--allow-api-change` makes API breakage a note; `--no-checks` exits 2. Mutation sampling is part 2 and is not implemented here.
+
 ## Review corrections
 
 Claude checked Gemini's draft on 2026-10-12. Each item below changed the draft:
@@ -2738,3 +2740,294 @@ expectation mismatch; preserving its wording while explaining error-severity
 rules fixed it. The final full run also includes the added 50-match reporting
 cap and CLI history-window cases. `git diff --check` passed. No new logs were
 left in the repository; pre-existing `.quorum/` contents were not removed.
+
+## v2 refactor (part 1) as built
+
+Round 5 retains asserted/satisfies array initializers and public class-property literals, resolves referenced namespace-local types with lexical scope, and explains every segment of recognized member changes without false incomplete-coverage notes.
+
+Decision 25 adds `--mode refactor`, `--deterministic-only` and
+`--allow-api-change`, without dependencies. Mutation sampling is part 2 and
+is deliberately absent.
+
+- The review diff and both test revisions use merge-base and committed HEAD.
+  Trusted-base configuration (or explicit `--trust-head-config`) supplies setup
+  and test argv. Each side gets a disposable worktree and fresh temporary JSON
+  report; setup precedes tests through the existing resolver/runner. Setup
+  failure, timeout, absent/malformed report or incomplete test-suite execution
+  makes evidence unavailable. Cleanup runs for both sides on failure too.
+- `refactor.testCommand` is optional. Its fallback starts with
+  `reproduce.testCommand`, retaining the runner/launcher and suite options while
+  removing positional test selectors, `{file}`/`{testFile}`, test-name/path
+  filters and old output destinations. Explicit refactor argv avoids this
+  heuristic for custom launchers. The timeout defaults to 600 seconds, bounded
+  to 30–3600. The shared `machineTestCommand` adds JSON/output-file arguments
+  for both reproduction and refactor; no human-readable output is parsed.
+- `parseTestReport` preserves describe segments and title when supplied, with
+  the existing full-name fallback. Comparison normalizes path separators and
+  dot segments, reports all requested transitions, and separately lists changed
+  test files. Duplicate identities make evidence unavailable rather than
+  overwriting results. Fixed tests never imply equivalence.
+- The hand-written lexical export scan skips comments/quoted text while finding
+  balanced declaration headers, including multiline parameters and nested types.
+  It handles abstract/default/declare declarations, const enums, export assignment,
+  import aliases, namespace exports, lists and re-exports. Type aliases and
+  interfaces retain their types; annotated variables retain the annotation.
+  Variable and class-property arrow initializers retain parameters, optional
+  async/generics and return annotations, excluding the implementation. Ambiguous
+  callable return annotations conservatively retain initializer text with a note
+  and incomplete coverage. Exported const object initializers followed by `as const`
+  or `satisfies` retain their literal text (8000-character cap); plain values remain
+  excluded. Class, abstract-class, interface, enum, namespace/module
+  and object-type alias declarations compare their header and member skeletons.
+  Skeleton comparison keeps up to 8000 characters (other headers keep 2000);
+  display keeps 300. Any header or member-signature difference is conservatively breaking,
+  including compatible widening or an added optional parameter. Help and reports
+  explicitly ask the reviewer to assess compatibility.
+  Overloads compare signature multisets per name: order does not matter, duplicate
+  counts do, and removed/changed signatures include before/after overload counts.
+  A rename compares headers with the declared name replaced by a placeholder,
+  preserving the original before/after text for reporting.
+  Named lists resolve individual bindings against top-level declarations or import
+  statements, including aliases and default identifier exports. Missing bindings
+  retain `<unresolved>` and an incompleteness note. Re-exports retain their source
+  specifiers; adding a binding does not break unchanged exports.
+  Signatures reference top-level local type/interface/enum/class skeletons by
+  identifier, transitively to depth 4 with cycle protection and an 8000-character
+  dependency budget per export. Skeletons and reference sets are cached. Changed
+  dependencies report the exported symbol and `uses Props, which changed` in JSON,
+  Markdown and SARIF. Unreferenced locals are ignored. Depth/budget exhaustion
+  produces a note and incomplete coverage. Matching is lexical, so shadowed names
+  or property names can conservatively produce extra changes.
+  `declare global` and quoted `declare module` augmentations retain the entire
+  body under the names `global` / `module 'x'`, with the 8000-character cap.
+  Their merging/implicit-export semantics remain unresolved and always produce
+  an incompleteness note, even when the retained text is unchanged.
+  Package fields compare structurally: object key order is ignored, array order
+  is retained, including inside conditional `exports`.
+- CommonJS scanning covers `module.exports = identifier`, shallow object exports,
+  `module.exports.name`/`exports.name` assignments and literal-name
+  `Object.defineProperty` exports in JS and TS. Unknown CommonJS forms and
+  unsupported export declarations (including destructured bindings and object
+  spreads) produce named incompleteness notes instead of silent omissions.
+  Class members retain modifiers, optionality and annotations, excluding private
+  and `#private` members, method bodies, static initialization blocks and property
+  non-arrow initializers. Statement-start regex literals after `;`, `{` and `}`
+  remain opaque to brace pairing; division after an operand remains division.
+  Interface/object-type members retain type text; enum members retain
+  names and initializer text. Namespace/module exports are skeletonized recursively,
+  including local export lists. Member comparison uses multisets: order is ignored,
+  duplicates count. Markdown and SARIF identify qualified member names and
+  added/removed/changed status; removal or change is breaking, addition is not.
+  This remains a lexical scanner, not type inference: it does not resolve inherited
+  members, inferred variable/property types, computed member names or enum constant
+  expressions semantically, or follow imports/re-exports to other files. Decorators,
+  dynamic CommonJS and arbitrary TypeScript syntax are not fully modeled.
+- API input is bounded to 256 KiB per file, with a bounded worktree read.
+  Input truncation, the 2000-export limit, 4096-character export-list limit and
+  2000-character header / 8000-character skeleton comparison limits all name the file/cap and set
+  `api.incomplete`. The 300-character display limit does not truncate comparison.
+  Recursive namespace capture shares the skeleton budget and stops at 32 declaration
+  levels with an incompleteness note. Structural bracket pairing and template-string
+  scanning are iterative, including deeply nested implementation braces.
+  Touched unsupported source languages (`.py .go .rs .java .kt .cs .rb .php
+  .swift .c .cc .cpp .h .hpp .m .scala .dart`) populate `api.unscanned` and name
+  each unchecked file. These omissions appear in Verdict reasons and make an
+  otherwise clean result SUSPECT, including with `--allow-api-change`; they
+  do not make passing test evidence unavailable.
+- Reverse relative imports include two hops, cycle handling, test markers and
+  missing test dependents. Scanning skips links and dependency directories,
+  limits source to 64 KiB/file and 3000 files, and lists at most 200 dependents
+  with a note. Coverage omissions remain incomplete. Optional CodeGraph callers
+  are bounded untrusted supplemental data; stale test callers cannot establish
+  test coverage. No index is created.
+  Only `.ts .tsx .js .jsx .mjs .cjs` files can lack test dependents.
+  Other touched files appear under "Non-source files changed" without adding that
+  verdict reason. Blast-radius limits are SUSPECT reasons rather than missing
+  test evidence.
+- Normal refactor review uses the existing cascade, verification, confirmation,
+  routes, budget, cache and ledger. A stable untrusted deterministic summary
+  and its hash participate in prompt identity. Findings display as suspected
+  behaviour changes, without origin labels. Deterministic-only performs no
+  provider quota, login, model or context-provider calls.
+- Markdown includes verdict, base/head counts, test transitions, API changes
+  and blast radius; long evidence lists are capped with remainder counts.
+  SARIF retains structured refactor evidence and deterministic results under
+  `quorum-refactor/<kind>`. Allowed API changes are notes. Refactor uses
+  decision 25's verdict/exit matrix; deterministic rule matches remain visible
+  but do not independently override that matrix.
+- Dry-run describes both evidence worktrees, setup, suite argv, timeout and
+  model-review state without creating worktrees or executing those commands.
+  `--no-checks` is rejected before Git/provider activity. Doctor warns when
+  neither test command is configured.
+
+Tests use synthetic JSON, repositories and Node test-runner scripts, plus
+FakeProvider and injected command runners. New command/parser, evidence,
+reporter and CLI tests were observed failing before their implementation.
+Internal read-only QA exercised scanner edge cases and final prompt bounds;
+it is the same model family and does not replace external cross-family review.
+No provider CLI, real Qwen/CodeGraph call, dependency installation, branch switch,
+commit or push was used. Linux/macOS and opt-in container execution remain
+unverified.
+
+Files changed for part 1:
+
+- Runtime: `src/refactor/{index,api,blast}.ts`, `src/cli/{args,index,review,refactor}.ts`,
+  `src/cascade/{index,prompts}.ts`, `src/config/schema.ts`,
+  `src/context/contract.ts`, `src/doctor/index.ts`, `src/modes/index.ts`,
+  `src/reporters/{index,refactor}.ts`,
+  `src/reproduce/{command,evaluate,index,isolation}.ts`, `src/types/index.ts`.
+- Tests: `tests/integration/refactor.test.ts`, `tests/unit/args.test.ts`,
+  `tests/unit/test-command.test.ts`, `tests/unit/refactor-api.test.ts`, and
+  `tests/unit/refactor{,-blast,-config,-doctor,-prompts,-reporters,-verdict}.test.ts`.
+- Documentation: `README.md`, `docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.
+
+Initial part 1 Windows validation: `pnpm.cmd typecheck` passed. With
+`QUORUM_CONTAINER_TESTS=0`, `pnpm.cmd test` rebuilt the CLI and passed all
+**61 test files: 1,402 passed, 7 skipped** (100.49 seconds). Skips are existing
+environment gates. The first complete run had one old argument test still
+expecting `refactor` to be invalid; its unknown-mode fixture now uses `runtime`.
+The final run includes all subsequent edge-case tests. `git diff --check`
+passed. No new repository logs were left. The branch remains
+`feat/v2-refactor`, with all changes uncommitted.
+
+Review-fix regression evidence (same branch/worktree, no provider calls):
+the first targeted run against the unchanged implementation had **59 failing
+tests and 33 passing tests** across the API, blast-radius and integration files.
+Failures covered missing export forms/CommonJS, complete type/multiline signatures,
+overload removal and order/multiplicity, comparison beyond the display limit,
+every requested cap and unsupported language, documentation wording, and
+README-only noise. Seven new integration cases failed initially; overload removal
+already returned NOT EQUIVALENT on that implementation, while its unit test
+exposed incorrect per-signature reporting. Existing-support and performance
+controls also passed initially.
+During implementation, three extra annotation-boundary tests exposed function
+types with `=>`, object constraints in generic interfaces, and multiline
+initializers in multiple declarations; all were fixed. A further failing test
+prevented CommonJS arrow implementation bodies from becoming API signatures.
+All three requested API changes are covered through `main()` with
+`--deterministic-only`, synthetic repositories and no provider activity.
+Compiled-scanner probes for the seven 256 KiB adversarial shapes took
+3–35 ms each on this Windows machine (limit: 300 ms).
+
+Final review-fix validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+rebuilt the CLI and passed **62 test files, 1,477 tests, 7 skipped** in
+105.42 seconds. The skips are existing environment gates. `git diff --check`
+passed. No dependencies, provider runs, repository logs, commits, pushes or
+branch switches were added. External cross-family review was not run because
+provider execution was explicitly prohibited for this task.
+
+Round 2 fixes after Gemini's re-review of `bd24be5`:
+
+- Type aliases retain next-line bodies and leading union/intersection members,
+  stopping at a shallow semicolon or a non-continuation newline. Continuations
+  include `|`, `&`, `?`, `:`, `.`, `=>` and opening groups. The comparison/display
+  limits remain 2000/300 characters; truncation names the cap and marks API
+  evidence incomplete.
+- CommonJS includes literal single/double-quoted bracket assignments on both
+  `exports` and `module.exports`, and shallow properties in
+  `Object.assign(exports, {...})` / `Object.assign(module.exports, {...})`.
+- Default arrows compare their header before `=>`, including `async`,
+  parameters and return annotations, excluding block/expression bodies.
+  Signature comparison tokenizes before normalizing whitespace, so comments
+  (including line comments inside multiline headers) do not hide annotations
+  or create signature changes.
+- A per-file safety net compares normalized export-looking line sets in base
+  and head: leading `export`, leading `exports.` / `exports[`, or lines
+  containing `module.exports`. If these differ without a recognized API change
+  in that file, the exact note is
+  `export-related lines changed but no API change was recognised: <file>`;
+  `api.incomplete` is true and `api.unscanned` lists the file. This makes an
+  otherwise clean verdict SUSPECT. Comments and whitespace are ignored,
+  including line wrapping with identical token content. Recognized function
+  implementation bodies are excluded from this fallback so body-only changes
+  retain the intended deterministic verdict. Unknown enum/member syntax is
+  not excluded. This is a lexical safety net, not a complete parser.
+- All three blast caps (200 dependents, 3000 scanned files, 64 KiB/file) mark
+  evidence incomplete. Files without a proven test dependent move from
+  `withoutTests` to `testsUnknown`; Markdown lists them under
+  "Touched files: tests unknown (search truncated)". Verdict reasons include
+  `blast radius incomplete`, and the bounded model summary includes the
+  incomplete flag and unknown-test list. A positively identified test remains
+  evidence even when its dependent entry falls outside the display cap.
+
+Before implementation, the targeted API/blast/CLI run had **19 failing and
+101 passing tests**. The failing regressions were: two next-line union cases,
+the next-line signature cap, four bracket assignment forms, two Object.assign
+targets, two default-arrow variants, the unknown-syntax safety net, comment/
+whitespace comparison, all three blast caps, and all three new deterministic
+CLI cases. The CLI cases assert NOT EQUIVALENT for union-member and bracket
+export removal, and NO BEHAVIOUR CHANGE FOUND for a default-arrow body edit
+with unchanged tests. Existing-support and adversarial timing controls passed
+on the old code. Additional tables cover existing overload/abstract/const-enum/
+export-assignment/dotted-CommonJS/multiline signatures, type continuation
+tokens, comment boundaries and semicolon-free declaration boundaries. Three
+new 256 KiB adversarial cases exercise union continuation, repeated `exports[`
+and Object.assign commas with a 300 ms limit.
+
+Round 2 validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+rebuilt the CLI and passed **62 test files, 1,514 tests, 7 skipped** in
+100.38 seconds (existing environment-gated skips). Compiled `compareApi`
+probes for the new 256 KiB cases took **122/49/45 ms**, respectively.
+`git diff --check` passed. Changes remain uncommitted on `feat/v2-refactor`.
+No dependencies, provider commands, quota usage, repository logs, branch
+switches, pushes or external review were added; provider execution was
+explicitly prohibited. Linux/macOS and opt-in container execution remain
+unverified.
+
+Round 3 fixes (declaration skeletons):
+
+- Classes, interfaces, object-type aliases, enums and namespaces/modules now use
+  the member comparison described above. Qualified member changes include
+  nested names such as `N.Inner.S.stop`; additive members appear as SARIF notes.
+  Top-level local declarations (including overloads, `declare`, `abstract` and
+  multiple variable declarators) supply signatures for export lists and default
+  identifier exports. Imported bindings use their import statement, so a source
+  module edit is visible. Namespace export lists use their own scope table.
+- A default arrow with an arrow-containing return annotation captures through
+  the last shallow arrow on the statement line. This deliberately favors extra
+  evidence: an implementation edit in that ambiguous shape can be reported as
+  an API change. Ordinary default arrows still exclude their bodies.
+- Package comparison covers `main`, `module`, `types`, `typings`, `exports`,
+  `imports`, `bin`, `version`, `type`, `engines`, `files`, `sideEffects`, `browser`,
+  `typesVersions`, `peerDependencies` and `workspaces`. Every structural change
+  is breaking and names the field.
+- Safety net v2 compares export-looking line headers, cutting before shallow
+  `{`, `=`, `=>` or `;`. Body/value edits on the same line no longer generate
+  false incompleteness. Each changed header must contain an identifier explained
+  by a recorded change in that file (including the containing declaration for
+  member changes). Otherwise the note is
+  `<file>: export-related lines changed but no API change was recognised for: <line header>`,
+  with `incomplete` and `unscanned` set. A recognized change elsewhere in the
+  file cannot suppress this note. Comments and equivalent token wrapping remain
+  ignored. This replaces the round 2 whole-line/per-file fallback.
+
+The initial regression run against the unchanged round 2 implementation had
+**68 failures and 41 passes** across the new skeleton tests and refactor CLI
+integration tests. Failures included all reproduced silent misses and body/value
+noise, class/enum member matrices, local/import/unresolved bindings, new package
+fields and structural object ordering, member reporting and the skeleton cap.
+The four new CLI scenarios failed too: public-method removal, enum-member removal
+and package `type` edits must be NOT EQUIVALENT; a class method-body edit must be
+NO BEHAVIOUR CHANGE FOUND. Follow-up failing tests covered semicolon-free default
+identifier exports, namespace export lists, nested non-exported namespaces,
+anonymous default classes, object-type intersection suffixes, namespace aliases
+and multiple exported variables. Adversarial fixtures cover 50,000 member-like
+tokens, 10,000 brace levels, an unclosed body, repeated aliases that would expand
+a declaration beyond 3 MB, commas, and quoted/template braces, each with a
+256 KiB input and a 300 ms comparison limit.
+
+Round 3 final Windows validation: `pnpm typecheck` passed; `pnpm test` rebuilt
+the CLI and passed **63 test files, 1,615 tests, 7 skipped** in 100.79 seconds.
+The skips remain existing environment gates. Compiled `compareApi` probes took
+**89.5 / 10.1 / 9.6 / 34.2 / 102.0 / 10.0 ms**, respectively, for the six
+adversarial cases above. `git diff --check` passed.
+
+Round 3 changed `src/refactor/api.ts`, `src/reporters/refactor.ts`,
+`tests/unit/refactor-skeleton.test.ts` (97 new cases),
+`tests/unit/refactor-api.test.ts`, `tests/unit/refactor.test.ts`,
+`tests/integration/refactor.test.ts` (four new CLI cases), and this document.
+No dependencies, provider commands, quota usage, repository logs, commits,
+pushes or branch switches were added. Changes remain uncommitted on
+`feat/v2-refactor`. External cross-family review was not run because provider
+execution was prohibited. Linux/macOS and opt-in container execution remain
+unverified; the lexical limitations listed above still apply.

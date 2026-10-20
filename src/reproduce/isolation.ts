@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { machineTestCommand } from './command.js';
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -241,12 +242,8 @@ export async function runIsolatedTest(
     const name = `quorum-test-${randomUUID()}`;
     const marker = `QUORUM_REPORT_${randomUUID()}:`;
     const reportPath = `/tmp/quorum-${randomUUID()}.json`;
-    const command = [...config.testCommand];
-    if (!command.length) return failure('command not found');
-    const jest = command.some(part => /(?:^|[/\\])jest(?:\.js)?$/.test(part));
-    if (jest && !command.includes('--json')) command.push('--json');
-    if (!jest && !command.some(part => part === '--reporter=json')) command.push('--reporter=json');
-    command.push(`--outputFile=${reportPath}`, `./${relative}`);
+    if (!config.testCommand.length) return failure('command not found');
+    const command = machineTestCommand(config.testCommand, reportPath, relative);
     const args = ['run', '--rm', '--name', name, '--network', 'none', '--user', '1000:1000',
       '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
       '--mount', `type=bind,src=${root},dst=/work`, '--mount', `${dependencyMount},readonly`,

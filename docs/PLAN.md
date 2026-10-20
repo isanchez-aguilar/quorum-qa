@@ -203,7 +203,7 @@ non-local `review` pass within budget before its coverage can be complete.
 |---|---|---|
 | `feature` | ✅ | `--spec <file or issue URL>` → acceptance criteria → check the diff meets each one → list criteria with no test → propose test cases. |
 | `redesign` | ✅ | `--inventory <old-features.md>` → **feature-parity audit** (every old feature must exist in the new UI). `--images <dir>` → visual review: cut text, overlap, contrast in both themes, small touch targets, one primary action per screen. `--rules <rules.md>` → glossary and copy rules checked as text. |
-| `refactor` | roadmap | Behaviour equivalence: run tests at base and head, diff the public API surface, mutation-test the touched code, report the blast radius. Any behaviour change is suspect. |
+| `refactor` | part 1 done (v2) | Behaviour equivalence: tests at merge-base and head, public API diff, blast radius and model review. Any behaviour change is suspect. Mutation sampling is part 2. |
 | `bughunt` | done in v2 | Look for **pre-existing** bugs in unchanged code near the diff, and report them separately. |
 | `contract` | done (v2) | Check the code against the business-rules docs and against UI copy. Example: a message saying "charge $455" when the server never applies the deposit. |
 | `runtime` | roadmap | Drive the app with Playwright and collect console errors, 4xx/5xx, blank pages, and technical error text shown to users. |

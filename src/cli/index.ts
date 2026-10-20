@@ -35,7 +35,11 @@ Commands:
   rules propose  Propose deterministic rules from recurring verified findings (no model calls)
 
 Options for review:
-  --mode <feature|redesign|bughunt|contract>  Review mode
+  --mode <feature|redesign|bughunt|contract|refactor>  Review mode
+  --deterministic-only      Refactor evidence only; no provider calls or logins
+  --allow-api-change        List breaking API changes without failing refactor review
+                            Any textual signature change is breaking, including compatible
+                            widening or an added optional parameter; review compatibility
   --radius <n>              Unchanged lines around hunks (bughunt; default 40, clamped 1-200)
   --diff <range>             Git range to review, e.g. origin/main...HEAD
   --spec <file>              Spec with the acceptance criteria (feature)

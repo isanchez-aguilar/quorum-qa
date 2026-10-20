@@ -10,7 +10,7 @@ import { checkPermissions, checkQwenModels, command, readProbe } from './checks.
 import { QwenProvider } from '../providers/qwen.js';
 import { CodeGraphContextProvider, hasCodeGraphIndex } from '../context/codegraph.js';
 import type { DoctorCheck } from './checks.js';
-import { ConfigError } from '../config/schema.js';
+import { ConfigError, hasConfiguredTestCommand } from '../config/schema.js';
 import { RULES_FILE_NAME, validateRules } from '../rules/index.js';
 
 export type { DoctorCheck } from './checks.js';
@@ -19,6 +19,10 @@ export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
   const results: DoctorCheck[] = [];
+  if (!hasConfiguredTestCommand(config)) {
+    results.push({ id: 'refactor.testCommand', status: 'WARN', message: 'Refactor mode cannot find a test command.',
+      fix: 'Configure refactor.testCommand or reproduce.testCommand as an argv array.' });
+  }
   try {
     const rulesPath = path.join(context.repoRoot, RULES_FILE_NAME);
     // Review reads this file from git and refuses a symlink; doctor must say the same thing.

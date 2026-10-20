@@ -20,6 +20,12 @@ export const AUTHOR_ALIASES: Readonly<Record<string, Family>> = {
 };
 
 export const TIERS: readonly Tier[] = ['triage', 'review', 'confirm', 'visual'];
+// Doctor distinguishes an explicit repository test command from the generic fallback.
+const configuredTestCommands = new WeakMap<QuorumConfig, boolean>();
+export function hasConfiguredTestCommand(config: QuorumConfig | undefined): boolean {
+  return config !== undefined && (configuredTestCommands.get(config)
+    ?? Boolean(config.refactor?.testCommand?.length || config.reproduce?.testCommand?.length));
+}
 
 export function resolveAuthorFamily(author: string): Family {
   const key = author.trim().toLowerCase();
@@ -36,7 +42,7 @@ export function resolveAuthorFamily(author: string): Family {
   );
 }
 
-export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author'>> {
+export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author' | 'refactor'>> {
   return {
     context: { provider: 'git' },
     base: 'origin/main',
@@ -183,6 +189,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     'escalate',
     'budget',
     'reproduce',
+    'refactor',
     'jules',
     'qwen',
     'context',
@@ -313,6 +320,13 @@ export function validateConfig(raw: unknown): QuorumConfig {
       integer: true,
     });
   }
+  const refactorRaw = r.object(top.refactor, 'refactor', ['testCommand', 'timeoutSeconds']);
+  const refactor: QuorumConfig['refactor'] = refactorRaw === undefined ? undefined : {
+    timeoutSeconds: r.number(refactorRaw.timeoutSeconds, 'refactor.timeoutSeconds', 600, { min: 30, max: 3600 }),
+    ...(refactorRaw.testCommand === undefined ? {} : {
+      testCommand: r.stringArray(refactorRaw.testCommand, 'refactor.testCommand', [], false),
+    }),
+  };
 
   const julesRaw = r.object(top.jules, 'jules', ['enabled', 'repo', 'maxSessionsPerRun']) ?? {};
   let julesEnabled = defaults.jules.enabled;
@@ -353,9 +367,11 @@ export function validateConfig(raw: unknown): QuorumConfig {
     escalate,
     budget,
     reproduce,
+    ...(refactor === undefined ? {} : { refactor }),
     jules,
     qwen,
   };
   if (author !== undefined) config.author = author;
+  configuredTestCommands.set(config, refactorRaw?.testCommand !== undefined || reproduceRaw.testCommand !== undefined);
   return config;
 }

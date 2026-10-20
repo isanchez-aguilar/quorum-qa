@@ -3,11 +3,13 @@ import type { CascadeResult } from '../cascade/index.js';
 import type { runDeterministicChecks } from '../checks/index.js';
 import type { Family, Finding } from '../types/index.js';
 import type { RuleRun } from '../rules/index.js';
+import { refactorMarkdown, refactorSarif, type RefactorReport } from './refactor.js';
 
 export interface ReviewResult extends CascadeResult {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor';
+  refactor?: RefactorReport;
   range: string;
   headSha: string;
   baseSha: string;
@@ -22,8 +24,8 @@ export interface ReviewResult extends CascadeResult {
   exitCode: number;
 }
 const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').replace(/</g, '&lt;');
-const details = (findings: Finding[]) => findings.length ? findings.map((f, i) => [
-  `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line} (${f.origin})`,
+const details = (findings: Finding[], refactor = false) => findings.length ? findings.map((f, i) => [
+  `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line}${refactor ? ' (suspected behaviour change)' : ` (${f.origin})`}`,
   `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${f.provider}:${f.model} (${f.family})`,
   f.clauseNote ? `- **Rule:** ${f.clauseNote}` : f.clause ? `- **Rule:** ${f.clause}` : '',
   f.singleSource ? '- **single model, not confirmed**' : '',
@@ -46,16 +48,22 @@ function reproductionDetails(findings: Finding[]): string {
 export function generateMarkdownReport(result: ReviewResult): string {
   const { coverage } = result;
   const all = [...result.findings, ...result.unconfirmed.filter(f => f.family !== 'local')];
+  const refactor = result.mode === 'refactor';
+  const findingDetails = (findings: Finding[]) => details(findings, refactor);
   return [
     '# Quorum QA Review Report', `**Run ID:** ${result.runId} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
+    ...(result.refactor ? [`**Verdict:** ${result.refactor.verdict}`] : []),
     `**Time:** ${result.timestamp} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
     `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 || check.timedOut).length ?? 0} failed deterministic checks · Cache hits: ${result.cacheHits}`,
-    '## Executive Summary', '| Category | Introduced | Pre-existing | Improvement | Total |', '|---|---:|---:|---:|---:|',
+    '## Executive Summary', ...(refactor ? ['| Category | Suspected behaviour changes |', '|---|---:|',
+      ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => `| ${severity} | ${all.filter(f => f.severity === severity).length} |`)] : [
+    '| Category | Introduced | Pre-existing | Improvement | Total |', '|---|---:|---:|---:|---:|',
     ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => {
       const rows = all.filter(f => f.severity === severity);
       return `| ${severity} | ${['introduced', 'pre-existing', 'improvement'].map(origin => rows.filter(f => f.origin === origin).length).join(' | ')} | ${rows.length} |`;
     }),
-    `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`,
+    `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`]),
+    ...(result.refactor ? refactorMarkdown(result.refactor) : []),
     '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs or error-severity rule matches exits 2.**',
     `- Reviewed: ${coverage.reviewedFiles.map(cell).join(', ') || 'none'}`,
     ...(result.mode === 'bughunt' ? [
@@ -77,18 +85,18 @@ export function generateMarkdownReport(result: ReviewResult): string {
         const count = all.filter(f => f.verified && f.clause === `R${i + 1}`).length;
         return `| R${i + 1}: ${cell(text)} | ${count ? 'contradicted' : 'no finding'} | ${count} |`;
       })]
-      : result.mode === 'redesign' ? ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)] : ['## Pre-existing bugs', 'Only pre-existing findings count toward this bughunt summary and exit status.']),
-    '## Blockers', details(result.findings.filter(f => f.severity === 'BLOCKER')),
-    '## Important Findings', details(result.findings.filter(f => f.severity === 'IMPORTANT')),
-    '## Optional Findings', details(result.findings.filter(f => f.severity === 'OPTIONAL')),
+      : result.mode === 'redesign' ? ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)] : refactor ? [] : ['## Pre-existing bugs', 'Only pre-existing findings count toward this bughunt summary and exit status.']),
+    '## Blockers', findingDetails(result.findings.filter(f => f.severity === 'BLOCKER')),
+    '## Important Findings', findingDetails(result.findings.filter(f => f.severity === 'IMPORTANT')),
+    '## Optional Findings', findingDetails(result.findings.filter(f => f.severity === 'OPTIONAL')),
     '## Rejected on confirmation', result.rejectedOnConfirmation?.length ? result.rejectedOnConfirmation.map(({ finding, sources, confirmer }) =>
       `- **${cell(finding.trigger)}** — ${cell(finding.file)}:${finding.line} — ${sources.map(source => cell(`${source.provider}:${source.model}`)).join(', ')}; rejected by ${cell(`${confirmer.provider}:${confirmer.model}`)}`).join('\n') : 'None.',
-    '## Unconfirmed (local model only)', details(result.unconfirmed.filter(f => f.family === 'local')),
-    '## Unconfirmed (other reviewers)', details(result.unconfirmed.filter(f => f.family !== 'local')),
+    '## Unconfirmed (local model only)', findingDetails(result.unconfirmed.filter(f => f.family === 'local')),
+    '## Unconfirmed (other reviewers)', findingDetails(result.unconfirmed.filter(f => f.family !== 'local')),
     ...(result.mode === 'bughunt' ? ['## Points at the change (use feature mode)', details(result.pointsAtChange ?? [])] : []),
     '## Reproduction', reproductionDetails([...result.findings, ...result.unconfirmed]),
     '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',
-    result.checks === null ? 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
+    result.checks === null ? refactor ? 'Setup and suite tests are reported above for merge-base and HEAD.' : 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
       `- ${cell(check.argv.join(' '))}: ${check.exitCode === 0 && !check.timedOut ? 'passed' : 'FAILED'} (exit ${check.exitCode})\n\n${cell(check.stdoutTail + '\n' + check.stderrTail)}`).join('\n') : 'No checks configured.',
     '## Rule matches',
     result.ruleChecks === null ? 'Skipped (--no-checks).' : result.ruleChecks?.results.filter(row => row.totalMatches).map(row =>
@@ -115,18 +123,19 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
       coverage: { complete: result?.coverage.complete ?? true, skipped: result?.coverage.skippedFiles.length ?? 0,
         lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
       unconfirmedCount: result?.unconfirmed.length ?? 0,
+      ...(result?.refactor ? { refactor: result.refactor } : {}),
     },
     results: [...findings.map(f => {
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;
-      return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },
+      return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `${result?.mode === 'refactor' ? 'suspected behaviour change. ' : ''}Trigger: ${f.trigger}. Impact: ${f.impact}` },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, snippet: { text: f.evidence_quote } } } }],
-        properties: { origin: f.origin, ...(result ? { mode: result.mode } : {}), confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
+        properties: { ...(result?.mode === 'refactor' ? {} : { origin: f.origin }), ...(result ? { mode: result.mode } : {}), confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
           ...(result?.mode === 'contract' ? { clause: f.clause ?? 'no clause cited' } : {}),
           ...(f.singleSource ? { singleSource: true } : {}),
           ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },
       };
-    }), ...(result?.ruleChecks?.results ?? []).flatMap(row => row.matches.map(match => ({
+    }), ...refactorSarif(result?.refactor), ...(result?.ruleChecks?.results ?? []).flatMap(row => row.matches.map(match => ({
       ruleId: `quorum-rule/${row.rule.id}`, level: row.rule.severity, message: { text: row.rule.message },
       locations: [{ physicalLocation: { artifactLocation: { uri: match.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' },
         region: { startLine: match.line, snippet: { text: match.text } } } }],

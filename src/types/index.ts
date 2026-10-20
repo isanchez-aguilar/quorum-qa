@@ -75,6 +75,7 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  refactorSummary?: string;
   contract?: import('../context/contract.js').ContractContext;
   rulesFile?: string;
   radius?: number;
@@ -83,7 +84,7 @@ export interface ReviewContext {
   contextProvider?: { requested: 'git' | 'codegraph'; available: boolean; effective: string };
   contextNotes?: string[];
   diffTruncated?: boolean;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor';
   diff: string;
   baseCommit: string;
   mergeBaseCommit?: string;
@@ -100,6 +101,7 @@ export interface ReviewContext {
 }
 
 export interface QuorumConfig {
+  refactor?: { testCommand?: string[]; timeoutSeconds?: number };
   context?: { provider: 'git' | 'codegraph' };
   base: string;
   // Required, no default. Each check is an argv array, never a shell string.
@@ -144,7 +146,7 @@ export interface QuorumConfig {
 export interface LedgerEntry {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract';
+  mode: ReviewContext['mode'];
   headSha: string;
   baseSha: string;
   provider: string;
@@ -187,6 +189,8 @@ export interface TestReport {
     // Path relative to the worktree root.
     file: string;
     name: string;
+    ancestorTitles?: string[];
+    title?: string;
     status: 'passed' | 'failed' | 'skipped';
     failureKind?: 'assertion' | 'error' | 'import' | 'syntax' | 'timeout';
     // First line of the failure message, compared with `expect`.

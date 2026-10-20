@@ -147,7 +147,7 @@ describe('parseArgs', () => {
   });
 
   it('rejects an unknown mode and names the allowed ones', () => {
-    expect(() => parseArgs(['review', '--mode', 'refactor'])).toThrow(/feature, redesign/);
+    expect(() => parseArgs(['review', '--mode', 'runtime'])).toThrow(/feature, redesign/);
   });
 
   it('does not treat inherited object keys as flags', () => {

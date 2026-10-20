@@ -5,7 +5,7 @@ export class UsageError extends Error {
   }
 }
 
-export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract'] as const;
+export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor'] as const;
 
 export interface ParsedFlags {
   help?: boolean;
@@ -33,6 +33,8 @@ export interface ParsedFlags {
   noCache?: boolean;
   noChecks?: boolean;
   trustHeadConfig?: boolean;
+  deterministicOnly?: boolean;
+  allowApiChange?: boolean;
 }
 
 export interface ParsedArgs {
@@ -42,13 +44,15 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
+type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
 type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   help: 'help',
   version: 'version',
   'dry-run': 'dryRun',
+  'deterministic-only': 'deterministicOnly',
+  'allow-api-change': 'allowApiChange',
   reproduce: 'reproduce',
   'no-host-prompt': 'noHostPrompt',
   'allow-unproven': 'allowUnproven',
