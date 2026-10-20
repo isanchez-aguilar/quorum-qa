@@ -6,11 +6,14 @@ import type { Family, Finding } from '../types/index.js';
 export interface ReviewResult extends CascadeResult {
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign' | 'bughunt';
+  mode: 'feature' | 'redesign' | 'bughunt' | 'contract';
   range: string;
   headSha: string;
   baseSha: string;
   checks: Awaited<ReturnType<typeof runDeterministicChecks>> | null;
+  clauses?: string[];
+  contractFiles?: Array<{ file: string; imports: string[] }>;
+  copyFiles?: string[];
   criteria: string[];
   inventory: string[];
   families: Family[];
@@ -20,6 +23,7 @@ const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
 const details = (findings: Finding[]) => findings.length ? findings.map((f, i) => [
   `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line} (${f.origin})`,
   `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${f.provider}:${f.model} (${f.family})`,
+  f.clauseNote ? `- **Rule:** ${f.clauseNote}` : f.clause ? `- **Rule:** ${f.clause}` : '',
   f.singleSource ? '- **single model, not confirmed**' : '',
   `- **Impact:** ${cell(f.impact)}`, `- **Evidence Quote:** ${cell(f.evidence_quote)}`,
   `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? `- **Reproduction Proof:** ${f.reproduction?.status ?? 'unproven'} (${cell(f.reproduction?.failureReason ?? 'reproduction not requested')}).` : '',
@@ -56,12 +60,21 @@ export function generateMarkdownReport(result: ReviewResult): string {
       `- Windows reviewed: ${(coverage.reviewedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
       `- Windows skipped: ${(coverage.skippedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
     ] : []),
+    ...(result.mode === 'contract' ? [
+      ...(result.contractFiles ?? []).map(group => `- ${cell(group.file)}; imports: ${group.imports.map(cell).join(', ') || 'none'}`),
+      `- Copy files: ${(result.copyFiles ?? []).map(cell).join(', ') || 'none'}`,
+      `- Clauses: ${(result.clauses ?? []).map((_, i) => `R${i + 1}`).join(', ')}`,
+    ] : []),
     `- Skipped: ${coverage.skippedFiles.map(cell).join(', ') || 'none'}`,
     `- Truncated: ${coverage.truncatedHunks.map(h => `${cell(h.file)} hunk ${h.hunk}`).join(', ') || 'none'}`,
     `- Binary: ${coverage.binaryFiles.map(cell).join(', ') || 'none'} (excluded from text review)`,
     `- Lost: ${coverage.lostFindings.map(f => `${cell(f.reason)}: ${f.count}`).join(', ') || 'none'}`,
     ...(result.mode === 'feature' ? ['## Acceptance criteria', '| Criterion | Status |', '|---|---|',
       ...result.criteria.map((criterion, i) => `| AC${i + 1}: ${cell(criterion)} | ${all.some(f => new RegExp(`\\bAC${i + 1}\\b`, 'i').test(f.trigger + '\n' + f.impact)) ? 'unmet' : 'not assessed (no finding)'} |`)]
+      : result.mode === 'contract' ? ['## Rules', '| Clause | Status | Count |', '|---|---|---:|', ...(result.clauses ?? []).map((text, i) => {
+        const count = all.filter(f => f.verified && f.clause === `R${i + 1}`).length;
+        return `| R${i + 1}: ${cell(text)} | ${count ? 'contradicted' : 'no finding'} | ${count} |`;
+      })]
       : result.mode === 'redesign' ? ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)] : ['## Pre-existing bugs', 'Only pre-existing findings count toward this bughunt summary and exit status.']),
     '## Blockers', details(result.findings.filter(f => f.severity === 'BLOCKER')),
     '## Important Findings', details(result.findings.filter(f => f.severity === 'IMPORTANT')),
@@ -101,6 +114,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
       return { ruleId: rule.id, level: rule.defaultConfiguration.level, message: { text: `Trigger: ${f.trigger}. Impact: ${f.impact}` },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, snippet: { text: f.evidence_quote } } } }],
         properties: { origin: f.origin, ...(result ? { mode: result.mode } : {}), confidence: f.confidence, family: f.family, provider: f.provider, model: f.model, fix: f.fix,
+          ...(result?.mode === 'contract' ? { clause: f.clause ?? 'no clause cited' } : {}),
           ...(f.singleSource ? { singleSource: true } : {}),
           ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },

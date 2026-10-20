@@ -1205,6 +1205,8 @@ Gemini's six questions were settled with the recommendations below. Isaac said "
 
 22. **v2 precision (2026-10-19):** `escalate.confirmImportant` defaults to `true`; `false` retains the earlier call policy. After mandatory rules 1–4/3b, routes, adjudication and opt-in reproduction, remaining budget (including unused M3 reserve) can confirm verified IMPORTANT findings sourced exclusively from triage calls of one non-local family, with no mandatory escalation. Group by resolved route and source family, up to five per `confirm-batch` call; prefer another family and warn if only the source family remains. Qwen never confirms. Match the object-root `decisions` answer by opaque `c1`–`c5` ids only; ignore unknown ids and every occurrence of duplicated ids. Reject invalid batch envelopes instead of extracting nested JSON. Confirmation preserves confidence (decision B), records confirmation families and enforces same-file, ten-line relocation with unchanged code in bughunt. Rejection removes the finding, records `rejected by confirmation` in the ledger and lists both reviewers in `Rejected on confirmation`. Missing/invalid answers or exhausted resources retain the IMPORTANT with `singleSource: true`, the report tag `single model, not confirmed`, and its SARIF property. Confirmation does not change coverage or IMPORTANT exit semantics. Dry-run discloses the setting and grouping/batch size.
 
+23. **v2 contract (2026-10-19):** `--mode contract --rules <business-rules.md> [--copy <file-or-dir>]` compares numbered Markdown clauses (600 characters each) against committed HEAD touched files and direct relative imports. Import scanning uses a regex, six source extensions, 64 KiB files and 20-per-file/60-per-run caps. Explicit copy accepts 50 supported text files at 64 KiB each without symlinks. Stable untrusted clause prefixes and full rules/copy hashes isolate cached chunks. Only contradictions with code or copy evidence survive verification; missing/unknown clause citations remain tagged. Rules status is `contradicted` or `no finding`, never inferred satisfaction. Existing escalation, routes, optional IMPORTANT confirmation, budgets, ledger and exit semantics apply.
+
 ---
 
 ## Review corrections
@@ -2522,3 +2524,83 @@ mandatory work. These are the implementation choices within the brief.
 ### Real check of the batch schema (2026-10-19)
 
 Before merging decision 22, `agy --json-schema` was run once with the real `confirm-batch` schema (Gemini 3.8 Flash-low, a two-candidate prompt, no tools). It was accepted in 9 s and returned `structured_output` with `decisions` for `c1` (confirm: a real division by zero) and `c2` (reject: an unused variable), matching what the parser expects. The full pipeline with real providers has not been run since this feature; Gemini 4 Argon was out of quota.
+
+## v2 contract as built
+
+Decision 23 implements `--mode contract --rules <business-rules.md>` with optional
+`--copy <file-or-dir>`, without dependencies. Rules are regular non-symlink
+Markdown files up to 256 KiB. Lists (including nested lists and checkboxes) and
+paragraphs beneath headings become R1, R2, etc.; each clause is capped at 600
+characters. Empty extraction exits 2 with the accepted formats.
+
+- Context comes from committed HEAD in a disposable worktree, including dry-run.
+  Each touched file is grouped with its direct relative imports. A regex scans
+  static imports, dynamic imports and require calls; it does not follow imports
+  recursively or resolve package aliases. The six extensions are .ts, .tsx,
+  .js, .jsx, .mjs and .cjs, including extensionless index files and emitted .js
+  specifiers backed by TypeScript sources. node_modules, paths outside the repo,
+  links, non-regular files and files over 64 KiB are excluded. Per-file 20-import
+  and per-run 60-unique-import caps add notes and incomplete coverage.
+- Explicit copy recursively selects .json, .md, .txt, .ts, .tsx, .js, .jsx,
+  .html and .po files, at most 50 and 64 KiB each. Links and directory junctions
+  are rejected; NUL-containing binaries are skipped with a note. Copy is read
+  once and snapshotted separately for verification, then cleaned up. The rules
+  document cannot also be supplied as copy, including external paths.
+- Every chunk starts with the same untrusted JSON clause list and hashes of the
+  full rules text and selected copy. Code and copy blocks carry file:line labels;
+  quotes must omit those labels. Groups split at whole-line boundaries under
+  the serialized 24,000-character cap. A line that cannot fit alongside the
+  stable prefix is skipped with incomplete coverage. Explicit copy has separate
+  blocks/chunks. Without it, touched-file strings supply the copy context.
+- Prompts request contradictions only: the trigger names a clause and its claim,
+  impact explains contrary behavior, and evidence quotes code or copy. Absence
+  alone is not a contradiction unless the implementation claims the behavior.
+  BLOCKER means money, permissions or data. Confirmation receives clauses and
+  the related code/import group or copy, through the existing bounded prompts.
+- The shared verifier accepts evidence only from selected code/copy inputs,
+  never from the rules document. Findings retain the usual Git origin check.
+  Missing/unknown clause references stay visible as `no clause cited`. Rules
+  tables count verified non-local findings as `contradicted`; silence is only
+  `no finding`. Coverage lists clauses, touched files, imports and copy. SARIF
+  adds contract mode and clause metadata. Dry-run shows these inputs and chunks.
+- Existing routes, quota fallback, escalation, optional IMPORTANT batches,
+  reproduction, cache, ledger and exit rules remain in use. Mode and full input
+  hashes participate in the existing prompt-based cache key for every chunk.
+
+Implementation choices and limits: explicit copy may be outside Git. Such files
+use a synthetic `__quorum_copy__/` label when outside the repository, and copy
+absent from HEAD is classified as introduced input with an explanatory
+verification note (Git cannot blame an untracked input). Tracked copy uses the
+normal origin algorithm. The regex scanner is deliberately not an AST and does
+not resolve computed specifiers. Oversized rules prefixes fail closed instead
+of silently omitting clauses. Empty evidence is rejected by the existing parser
+before verification; a direct verifier regression also confirms its rejection.
+
+Regression evidence: initial unit tests failed because contract context did not
+exist; after adding the context module, seven integration cases failed before
+CLI/cascade/report wiring. Additional regressions failed before fixes for .js
+specifier resolution to TypeScript and external rules passed as copy. Synthetic
+fixtures cover clause extraction, import cycles/missing/outside paths/caps,
+copy limits/junctions/binaries, stable bounded prompts and cache isolation,
+clause classification, rules/empty-evidence rejection, dry-run and exit codes.
+The main() deposit scenario asserts the Rules table, finding, SARIF and a
+cross-family-confirmed BLOCKER exit 1 using FakeProvider only.
+
+No provider CLI, real Qwen or CodeGraph call, new dependency, branch switch,
+commit, push or repository log was used. Cross-provider review was not run
+under the explicit provider prohibition; Linux/macOS and opt-in container
+checks remain unverified.
+
+Final Windows validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test` with
+`QUORUM_CONTAINER_TESTS=0` rebuilt the CLI and passed **1,221 tests**, with
+**6 existing environment-gated skips**, across **44 files** (93.33 seconds).
+The contract suites contain 25 tests. The final additional regression first
+failed when dirty copy shadowed the same file's committed code; verification
+now accepts either selected source, and the full suite above includes that fix.
+`git diff --check` passed. No cross-provider review or live inference was run.
+
+Files changed: `src/context/contract.ts`, `src/modes/index.ts`,
+`src/cascade/{index,planner,prompts}.ts`, `src/cli/{args,index,review}.ts`,
+`src/reporters/index.ts`, `src/types/index.ts`,
+`tests/{unit,integration}/contract.test.ts`, `README.md`, and
+`docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.

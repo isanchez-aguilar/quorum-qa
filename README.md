@@ -85,6 +85,9 @@ node bin/quorum.js review --mode feature --diff origin/main...HEAD --spec docs/s
 # Feature review against acceptance criteria
 node bin/quorum.js review --mode feature --diff origin/main...HEAD --spec docs/spec.md
 
+# Check business rules against code and UI copy
+node bin/quorum.js review --mode contract --rules docs/business-rules.md --copy src/ui --diff origin/main...HEAD
+
 # Hunt pre-existing bugs in unchanged code around the diff (default radius: 40 lines)
 node bin/quorum.js review --mode bughunt --diff origin/main...HEAD --radius 40
 

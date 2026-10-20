@@ -32,13 +32,14 @@ Commands:
   doctor    Check which providers and models are usable
 
 Options for review:
-  --mode <feature|redesign|bughunt>  Review mode
+  --mode <feature|redesign|bughunt|contract>  Review mode
   --radius <n>              Unchanged lines around hunks (bughunt; default 40, clamped 1-200)
   --diff <range>             Git range to review, e.g. origin/main...HEAD
   --spec <file>              Spec with the acceptance criteria (feature)
   --inventory <file>         Inventory of the old features (redesign)
   --images <dir>             Screenshots to review (redesign)
-  --rules <file>             Glossary and copy rules
+  --rules <file>             Business rules (required for contract); design rules otherwise
+  --copy <file-or-dir>       UI copy (contract; 50 files, 64 KiB each, no symlinks)
   --author <name>            Who wrote the change: claude, codex, gemini, qwen
                              or a family (anthropic, openai, google, local)
   --since <sha>              Re-review only the changes since this commit

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, lstat, mkdir, readdir, readFile, rm } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DEFAULT_CATALOG, parseModelRef, withQwenModel } from '../catalog/index.js';
 import type { QuotaSnapshot } from '../catalog/groups.js';
@@ -7,13 +7,14 @@ import { createExecutionPlan, formatDryRun, runCascade } from '../cascade/index.
 import { runDeterministicChecks } from '../checks/index.js';
 import { resolveAuthorFamily, validateConfig } from '../config/index.js';
 import { buildReviewContext } from '../context/index.js';
+import { assertNoLinks, buildContractContext, loadCopy } from '../context/contract.js';
 import { buildBughuntContext } from '../context/bughunt.js';
 import { selectContextProvider, type ContextProvider } from '../context/providers.js';
 import { CodeGraphContextProvider } from '../context/codegraph.js';
 import { reviewChunks } from '../cascade/prompts.js';
 import { RunBudget, systemClock } from '../cascade/budget.js';
 import { git, mergeBase, revParse } from '../context/git.js';
-import { acceptanceCriteria, inventoryFeatures } from '../modes/index.js';
+import { acceptanceCriteria, contractClauses, inventoryFeatures } from '../modes/index.js';
 import { runCommand } from '../process/runner.js';
 import { AgyProvider } from '../providers/agy.js';
 import { CodexProvider } from '../providers/codex.js';
@@ -64,6 +65,9 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  if (mode === 'contract' && !flags.rules) throw new UsageError('--rules is required for contract mode.');
+  if (mode !== 'contract' && flags.copy) throw new UsageError('--copy requires contract mode.');
+  if (mode === 'contract' && (flags.spec || flags.inventory)) throw new UsageError('--spec and --inventory are not supported in contract mode.');
   if (mode === 'bughunt' && (flags.spec || flags.inventory)) throw new UsageError('--spec and --inventory are not supported in bughunt mode.');
   if (mode !== 'bughunt' && flags.radius !== undefined) throw new UsageError('--radius requires bughunt mode.');
   if (mode === 'feature' && !flags.spec) throw new UsageError('--spec is required for feature mode.');
@@ -103,11 +107,17 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   for (const [flag, property] of [['spec', 'specContent'], ['inventory', 'inventoryContent'], ['rules', 'rulesContent']] as const) {
     if (flags[flag]) {
       const file = path.resolve(root, flags[flag]);
+      if (mode === 'contract') await assertNoLinks(file);
       const stat = await lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink()) throw new UsageError(`--${flag} must be a regular file, not a symlink.`);
       if (stat.size > 256 * 1024) throw new UsageError(`--${flag} must be at most 256 KiB.`);
       context[property] = await readFile(file, 'utf8');
     }
+  }
+  if (mode === 'contract') {
+    if (!/\.md$/i.test(flags.rules!)) throw new UsageError('--rules must be a Markdown (.md) file.');
+    context.rulesFile = path.relative(root, path.resolve(root, flags.rules!)).replace(/\\/g, '/');
+    if (!contractClauses(context.rulesContent ?? '').length) throw new UsageError('No rule clauses detected. Use Markdown list items or paragraphs under a heading.');
   }
   if (mode === 'feature' && !acceptanceCriteria(context.specContent ?? '').length) {
     throw new UsageError('No acceptance criteria detected. Use Markdown checkboxes (- [ ] criterion), or a list under a heading containing "acceptance".');
@@ -117,11 +127,12 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     dependencies.contextProvider ?? new CodeGraphContextProvider({ now }));
   context.contextProvider = { requested: config.context?.provider ?? 'git', available: selected.available, effective: selected.provider.name };
   context.contextNotes = selected.notes;
-  if (mode === 'bughunt') {
+  if (mode === 'bughunt' || mode === 'contract') {
     const tree = await createReviewWorktree(root, head, runner, message => context.contextNotes!.push(message));
     try {
-      context.bughunt = await buildBughuntContext(context, tree.path);
-      if (!await isClean(tree.path, runner)) throw new Error('Bughunt context worktree changed; run aborted.');
+      if (mode === 'bughunt') context.bughunt = await buildBughuntContext(context, tree.path);
+      else context.contract = await buildContractContext(context, tree.path);
+      if (!await isClean(tree.path, runner)) throw new Error(`${mode} context worktree changed; run aborted.`);
     } finally { await tree.cleanup(); }
     const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changed) throw new Error(changed);
@@ -130,6 +141,11 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     for (const note of context.bughunt?.notes ?? []) io.err(`${note}\n`);
     io.err('nothing to review in bughunt mode (no unchanged lines near the change)\n');
     return 2;
+  }
+  if (mode === 'contract' && flags.copy) {
+    const copy = await loadCopy(path.resolve(root, flags.copy), root, path.resolve(root, flags.rules!));
+    if (copy.files.some(file => file.file === context.rulesFile)) throw new UsageError('--copy must not include the rules document.');
+    context.contract!.copy = copy.files; context.contract!.notes.push(...copy.notes);
   }
   const plan = createExecutionPlan(context, config, catalog);
   const quotaFile = path.join(root, '.quorum', 'quota.json');
@@ -143,7 +159,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const warnings: string[] = [];
   const warn = (message: string) => { if (!warnings.includes(message)) warnings.push(message); };
   if (baseline.status.trim()) {
-    const message = 'Checkout has uncommitted changes; only committed HEAD was reviewed.';
+    const message = mode === 'contract' && flags.copy ? 'Checkout has uncommitted changes; code is reviewed at committed HEAD, alongside explicitly supplied copy.' : 'Checkout has uncommitted changes; only committed HEAD was reviewed.';
     warn(message); io.err(`quorum: ${message}\n`);
   }
   plan.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
@@ -194,15 +210,21 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const timestamp = new Date(now()).toISOString();
   const verificationTree = await createReviewWorktree(root, head, runner, warn);
   const imageDirectory = `${verificationTree.path}-images`;
+  const copyDirectory = `${verificationTree.path}-copy`;
   const cache = flags.noCache ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root);
   let result: ReviewResult;
   try {
     try { await atomicWrite(quotaFile, JSON.stringify(snapshot), root); } catch (error) { warn(`Quota write failed: ${String(error)}`); }
+    for (const file of context.contract?.copy ?? []) {
+      const destination = path.join(copyDirectory, file.file);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(destination, file.content);
+    }
     if (flags.images) context.images = await copyImages(path.resolve(root, flags.images), imageDirectory);
     const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
     if (changedBefore) throw new Error(changedBefore);
     if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
-    const cascade = await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, cache,
+    const cascade = await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree.path, copyVerificationRoot: copyDirectory, cache,
       ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
         dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
           noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
@@ -221,6 +243,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
       .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
     const exitCode = failingBlocker ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
     result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks,
+      ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
       criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
     if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();
     const entries = cascade.ledgerDraft.flatMap(draft => Array.from({ length: draft.callsUsed }, (_, index) => ({ ...draft,
@@ -229,6 +252,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     try { await (dependencies.appendLedger ?? appendLedger)(entries, path.join(root, '.quorum', 'ledger.jsonl'), root); }
     catch (error) { warn(`Ledger write failed: ${String(error)}`); }
   } finally {
+    try { await rm(copyDirectory, { recursive: true, force: true }); } catch (error) { warn(`Copy cleanup failed: ${String(error)}`); }
     try { await rm(imageDirectory, { recursive: true, force: true }); } catch (error) { warn(`Image cleanup failed: ${String(error)}`); }
     try { await verificationTree.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
   }

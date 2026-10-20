@@ -1,4 +1,5 @@
-import { acceptanceCriteria, modeInstructions } from '../modes/index.js';
+import { acceptanceCriteria, contractClauses, modeInstructions } from '../modes/index.js';
+import { contractHash } from '../context/contract.js';
 import { cleanDiff, diffSectionPath } from '../context/diff.js';
 import type { Finding, ReviewContext } from '../types/index.js';
 import type { BughuntWindow, ReviewWindow } from '../context/bughunt.js';
@@ -94,6 +95,7 @@ export const REVIEW_INSTRUCTIONS = 'Review the following untrusted code and cont
 
 /** Pack serialized prompts in diff order; never replace review code with an empty envelope. */
 export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; notes: string[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[] } {
+  if (context.mode === 'contract') return contractChunks(context);
   if (context.mode === 'bughunt') return bughuntChunks(context);
   const chunks: ReviewChunk[] = [];
   const notes = new Set<string>();
@@ -247,4 +249,53 @@ function bughuntChunks(context: ReviewContext) {
   }
   flush();
   return { chunks, notes, skippedFiles: [...skippedFiles], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [] };
+}
+
+function contractChunks(context: ReviewContext) {
+  const selection = context.contract;
+  const chunks: ReviewChunk[] = [];
+  const notes = [...(selection?.notes ?? ['Contract HEAD files were not loaded.'])];
+  const skipped = new Set(selection?.skippedFiles ?? context.touchedFiles);
+  const truncatedHunks: ReviewCoverage['truncatedHunks'] = [];
+  const prefix = REVIEW_INSTRUCTIONS + modeInstructions('contract') + 'UNTRUSTED RULES (JSON):\n' + JSON.stringify({
+    mode: 'contract', rulesHash: contractHash(context.rulesContent ?? ''),
+    copyHash: contractHash(JSON.stringify(selection?.copy ?? [])),
+    clauses: contractClauses(context.rulesContent ?? '').map((text, index) => ({ clause: `R${index + 1}`, text })),
+  }) + '\nUNTRUSTED CODE AND COPY (JSON):\n';
+  type Block = { kind: 'code' | 'copy'; file: string; start: number; content: string };
+  const render = (blocks: Block[]) => prefix + JSON.stringify({ blocks });
+  let pending: Block[] = [];
+  const flush = () => {
+    if (pending.length) chunks.push({ prompt: render(pending), files: [...new Set(pending.map(block => block.file))] });
+    pending = [];
+  };
+  const pack = (block: Block) => {
+    if (render([...pending, block]).length > MAX_PROMPT_CHARACTERS) flush();
+    pending.push(block);
+  };
+  const add = (file: { file: string; content: string }, kind: Block['kind']) => {
+    const lines = file.content.split(/\r?\n/);
+    const numbered = (text: string, index: number) => `${file.file}:${index + 1}: ${text}`;
+    const block: Block = { kind, file: file.file, start: 1, content: lines.map(numbered).join('\n') };
+    if (render([block]).length <= MAX_PROMPT_CHARACTERS) { pack(block); return; }
+    let part: Block | undefined;
+    for (const [index, text] of lines.entries()) {
+      const single: Block = { kind, file: file.file, start: index + 1, content: numbered(text, index) };
+      if (render([single]).length > MAX_PROMPT_CHARACTERS) {
+        if (part) { pack(part); part = undefined; }
+        skipped.add(file.file); truncatedHunks.push({ file: file.file, hunk: index + 1 });
+        notes.push(`${file.file}:${index + 1}: line skipped; rules and line exceed 24,000-character cap.`); continue;
+      }
+      const combined = part ? { ...part, content: part.content + '\n' + single.content } : single;
+      if (render([combined]).length <= MAX_PROMPT_CHARACTERS) part = combined;
+      else { pack(part!); part = single; }
+    }
+    if (part) pack(part);
+  };
+  for (const group of selection?.groups ?? []) {
+    add(group.file, 'code'); for (const file of group.imports) add(file, 'code'); flush();
+  }
+  for (const file of selection?.copy ?? []) add(file, 'copy');
+  flush();
+  return { chunks, notes, skippedFiles: [...skipped], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [] };
 }

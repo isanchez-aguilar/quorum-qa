@@ -5,7 +5,7 @@ export class UsageError extends Error {
   }
 }
 
-export const REVIEW_MODES = ['feature', 'redesign', 'bughunt'] as const;
+export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract'] as const;
 
 export interface ParsedFlags {
   help?: boolean;
@@ -17,6 +17,7 @@ export interface ParsedFlags {
   inventory?: string;
   images?: string;
   rules?: string;
+  copy?: string;
   author?: string;
   since?: string;
   dryRun?: boolean;
@@ -40,7 +41,7 @@ export interface ParsedArgs {
 }
 
 type BooleanFlag = 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig';
-type ValueFlag = 'mode' | 'radius' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'author' | 'since' | 'out' | 'sarif';
+type ValueFlag = 'mode' | 'radius' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   help: 'help',
@@ -64,6 +65,7 @@ const VALUE_FLAGS: Record<string, ValueFlag> = {
   inventory: 'inventory',
   images: 'images',
   rules: 'rules',
+  copy: 'copy',
   author: 'author',
   since: 'since',
   out: 'out',
