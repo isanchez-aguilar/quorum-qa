@@ -2765,20 +2765,48 @@ is deliberately absent.
   dot segments, reports all requested transitions, and separately lists changed
   test files. Duplicate identities make evidence unavailable rather than
   overwriting results. Fixed tests never imply equivalence.
-- The hand-written lexical export scan excludes comments/strings and handles
-  declarations, defaults, lists and re-exports within bounded source input.
-  Headers stop at the specified delimiter and normalize whitespace to at most
-  300 characters. A rename compares headers with the declared name replaced by
-  a placeholder, preserving the original before/after text for reporting.
+- The hand-written lexical export scan skips comments/quoted text while finding
+  balanced declaration headers, including multiline parameters and nested types.
+  It handles abstract/default/declare declarations, const enums, export assignment,
+  import aliases, namespace exports, lists and re-exports. Type aliases and
+  interfaces retain their types; annotated variables retain the annotation but
+  not their initializer. Comparison keeps up to 2000 normalized characters;
+  display keeps 300. Any textual signature difference is conservatively breaking,
+  including compatible widening or an added optional parameter. Help and reports
+  explicitly ask the reviewer to assess compatibility.
+  Overloads compare signature multisets per name: order does not matter, duplicate
+  counts do, and removed/changed signatures include before/after overload counts.
+  A rename compares headers with the declared name replaced by a placeholder,
+  preserving the original before/after text for reporting.
   Named lists retain their list text; comparison uses individual bindings and
   source specifiers so adding a binding does not break unchanged exports.
   Package conditional `exports` ordering remains significant.
+- CommonJS scanning covers `module.exports = identifier`, shallow object exports,
+  `module.exports.name`/`exports.name` assignments and literal-name
+  `Object.defineProperty` exports in JS and TS. Unknown CommonJS forms and
+  unsupported export declarations (including destructured bindings and object
+  spreads) produce named incompleteness notes instead of silent omissions.
+  This remains a lexical scanner, not type inference: class/namespace bodies and
+  enum members are not compared as independent exports.
+- API input is bounded to 256 KiB per file, with a bounded worktree read.
+  Input truncation, the 2000-export limit, 4096-character export-list limit and
+  2000-character comparison-signature limit all name the file/cap and set
+  `api.incomplete`. The 300-character display limit does not truncate comparison.
+  Touched unsupported source languages (`.py .go .rs .java .kt .cs .rb .php
+  .swift .c .cc .cpp .h .hpp .m .scala .dart`) populate `api.unscanned` and name
+  each unchecked file. These omissions appear in Verdict reasons and make an
+  otherwise clean result SUSPECT, including with `--allow-api-change`; they
+  do not make passing test evidence unavailable.
 - Reverse relative imports include two hops, cycle handling, test markers and
   missing test dependents. Scanning skips links and dependency directories,
   limits source to 64 KiB/file and 3000 files, and lists at most 200 dependents
   with a note. Coverage omissions remain incomplete. Optional CodeGraph callers
   are bounded untrusted supplemental data; stale test callers cannot establish
   test coverage. No index is created.
+  Only `.ts .tsx .js .jsx .mjs .cjs` files can lack test dependents.
+  Other touched files appear under "Non-source files changed" without adding that
+  verdict reason. Blast-radius limits are SUSPECT reasons rather than missing
+  test evidence.
 - Normal refactor review uses the existing cascade, verification, confirmation,
   routes, budget, cache and ledger. A stable untrusted deterministic summary
   and its hash participate in prompt identity. Findings display as suspected
@@ -2812,11 +2840,11 @@ Files changed for part 1:
   `src/reporters/{index,refactor}.ts`,
   `src/reproduce/{command,evaluate,index,isolation}.ts`, `src/types/index.ts`.
 - Tests: `tests/integration/refactor.test.ts`, `tests/unit/args.test.ts`,
-  `tests/unit/test-command.test.ts`, and
+  `tests/unit/test-command.test.ts`, `tests/unit/refactor-api.test.ts`, and
   `tests/unit/refactor{,-blast,-config,-doctor,-prompts,-reporters,-verdict}.test.ts`.
 - Documentation: `README.md`, `docs/{IMPLEMENTATION,PLAN,ROADMAP}.md`.
 
-Final Windows validation: `pnpm.cmd typecheck` passed. With
+Initial part 1 Windows validation: `pnpm.cmd typecheck` passed. With
 `QUORUM_CONTAINER_TESTS=0`, `pnpm.cmd test` rebuilt the CLI and passed all
 **61 test files: 1,402 passed, 7 skipped** (100.49 seconds). Skips are existing
 environment gates. The first complete run had one old argument test still
@@ -2824,3 +2852,29 @@ expecting `refactor` to be invalid; its unknown-mode fixture now uses `runtime`.
 The final run includes all subsequent edge-case tests. `git diff --check`
 passed. No new repository logs were left. The branch remains
 `feat/v2-refactor`, with all changes uncommitted.
+
+Review-fix regression evidence (same branch/worktree, no provider calls):
+the first targeted run against the unchanged implementation had **59 failing
+tests and 33 passing tests** across the API, blast-radius and integration files.
+Failures covered missing export forms/CommonJS, complete type/multiline signatures,
+overload removal and order/multiplicity, comparison beyond the display limit,
+every requested cap and unsupported language, documentation wording, and
+README-only noise. Seven new integration cases failed initially; overload removal
+already returned NOT EQUIVALENT on that implementation, while its unit test
+exposed incorrect per-signature reporting. Existing-support and performance
+controls also passed initially.
+During implementation, three extra annotation-boundary tests exposed function
+types with `=>`, object constraints in generic interfaces, and multiline
+initializers in multiple declarations; all were fixed. A further failing test
+prevented CommonJS arrow implementation bodies from becoming API signatures.
+All three requested API changes are covered through `main()` with
+`--deterministic-only`, synthetic repositories and no provider activity.
+Compiled-scanner probes for the seven 256 KiB adversarial shapes took
+3–35 ms each on this Windows machine (limit: 300 ms).
+
+Final review-fix validation: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+rebuilt the CLI and passed **62 test files, 1,477 tests, 7 skipped** in
+105.42 seconds. The skips are existing environment gates. `git diff --check`
+passed. No dependencies, provider runs, repository logs, commits, pushes or
+branch switches were added. External cross-family review was not run because
+provider execution was explicitly prohibited for this task.

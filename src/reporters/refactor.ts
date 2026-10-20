@@ -28,14 +28,17 @@ export function refactorMarkdown(report: RefactorReport): string[] {
     '### Skipped changes', list(tests.skippedChanges.map(test => `${test.file}: ${test.name} (${test.before} → ${test.after})`)),
     '### Edited test files', list(tests.editedFiles),
     '## Public API changes',
+    'signature changes are reported conservatively; review whether compatible (including compatible widening or an added optional parameter).',
     ...(api.changes.length ? [list(api.changes.map(change => `${change.kind}: ${change.file}:${change.line} — ${change.previousName ? change.previousName + ' → ' : ''}${change.name}`
       + `${change.breaking ? report.allowApiChange ? ' (allowed API change)' : ' (breaking)' : ''}`
+      + `${change.overloads ? `; overloads: ${change.overloads.before} before, ${change.overloads.after} after` : ''}`
       + `; before: ${change.before ?? '(absent)'}; after: ${change.after ?? '(absent)'}`))] : ['No export changes.']),
     '### Package fields', list(api.packageChanges.map(change => `${change.field}: ${json(change.before)} → ${json(change.after)}${report.allowApiChange ? ' (allowed API change)' : ' (breaking)'}`)),
     ...api.notes.map(cell),
     '## Blast radius',
     list(blastRadius.dependents.map(item => `${item.touchedFile} ← ${item.file} (hop ${item.hop}${item.isTest ? ', test' : ''}; ${item.source}${item.source === 'codegraph' ? ', untrusted and may be stale' : ''})`), 200),
     '### Touched files without tests', list(blastRadius.withoutTests, 200),
+    `Non-source files changed: ${(blastRadius.nonSource ?? []).map(cell).join(', ') || 'None.'}`,
     ...blastRadius.notes.map(cell),
     '### Verdict reasons', list(report.reasons),
     `Model review: ${report.modelReview ? 'on' : 'off (--deterministic-only)'}. Mutation sampling: part 2, not performed.`,

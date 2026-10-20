@@ -6,7 +6,7 @@ import type { CommandRunner } from '../types/index.js';
 import type { ApiExport } from './api.js';
 
 export interface Dependent { file: string; touchedFile: string; hop: 1 | 2; isTest: boolean; source: 'imports' | 'codegraph' }
-export interface BlastRadius { dependents: Dependent[]; withoutTests: string[]; notes: string[]; incomplete?: boolean }
+export interface BlastRadius { dependents: Dependent[]; withoutTests: string[]; notes: string[]; incomplete?: boolean; nonSource?: string[] }
 export const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 export const isTestFile = (file: string) => /(?:^|\/)__tests__\/|(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[^/]+$/i.test(file.replace(/\\/g, '/'));
 const inside = (file: string) => file !== '..' && !file.startsWith('../') && !path.isAbsolute(file);
@@ -17,7 +17,8 @@ export async function buildBlastRadius(root: string, touched: string[], options:
   testFiles?: string[];
   codegraph?: { root: string; runner: CommandRunner; symbols: Map<string, ApiExport[]>; provider?: CodeGraphContextProvider };
 } = {}): Promise<BlastRadius> {
-  const result: BlastRadius = { dependents: [], withoutTests: [], notes: [] };
+  const result: BlastRadius = { dependents: [], withoutTests: [], notes: [],
+    nonSource: touched.filter(file => !sourceExtensions.includes(path.extname(file))) };
   const isTest = (file: string) => isTestFile(file) || options.testFiles?.includes(file) === true;
   const files = new Map<string, string>(); let scanned = 0; let capped = false;
   async function walk(directory: string, relative = ''): Promise<void> {
@@ -107,6 +108,6 @@ export async function buildBlastRadius(root: string, touched: string[], options:
       }
     } else result.notes.push('CodeGraph callers unavailable; using scanned relative imports.');
   }
-  result.withoutTests = touched.filter(file => !isTest(file) && !tested.has(file));
+  result.withoutTests = touched.filter(file => sourceExtensions.includes(path.extname(file)) && !isTest(file) && !tested.has(file));
   return result;
 }

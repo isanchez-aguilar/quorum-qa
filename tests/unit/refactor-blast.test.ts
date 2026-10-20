@@ -14,6 +14,12 @@ async function put(file: string, source: string) {
   await mkdir(path.dirname(path.join(root, file)), { recursive: true });
   await writeFile(path.join(root, file), source);
 }
+it('separates non-source changes from missing test dependents', async () => {
+  const files = ['README.md', 'package.json', 'app.config.json', 'icon.png'];
+  const blast = await buildBlastRadius(root, [...files, 'source.ts']);
+  expect(blast.withoutTests).toEqual(['source.ts']);
+  expect(blast).toMatchObject({ nonSource: files });
+});
 it('finds two hops, terminates a cycle and identifies missing test dependents', async () => {
   await put('a.ts', "import './b'; export const a=1;");
   await put('b.ts', "import './a.js';");

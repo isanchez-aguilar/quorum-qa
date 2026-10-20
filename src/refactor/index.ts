@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, readFile, rm } from 'node:fs/promises';
+import { lstat, open, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runDeterministicChecks } from '../checks/index.js';
@@ -9,7 +9,7 @@ import { parseTestReport } from '../reproduce/evaluate.js';
 import { matchesTestGlob } from '../reproduce/write.js';
 import type { CommandRunner, QuorumConfig, ReviewContext, TestReport } from '../types/index.js';
 import { createReviewWorktree } from '../worktree/index.js';
-import { compareApi, scanExports, type ApiEvidence } from './api.js';
+import { API_INPUT_BYTES, compareApi, scanExports, unsupportedSource, type ApiEvidence } from './api.js';
 import { buildBlastRadius, isTestFile, sourceExtensions, type BlastRadius } from './blast.js';
 
 export type RefactorTest = TestReport['tests'][number];
@@ -88,6 +88,8 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
   const short = (value: string) => value.slice(0, 100);
   const tests = (items: RefactorTest[]) => items.slice(0, 5).map(item => ({ file: short(item.file), name: short(item.name) }));
   const summary = { available: evidence.available, reasons: evidence.reasons.slice(0, 5).map(short),
+    apiIncomplete: evidence.api.incomplete ?? false, apiNotes: evidence.api.notes.slice(0, 5).map(short),
+    unscanned: (evidence.api.unscanned ?? []).slice(0, 5).map(short),
     counts: { base: evidence.tests.base, head: evidence.tests.head },
     regressions: tests(evidence.tests.regressions), removedTests: tests(evidence.tests.removed),
     editedTests: evidence.tests.editedFiles.slice(0, 5).map(short),
@@ -95,7 +97,7 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
     packageChanges: evidence.api.packageChanges.map(change => change.field), withoutTests: evidence.blastRadius.withoutTests.slice(0, 5).map(short),
     totals: { regressions: evidence.tests.regressions.length, removedTests: evidence.tests.removed.length, editedTests: evidence.tests.editedFiles.length,
       breakingApi: evidence.api.changes.filter(change => change.breaking).length, withoutTests: evidence.blastRadius.withoutTests.length } };
-  const lists = [summary.reasons, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests];
+  const lists = [summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests];
   while (Buffer.byteLength(JSON.stringify(summary)) > 4096) {
     const largest = [...lists].sort((a, b) => b.length - a.length)[0];
     if (!largest?.length) break;
@@ -122,17 +124,33 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
     const reportPath = path.join(os.tmpdir(), `quorum-refactor-${randomUUID()}.json`);
     try {
       tree = await createReviewWorktree(options.root, side === 'base' ? context.mergeBaseCommit ?? context.baseCommit : context.headCommit, options.gitRunner, options.warn);
-      const read = async (file: string): Promise<string | undefined> => {
+      const read = async (file: string, apiSource = false): Promise<string | undefined> => {
+        const problem = (message: string) => (apiSource ? notes : reasons).push(`${side}: ${message}`);
         try {
           const full = path.resolve(tree!.path, file);
           await assertNoLinks(full, tree!.path);
           const stat = await lstat(full);
-          if (!stat.isFile() || stat.size > 64 * 1024) { reasons.push(`${side}: ${file} is not a regular file within 64 KiB.`); return; }
-          const content = await readFile(full, 'utf8');
-          if (content.includes('\0')) { reasons.push(`${side}: ${file} is binary.`); return; }
+          if (!stat.isFile()) { problem(`${file} is not a regular file.`); return; }
+          if (!apiSource && stat.size > 64 * 1024) { problem(`${file} exceeds the 64 KiB package cap.`); return; }
+          let content: string;
+          if (apiSource) {
+            // Read one extra byte to let the scanner disclose its input cap.
+            const handle = await open(full, 'r');
+            try {
+              const buffer = Buffer.alloc(API_INPUT_BYTES + 1);
+              let count = 0;
+              while (count < buffer.length) {
+                const { bytesRead } = await handle.read(buffer, count, buffer.length - count, count);
+                if (!bytesRead) break;
+                count += bytesRead;
+              }
+              content = buffer.subarray(0, count).toString('utf8');
+            } finally { await handle.close(); }
+          } else content = await readFile(full, 'utf8');
+          if (content.includes('\0')) { problem(`${file} is binary; public API not checked.`); return; }
           return content;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') reasons.push(`${side}: ${file} could not be read safely.`);
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') problem(`${file} could not be read safely.`);
           return;
         }
       };
@@ -144,8 +162,9 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
             if ((await lstat(full)).isFile()) testPresence[side].add(file);
           } catch { /* Deleted and newly added files are not edited tests. */ }
         }
+        if (unsupportedSource(file)) { sources[side].set(file, ''); continue; }
         if (!sourceExtensions.includes(path.extname(file))) continue;
-        const content = await read(file);
+        const content = await read(file, true);
         if (content !== undefined) {
           sources[side].set(file, content);
         }
@@ -185,7 +204,6 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
             codegraph: { root: options.root, runner: options.contextRunner ?? options.gitRunner, symbols: new Map([...sources.head].map(([file, content]) => [file, scanExports(content)])) },
           } : {}),
         });
-        if (blastRadius.incomplete) reasons.push('head: blast radius scan incomplete (file count, size or binary limits).');
       }
     } catch (error) { reasons.push(`${side}: ${error instanceof Error ? error.message : 'evidence collection failed'}`); }
     finally {
@@ -197,6 +215,7 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
   const tests = compareTests(reports.base, reports.head, editedFiles);
   const api = compareApi(sources.base, sources.head, packages.base, packages.head);
   api.notes.push(...notes);
+  api.incomplete ||= notes.length > 0;
   const evidence = { available: reasons.length === 0, reasons, tests, api, blastRadius };
   return { ...evidence, summary: summarizeEvidence(evidence) };
 }

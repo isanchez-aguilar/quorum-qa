@@ -64,6 +64,46 @@ async function review(args: string[] = [], dependencies: CliDependencies = {}) {
     appendLedger: async () => {}, appendFindings: async () => {}, ...dependencies });
   return { code, out, err, provider, quota, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
+it.each([
+  ['overload', 'sample.ts', 'export function parse(x: string): string;\nexport function parse(x: number): number;\nexport function parse(x: string | number) { return x; }',
+    'export function parse(x: number): number;\nexport function parse(x: string | number) { return x; }'],
+  ['multiline parameter', 'sample.ts', 'export function calculate(\n  a: number,\n  b: string\n): boolean {',
+    'export function calculate(\n  a: number,\n  b: string,\n  c: number\n): boolean {'],
+  ['CommonJS rename', 'sample.cjs', 'module.exports = { add, double };', 'module.exports = { sum: add, double };'],
+])('detects %s end to end without providers', async (_name, file, before, after) => {
+  await writeFile(path.join(root, file), before);
+  await git('add', '.'); await git('commit', '-m', 'synthetic API base');
+  const base = await git('rev-parse', 'HEAD');
+  await writeFile(path.join(root, file), after);
+  await git('add', '.'); await git('commit', '-m', 'synthetic API head');
+  const r = await review(['--deterministic-only', '--diff', `${base}...HEAD`]);
+  expect(r.code, r.err).toBe(1);
+  expect(r.result?.refactor?.verdict).toBe('NOT EQUIVALENT');
+  expect(r.provider.calls).toHaveLength(0); expect(r.quota).not.toHaveBeenCalled();
+});
+it.each([
+  ['README.md', 'documentation', 'NO BEHAVIOUR CHANGE FOUND'],
+  ['sample.py', 'def value(): return 1', 'SUSPECT'],
+  ['large.ts', Array.from({ length: 4000 }, (_, i) => `export const x${i} = ${i};`).join('\n'), 'SUSPECT'],
+  ['oversized.ts', ' '.repeat(300 * 1024), 'SUSPECT'],
+  ['list.ts', 'export { ' + 'a,'.repeat(2500) + 'b };', 'SUSPECT'],
+])('handles evidence limits and non-source files end to end: %s', async (file, text, verdict) => {
+  await writeFile(path.join(root, file), text);
+  await git('add', '.'); await git('commit', '-m', 'synthetic evidence base');
+  const base = await git('rev-parse', 'HEAD');
+  await writeFile(path.join(root, file), text + '\n// changed\n');
+  await git('add', '.'); await git('commit', '-m', 'synthetic evidence head');
+  const r = await review(['--deterministic-only', '--diff', `${base}...HEAD`]);
+  expect(r.code, r.err).toBe(0);
+  expect(r.result?.refactor?.verdict).toBe(verdict);
+  if (file === 'README.md') {
+    expect(r.result?.refactor?.reasons).not.toContain('Touched files have no test dependent.');
+    expect(await readFile(path.join(root, '.quorum/report.md'), 'utf8')).toContain('Non-source files changed');
+  } else {
+    expect(r.result?.refactor?.reasons.join(' ')).toContain(file);
+    expect(r.result?.refactor?.available).toBe(true);
+  }
+});
 it('runs real setup and JSON tests in base and head worktrees with no provider activity', async () => {
   const contextProvider = { name: 'codegraph', available: vi.fn(async () => true), enrich: vi.fn() };
   const r = await review(['--deterministic-only'], { contextProvider });
