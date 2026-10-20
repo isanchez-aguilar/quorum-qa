@@ -12,7 +12,7 @@ export function evaluateRefactorVerdict(
   if (evidence.api.incomplete || evidence.api.unscanned?.length) {
     reasons.push(...(evidence.api.notes.length ? evidence.api.notes : ['Public API scan is incomplete.']));
   }
-  if (evidence.blastRadius.incomplete) reasons.push('Blast radius scan is incomplete.', ...evidence.blastRadius.notes);
+  if (evidence.blastRadius.incomplete) reasons.push('blast radius incomplete', ...evidence.blastRadius.notes);
   // A local-only report is not a verified model verdict.
   const verified = [...cascade.findings, ...cascade.unconfirmed.filter(finding => finding.family !== 'local')];
   const blocker = verified.some(finding => finding.verified && finding.severity === 'BLOCKER');

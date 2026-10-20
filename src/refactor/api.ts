@@ -57,7 +57,9 @@ function tokens(source: string): Token[] {
 }
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
 const isName = (token?: Token) => !!token && !token.quoted && /^[A-Za-z_$][\w$]*$/.test(token.value);
-interface ScanResult { exports: ApiExport[]; notes: string[]; incomplete: boolean }
+interface ScanResult { exports: ApiExport[]; notes: string[]; incomplete: boolean; exportLines: Set<string>; semanticSource: string }
+const tokenKey = (token: Token) => token.quoted ? JSON.stringify(token.value) : token.value;
+const canonical = (text: string) => tokens(text).map(tokenKey).join(' ');
 
 /** Public convenience API; comparison also consumes the scanner's coverage diagnostics. */
 export function scanExports(input: string): ApiExport[] { return scanFile(input, '<input>').exports; }
@@ -69,6 +71,10 @@ function scanFile(input: string, file: string): ScanResult {
   if (bytes.length > API_INPUT_BYTES) note('API input cap: 256 KiB per file.');
   const source = bytes.subarray(0, API_INPUT_BYTES).toString('utf8');
   const lex = tokens(source); const result: ApiExport[] = [];
+  const implementation = new Set<number>();
+  const ignoreImplementation = (begin: number, end: number) => {
+    for (let j = begin; j < end; j++) implementation.add(j);
+  };
   const value = (i: number) => lex[i]?.quoted ? undefined : lex[i]?.value;
   // Index structural pairs once, so nested bodies and initializers can be skipped in O(1).
   const pairs = new Map<number, number>(); const stack: number[] = [];
@@ -86,8 +92,8 @@ function scanFile(input: string, file: string): ScanResult {
   const add = (name: string, text: string, line: number, renamed = text, comparison?: string) => {
     if (result.length >= 2000) { note('API export cap: 2000 exports per file.'); return; }
     const signature = comparison === undefined ? keep(text) : normalize(text);
-    result.push({ name, signature: signature.slice(0, 300), comparisonSignature: comparison ?? signature,
-      renameSignature: comparison === undefined ? keep(renamed) : renamed, line });
+    result.push({ name, signature: signature.slice(0, 300), comparisonSignature: comparison ?? keep(canonical(text)),
+      renameSignature: comparison === undefined ? keep(canonical(renamed)) : renamed, line });
   };
   // Braces belonging to types are groups; a declaration's implementation body is not.
   const headerEnd = (begin: number, mode: 'header' | 'type' | 'interface' | 'expression' = 'header'): number => {
@@ -95,7 +101,10 @@ function scanFile(input: string, file: string): ScanResult {
     for (let j = begin; j < lex.length; j++) {
       const t = lex[j]!; const v = value(j); const previous = value(j - 1);
       if (!angle && j > begin && t.line > lex[j - 1]!.line
-        && (mode === 'type' || mode === 'expression' || v === 'export')) return j;
+        && (mode === 'expression' || v === 'export'
+          || mode === 'type' && previous !== '='
+          && !['|', '&', '?', ':', '.', '(', '[', '{', '<'].includes(v ?? '')
+          && !(v === '=' && value(j + 1) === '>'))) return j;
       if (v === '<') { angle++; continue; }
       if (v === '>' && previous !== '=' && angle) { angle--; continue; }
       if (v === '(' || v === '[' || v === '{') {
@@ -150,6 +159,18 @@ function scanFile(input: string, file: string): ScanResult {
   for (let i = 0; i < lex.length; i++) {
     const start = lex[i]!;
     if (start.quoted) continue;
+    if (value(i) === 'Object' && value(i + 1) === '.' && value(i + 2) === 'assign' && value(i + 3) === '(') {
+      let target = i + 4;
+      if (value(target) === 'module' && value(target + 1) === '.') target += 2;
+      if (value(target) === 'exports') {
+        if (value(target + 1) === ',' && value(target + 2) === '{') {
+          const end = objectExports(target + 2);
+          if (value(end + 1) !== ')') commonUnknown();
+          i = end;
+        } else { commonUnknown(); i = target; }
+        continue;
+      }
+    }
     if (value(i) === 'Object' && value(i + 1) === '.' && value(i + 2) === 'defineProperty' && value(i + 3) === '(') {
       let target = i + 4;
       if (value(target) === 'module' && value(target + 1) === '.') target += 2;
@@ -160,11 +181,16 @@ function scanFile(input: string, file: string): ScanResult {
       }
     }
     const module = value(i) === 'module' && value(i + 1) === '.' && value(i + 2) === 'exports';
-    if (module || value(i) === 'exports' && value(i + 1) === '.') {
+    if (module || value(i) === 'exports' && ['.', '['].includes(value(i + 1) ?? '')) {
       let cursor = module ? i + 3 : i + 1;
       if (value(cursor) === '.' && isName(lex[cursor + 1]) && value(cursor + 2) === '=') {
         rhs(cursor + 3, lex[cursor + 1]!.value, start.line);
         i = cursor + 2;
+      } else if (value(cursor) === '[' && lex[cursor + 1]?.quoted
+        && !source.slice(lex[cursor + 1]!.start, lex[cursor + 1]!.end).startsWith('`')
+        && value(cursor + 2) === ']' && value(cursor + 3) === '=') {
+        rhs(cursor + 4, lex[cursor + 1]!.value, start.line);
+        i = cursor + 3;
       } else if (module && value(cursor) === '=') {
         cursor++;
         if (value(cursor) === '{') i = objectExports(cursor);
@@ -182,6 +208,30 @@ function scanFile(input: string, file: string): ScanResult {
     const typeOnly = value(cursor) === 'type' && value(cursor + 1) === '{';
     if (typeOnly) cursor++;
     const next = value(cursor);
+    if (isDefault && (next === '(' || next === '<' || isName(lex[cursor]) && !declarations.has(next ?? ''))) {
+      // Look only at the outer header: arrows nested in parameter/return types
+      // cannot delimit this function's implementation.
+      let arrow = cursor;
+      let angle = 0;
+      for (; arrow < lex.length; arrow++) {
+        const v = value(arrow);
+        if (v === '<') angle++;
+        else if (v === '>' && value(arrow - 1) !== '=' && angle) angle--;
+        if (!angle && v === '=' && value(arrow + 1) === '>') break;
+        if (v === ';' || v === 'export') break;
+        const close = pairs.get(arrow);
+        if (close !== undefined) arrow = close;
+      }
+      if (value(arrow) === '=' && value(arrow + 1) === '>') {
+        add('default', text(begin, arrow), start.line);
+        const body = arrow + 2;
+        const end = pairs.get(body) !== undefined && value(body) === '{'
+          ? pairs.get(body)! + 1 : headerEnd(body, 'expression');
+        ignoreImplementation(body, end);
+        i = Math.max(arrow + 1, end - 1);
+        continue;
+      }
+    }
     if (next === '{') {
       const end = pairs.get(cursor);
       if (end === undefined || lex[end]!.end - start.start > 4096) {
@@ -233,6 +283,9 @@ function scanFile(input: string, file: string): ScanResult {
     const renamed = !isDefault && nameToken
       ? source.slice(start.start, nameToken.start) + '<name>' + source.slice(nameToken.end, endOffset(end)) : signature;
     add(isDefault ? 'default' : nameToken!.value, signature, start.line, renamed);
+    if (next === 'function' && value(end) === '{' && pairs.has(end)) {
+      ignoreImplementation(end + 1, pairs.get(end)!);
+    }
     i = Math.max(cursor, end - 1);
     if (!isDefault && ['const', 'let', 'var'].includes(next ?? '')) {
       for (let j = end; j < lex.length; j++) {
@@ -252,13 +305,37 @@ function scanFile(input: string, file: string): ScanResult {
       }
     }
   }
-  return { exports: result, notes: [...notes], incomplete: notes.size > 0 };
+  // A second, deliberately broader view catches syntax the declaration scanner
+  // does not understand. Comments/spacing are absent; known function bodies are
+  // behaviour, so they do not participate even when written on the export line.
+  const exportLines = new Set<string>();
+  const semanticTokens: string[] = [];
+  let line: Token[] = [];
+  const flush = () => {
+    if (line[0]?.value === 'export' && !line[0].quoted
+      || line[0]?.value === 'exports' && !line[0].quoted && ['.', '['].includes(line[1]?.value ?? '')
+      || line.some((token, j) => !token.quoted && token.value === 'module'
+        && line[j + 1]?.value === '.' && line[j + 2]?.value === 'exports')) {
+      exportLines.add(line.map(tokenKey).join(' '));
+    }
+    line = [];
+  };
+  for (let j = 0; j < lex.length; j++) {
+    if (line.length && lex[j]!.line !== line[0]!.line) flush();
+    if (!implementation.has(j)) {
+      line.push(lex[j]!);
+      semanticTokens.push(tokenKey(lex[j]!));
+    }
+  }
+  flush();
+  return { exports: result, notes: [...notes], incomplete: notes.size > 0, exportLines, semanticSource: semanticTokens.join(' ') };
 }
 
 export function compareApi(base: Map<string, string>, head: Map<string, string>, basePackage: Record<string, unknown> = {}, headPackage: Record<string, unknown> = {}): ApiEvidence {
   const changes: ApiChange[] = []; const notes = new Set<string>(); const unscanned: string[] = [];
   let incomplete = false;
   for (const file of [...new Set([...base.keys(), ...head.keys()])].sort()) {
+    const changeStart = changes.length;
     if (unsupportedSource(file)) {
       unscanned.push(file); notes.add(`public API not checked for ${file} (language not supported)`); continue;
     }
@@ -298,6 +375,13 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
     }
     for (const item of added) changes.push({ file, name: item.name, kind: 'added', after: item.signature, line: item.line, breaking: false,
       ...(current.get(item.name)!.length > 1 ? { overloads: { before: 0, after: current.get(item.name)!.length } } : {}) });
+    if (/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && changes.length === changeStart
+      && before.semanticSource !== after.semanticSource
+      && (before.exportLines.size !== after.exportLines.size || [...before.exportLines].some(line => !after.exportLines.has(line)))) {
+      notes.add(`export-related lines changed but no API change was recognised: ${file}`);
+      incomplete = true;
+      unscanned.push(file);
+    }
   }
   const stable = (value: unknown): string => {
     if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;

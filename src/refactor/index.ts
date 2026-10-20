@@ -90,6 +90,8 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
   const summary = { available: evidence.available, reasons: evidence.reasons.slice(0, 5).map(short),
     apiIncomplete: evidence.api.incomplete ?? false, apiNotes: evidence.api.notes.slice(0, 5).map(short),
     unscanned: (evidence.api.unscanned ?? []).slice(0, 5).map(short),
+    blastIncomplete: evidence.blastRadius.incomplete ?? false,
+    testsUnknown: (evidence.blastRadius.testsUnknown ?? []).slice(0, 5).map(short),
     counts: { base: evidence.tests.base, head: evidence.tests.head },
     regressions: tests(evidence.tests.regressions), removedTests: tests(evidence.tests.removed),
     editedTests: evidence.tests.editedFiles.slice(0, 5).map(short),
@@ -97,7 +99,7 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
     packageChanges: evidence.api.packageChanges.map(change => change.field), withoutTests: evidence.blastRadius.withoutTests.slice(0, 5).map(short),
     totals: { regressions: evidence.tests.regressions.length, removedTests: evidence.tests.removed.length, editedTests: evidence.tests.editedFiles.length,
       breakingApi: evidence.api.changes.filter(change => change.breaking).length, withoutTests: evidence.blastRadius.withoutTests.length } };
-  const lists = [summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests];
+  const lists = [summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests, summary.testsUnknown];
   while (Buffer.byteLength(JSON.stringify(summary)) > 4096) {
     const largest = [...lists].sort((a, b) => b.length - a.length)[0];
     if (!largest?.length) break;

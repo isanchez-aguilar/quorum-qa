@@ -38,6 +38,7 @@ export function refactorMarkdown(report: RefactorReport): string[] {
     '## Blast radius',
     list(blastRadius.dependents.map(item => `${item.touchedFile} ← ${item.file} (hop ${item.hop}${item.isTest ? ', test' : ''}; ${item.source}${item.source === 'codegraph' ? ', untrusted and may be stale' : ''})`), 200),
     '### Touched files without tests', list(blastRadius.withoutTests, 200),
+    '### Touched files: tests unknown (search truncated)', list(blastRadius.testsUnknown ?? [], 200),
     `Non-source files changed: ${(blastRadius.nonSource ?? []).map(cell).join(', ') || 'None.'}`,
     ...blastRadius.notes.map(cell),
     '### Verdict reasons', list(report.reasons),

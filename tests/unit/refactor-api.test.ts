@@ -16,6 +16,93 @@ const cascade = { findings: [], unconfirmed: [], errors: [], coverage: {
   reviewedFiles: [], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: true,
 } };
 
+it.each([';', ''])('captures a next-line union body with terminator %j', terminator => {
+  const before = `export type Mode =\n  | 'a'\n  | 'b'${terminator}`;
+  expect(compare(before, `export type Mode =\n  | 'a'${terminator}`)).toMatchObject({
+    breaking: true, incomplete: false, changes: [expect.objectContaining({ name: 'Mode', kind: 'changed' })],
+  });
+});
+it('caps next-line type bodies explicitly', () => {
+  const api = compare("export type Mode =\n | 'a'" + " | 'b'".repeat(500));
+  expect(api.incomplete).toBe(true);
+  expect(api.notes.join(' ')).toContain('2000 characters');
+});
+it.each(["exports['alpha']", 'exports["alpha"]', "module.exports['alpha']", 'module.exports["alpha"]'])
+('understands literal bracket assignment %s', target => {
+  const api = compare(`${target} = 1;\nexports['beta'] = 2;`, "exports['beta'] = 2;");
+  expect(api).toMatchObject({ incomplete: false, changes: [expect.objectContaining({ name: 'alpha', kind: 'removed' })] });
+});
+it.each(['module.exports', 'exports'])('understands Object.assign(%s, object)', target => {
+  const api = compare(`Object.assign(${target}, { a, b, c: d });`, `Object.assign(${target}, { a, c: d });`);
+  expect(api).toMatchObject({ incomplete: false, changes: [expect.objectContaining({ name: 'b', kind: 'removed' })] });
+});
+it.each(['', 'async '])('ignores default %sarrow bodies but compares parameters and return types', async => {
+  const before = `export default ${async}(a: number) => { return a + 1; };`;
+  expect(compare(before, before.replace('+ 1', '+ 2'))).toMatchObject({ changes: [], incomplete: false });
+  expect(compare(before, before.replace('a: number', 'a: string')).breaking).toBe(true);
+  const annotated = before.replace(') =>', '): number =>');
+  expect(compare(annotated, annotated.replace('): number', '): string')).breaking).toBe(true);
+  expect(compare(`export default ${async}(a: number) => a + 1;`,
+    `export default ${async}(a: number) => a + 2;`)).toMatchObject({ changes: [], incomplete: false });
+});
+it('makes an unrecognised API miss visible per file, even beside a recognised change', () => {
+  const before = 'export { x as default };\nexport declare const enum Odd { ??? a }';
+  const after = before.replace('??? a', '??? b');
+  const api = compareApi(new Map([['unknown.ts', before], ['known.ts', 'export const x = 1;']]),
+    new Map([['unknown.ts', after], ['known.ts', 'export const y = 1;']]));
+  expect(api.incomplete).toBe(true);
+  expect(api.unscanned).toContain('unknown.ts');
+  expect(api.notes).toContain('export-related lines changed but no API change was recognised: unknown.ts');
+  expect(evaluateRefactorVerdict(evidence(compare(before, after)), cascade).verdict).toBe('SUSPECT');
+});
+it('does not add safety-net noise for a recognised change', () => {
+  expect(compare('export const a = 1;', 'export const b = 1;').notes).toEqual([]);
+});
+it('ignores whitespace and comments in both signatures and the safety net', () => {
+  const before = 'export type Mode = string;\nexport declare const enum Odd { ??? a }';
+  const after = ' export /* comment */ type Mode=string; // trailing\n export declare const enum Odd { /* note */ ??? a }';
+  expect(compare(before, after)).toMatchObject({ changes: [], incomplete: false, notes: [] });
+  expect(compare(before, before.replace('??? a', '???\n a'))).toMatchObject({ changes: [], incomplete: false });
+  expect(compare('export function f(a: number): string;',
+    'export function f(a: number) // comment\n: string;')).toMatchObject({ changes: [], incomplete: false });
+  expect(compare('export function f(a: number) // comment\n: string;',
+    'export function f(a: number) // comment\n: number;').breaking).toBe(true);
+});
+it.each([
+  ['overloads', 'export function f(a: number): number;\nexport function f(a: string): string;', 'a: string', 'a: boolean'],
+  ['abstract', 'export abstract class A extends B {}', 'extends B', 'extends C'],
+  ['const enum', 'export const enum A {}', 'enum A', 'enum B'],
+  ['export assignment', 'export = Foo;', 'Foo', 'Bar'],
+  ['CommonJS dotted', 'exports.foo = 1; module.exports.bar = 2;', 'exports.foo', 'exports.baz'],
+  ['multiline signature', 'export function f(\n a: number\n): string {}', 'a: number', 'a: string'],
+])('preserves existing comparison support: %s', (_name, source, from, to) => {
+  expect(compare(source, source.replace(from, to))).toMatchObject({ breaking: true, incomplete: false });
+});
+it.each([
+  ['export type Mode =\n  string;', 'string', 'number'],
+  ['export type Mode = A\n & B;', '& B', '& C'],
+  ['export type Mode = A extends B\n ? C\n : D;', ': D', ': E'],
+  ['export type Mode = A\n.B;', '.B', '.C'],
+  ['export type Mode = ()\n => string;', 'string', 'number'],
+  ['export type Mode =\n { a: string };', 'string', 'number'],
+  ['export type Mode = A\n [number];', 'number', 'string'],
+])('retains type continuation tokens: %s', (source, from, to) => {
+  expect(compare(source, source.replace(from, to)).breaking).toBe(true);
+});
+it('stops an unterminated type before the next declaration', () => {
+  const before = "export type Mode =\n | 'a'\nconst implementation = 1;";
+  expect(compare(before, before.replace('= 1', '= 2'))).toMatchObject({ changes: [], incomplete: false });
+});
+it.each([
+  'export type Mode =\n' + '| '.repeat(128 * 1024),
+  'exports['.repeat(32768),
+  'Object.assign(module.exports, {' + ','.repeat(256 * 1024),
+])('bounds new adversarial capture paths under 300 ms %#', source => {
+  const start = performance.now();
+  compare(source.slice(0, 256 * 1024));
+  expect(performance.now() - start).toBeLessThan(300);
+});
+
 it.each([
   ['export abstract class BaseService { }', 'BaseService'],
   ['export default abstract class BaseService { }', 'default'],

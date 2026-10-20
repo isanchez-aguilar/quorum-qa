@@ -6,7 +6,7 @@ import type { CommandRunner } from '../types/index.js';
 import type { ApiExport } from './api.js';
 
 export interface Dependent { file: string; touchedFile: string; hop: 1 | 2; isTest: boolean; source: 'imports' | 'codegraph' }
-export interface BlastRadius { dependents: Dependent[]; withoutTests: string[]; notes: string[]; incomplete?: boolean; nonSource?: string[] }
+export interface BlastRadius { dependents: Dependent[]; withoutTests: string[]; notes: string[]; incomplete?: boolean; nonSource?: string[]; testsUnknown?: string[] }
 export const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 export const isTestFile = (file: string) => /(?:^|\/)__tests__\/|(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[^/]+$/i.test(file.replace(/\\/g, '/'));
 const inside = (file: string) => file !== '..' && !file.startsWith('../') && !path.isAbsolute(file);
@@ -63,7 +63,7 @@ export async function buildBlastRadius(root: string, touched: string[], options:
     seen.add(key);
     if (result.dependents.length >= (options.maxDependents ?? 200)) {
       if (!listCapped) result.notes.push('Blast radius: 200 dependents list cap reached.');
-      listCapped = true; return;
+      listCapped = true; result.incomplete = true; return;
     }
     result.dependents.push(item);
   };
@@ -108,6 +108,8 @@ export async function buildBlastRadius(root: string, touched: string[], options:
       }
     } else result.notes.push('CodeGraph callers unavailable; using scanned relative imports.');
   }
-  result.withoutTests = touched.filter(file => sourceExtensions.includes(path.extname(file)) && !isTest(file) && !tested.has(file));
+  const untested = touched.filter(file => sourceExtensions.includes(path.extname(file)) && !isTest(file) && !tested.has(file));
+  result.withoutTests = result.incomplete ? [] : untested;
+  result.testsUnknown = result.incomplete ? untested : [];
   return result;
 }

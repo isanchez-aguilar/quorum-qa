@@ -2878,3 +2878,61 @@ rebuilt the CLI and passed **62 test files, 1,477 tests, 7 skipped** in
 passed. No dependencies, provider runs, repository logs, commits, pushes or
 branch switches were added. External cross-family review was not run because
 provider execution was explicitly prohibited for this task.
+
+Round 2 fixes after Gemini's re-review of `bd24be5`:
+
+- Type aliases retain next-line bodies and leading union/intersection members,
+  stopping at a shallow semicolon or a non-continuation newline. Continuations
+  include `|`, `&`, `?`, `:`, `.`, `=>` and opening groups. The comparison/display
+  limits remain 2000/300 characters; truncation names the cap and marks API
+  evidence incomplete.
+- CommonJS includes literal single/double-quoted bracket assignments on both
+  `exports` and `module.exports`, and shallow properties in
+  `Object.assign(exports, {...})` / `Object.assign(module.exports, {...})`.
+- Default arrows compare their header before `=>`, including `async`,
+  parameters and return annotations, excluding block/expression bodies.
+  Signature comparison tokenizes before normalizing whitespace, so comments
+  (including line comments inside multiline headers) do not hide annotations
+  or create signature changes.
+- A per-file safety net compares normalized export-looking line sets in base
+  and head: leading `export`, leading `exports.` / `exports[`, or lines
+  containing `module.exports`. If these differ without a recognized API change
+  in that file, the exact note is
+  `export-related lines changed but no API change was recognised: <file>`;
+  `api.incomplete` is true and `api.unscanned` lists the file. This makes an
+  otherwise clean verdict SUSPECT. Comments and whitespace are ignored,
+  including line wrapping with identical token content. Recognized function
+  implementation bodies are excluded from this fallback so body-only changes
+  retain the intended deterministic verdict. Unknown enum/member syntax is
+  not excluded. This is a lexical safety net, not a complete parser.
+- All three blast caps (200 dependents, 3000 scanned files, 64 KiB/file) mark
+  evidence incomplete. Files without a proven test dependent move from
+  `withoutTests` to `testsUnknown`; Markdown lists them under
+  "Touched files: tests unknown (search truncated)". Verdict reasons include
+  `blast radius incomplete`, and the bounded model summary includes the
+  incomplete flag and unknown-test list. A positively identified test remains
+  evidence even when its dependent entry falls outside the display cap.
+
+Before implementation, the targeted API/blast/CLI run had **19 failing and
+101 passing tests**. The failing regressions were: two next-line union cases,
+the next-line signature cap, four bracket assignment forms, two Object.assign
+targets, two default-arrow variants, the unknown-syntax safety net, comment/
+whitespace comparison, all three blast caps, and all three new deterministic
+CLI cases. The CLI cases assert NOT EQUIVALENT for union-member and bracket
+export removal, and NO BEHAVIOUR CHANGE FOUND for a default-arrow body edit
+with unchanged tests. Existing-support and adversarial timing controls passed
+on the old code. Additional tables cover existing overload/abstract/const-enum/
+export-assignment/dotted-CommonJS/multiline signatures, type continuation
+tokens, comment boundaries and semicolon-free declaration boundaries. Three
+new 256 KiB adversarial cases exercise union continuation, repeated `exports[`
+and Object.assign commas with a 300 ms limit.
+
+Round 2 validation on Windows: `pnpm.cmd typecheck` passed; `pnpm.cmd test`
+rebuilt the CLI and passed **62 test files, 1,514 tests, 7 skipped** in
+100.38 seconds (existing environment-gated skips). Compiled `compareApi`
+probes for the new 256 KiB cases took **122/49/45 ms**, respectively.
+`git diff --check` passed. Changes remain uncommitted on `feat/v2-refactor`.
+No dependencies, provider commands, quota usage, repository logs, branch
+switches, pushes or external review were added; provider execution was
+explicitly prohibited. Linux/macOS and opt-in container execution remain
+unverified.

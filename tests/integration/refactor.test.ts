@@ -65,6 +65,8 @@ async function review(args: string[] = [], dependencies: CliDependencies = {}) {
   return { code, out, err, provider, quota, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
 it.each([
+  ['next-line union', 'sample.ts', "export type Mode =\n  | 'a'\n  | 'b';", "export type Mode =\n  | 'a';"],
+  ['CommonJS brackets', 'sample.ts', "exports['x'] = 1;\nexports['beta'] = 2;", "exports['beta'] = 2;"],
   ['overload', 'sample.ts', 'export function parse(x: string): string;\nexport function parse(x: number): number;\nexport function parse(x: string | number) { return x; }',
     'export function parse(x: number): number;\nexport function parse(x: string | number) { return x; }'],
   ['multiline parameter', 'sample.ts', 'export function calculate(\n  a: number,\n  b: string\n): boolean {',
@@ -79,6 +81,17 @@ it.each([
   const r = await review(['--deterministic-only', '--diff', `${base}...HEAD`]);
   expect(r.code, r.err).toBe(1);
   expect(r.result?.refactor?.verdict).toBe('NOT EQUIVALENT');
+  expect(r.provider.calls).toHaveLength(0); expect(r.quota).not.toHaveBeenCalled();
+});
+it('ignores default-arrow body changes end to end with unchanged tests', async () => {
+  await writeFile(path.join(root, 'sample.ts'), 'export default (a: number) => { return a + 1; };');
+  await git('add', '.'); await git('commit', '-m', 'arrow base');
+  const base = await git('rev-parse', 'HEAD');
+  await writeFile(path.join(root, 'sample.ts'), 'export default (a: number) => { return a + 2; };');
+  await git('add', '.'); await git('commit', '-m', 'arrow head');
+  const r = await review(['--deterministic-only', '--diff', `${base}...HEAD`]);
+  expect(r.code, r.err).toBe(0);
+  expect(r.result?.refactor?.verdict).toBe('NO BEHAVIOUR CHANGE FOUND');
   expect(r.provider.calls).toHaveLength(0); expect(r.quota).not.toHaveBeenCalled();
 });
 it.each([

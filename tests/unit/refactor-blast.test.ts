@@ -6,6 +6,9 @@ import { buildBlastRadius } from '../../src/refactor/blast.js';
 import { CodeGraphContextProvider } from '../../src/context/codegraph.js';
 import type { CommandRunner } from '../../src/types/index.js';
 import { scanExports } from '../../src/refactor/api.js';
+import { compareTests } from '../../src/refactor/index.js';
+import { evaluateRefactorVerdict } from '../../src/cli/refactor.js';
+import { refactorMarkdown } from '../../src/reporters/refactor.js';
 
 let root: string;
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), 'quorum-refactor-blast-')); });
@@ -14,6 +17,26 @@ async function put(file: string, source: string) {
   await mkdir(path.dirname(path.join(root, file)), { recursive: true });
   await writeFile(path.join(root, file), source);
 }
+it.each(['dependents', 'files', 'size'])('marks %s truncation as unknown test coverage', async cap => {
+  await put('a.ts', '');
+  await put('b.ts', "import './a';");
+  await put('z.test.ts', (cap === 'size' ? ' '.repeat(65536) : '') + "import './a';");
+  const blast = await buildBlastRadius(root, ['a.ts', 'untested.ts'],
+    cap === 'dependents' ? { maxDependents: 1 } : cap === 'files' ? { maxFiles: 2 } : {});
+  expect(blast.incomplete).toBe(true);
+  expect(blast.withoutTests).toEqual([]);
+  expect(blast).toMatchObject({ testsUnknown: expect.arrayContaining(['untested.ts']) });
+  if (cap !== 'dependents') expect(blast).toMatchObject({ testsUnknown: expect.arrayContaining(['a.ts']) });
+  const passing = { runner: 'vitest' as const, tests: [], suiteErrors: [] };
+  const evidence = { available: true, reasons: [], summary: '', blastRadius: blast,
+    tests: compareTests(passing, passing), api: { changes: [], packageChanges: [], breaking: false, notes: [] } };
+  const verdict = evaluateRefactorVerdict(evidence, { findings: [], unconfirmed: [], errors: [], coverage: {
+    reviewedFiles: [], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: true,
+  } });
+  expect(verdict).toMatchObject({ verdict: 'SUSPECT', reasons: expect.arrayContaining(['blast radius incomplete']) });
+  expect(refactorMarkdown({ ...evidence, ...verdict, allowApiChange: false, modelReview: false }).join('\n'))
+    .toContain('tests unknown (search truncated)');
+});
 it('separates non-source changes from missing test dependents', async () => {
   const files = ['README.md', 'package.json', 'app.config.json', 'icon.png'];
   const blast = await buildBlastRadius(root, [...files, 'source.ts']);
