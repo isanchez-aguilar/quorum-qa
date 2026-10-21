@@ -3119,3 +3119,88 @@ passed 70 test files, 1,862 tests, with 7 existing skips in 112.61 seconds.
 `QUORUM_CONTAINER_TESTS=0` explicitly kept the opt-in Docker test disabled.
 `git -c core.safecrlf=false diff --check` passed. Linux/macOS, browser and
 container execution remain unverified. Changes are uncommitted on `feat/runtime-r0`.
+
+## v2 runtime R1 as built
+
+`src/runtime/collector.cjs` exports `run({ playwright, plan, now })` and the frozen
+`CHROMIUM_ARGS`. The plan uses R0's runtime config fields (`readyUrl`, `flows`,
+`flowTimeoutSeconds`, `stepTimeoutSeconds`). Its guarded CommonJS entry reads
+the plan from argv[2] and writes one JSON report to argv[3]; only that entry
+resolves Playwright. R2 must copy this Quorum-owned script into the container
+and transport its report through the fresh-marker wrapper. No CLI execution
+or container orchestration is enabled by R1.
+
+Each flow runs twice in fresh contexts. Context routing fulfills non-loopback
+requests with an empty 204 and retains host counts only. Service workers are
+blocked so they cannot bypass context routing. Events retain URL paths without
+queries/fragments. Expected 4xx must belong to a request started within the
+current goto/click step and be a main-document or fetch/xhr response. Static
+sub-resource errors always retain signatures. Goto/click settle through
+domcontentloaded and a networkidle wait capped at two seconds; only the latter's
+TimeoutError is ignored. Step and flow deadlines race browser operations, stop
+the run, suppress late events and close its context. R2 still needs an outer
+process deadline for browser launch/teardown and a hung browser process.
+
+The in-page DOM probe returns only blank state and bounded matched snippets,
+never the complete body text. Visible images, SVG, canvas, video and inputs
+prevent blank detection. Fixed technical patterns use word boundaries. Limits
+are 200 observations per run, 2000 per report, 500 characters per message/path,
+200 per technical snippet, 300 per failure message and 2 MiB serialized UTF-8.
+Each hit adds a deduplicated `cap:` note. A bounded metadata reserve and an
+incremental serialized byte count avoid repeatedly serializing the report;
+size exhaustion stops all subsequent observations. Host maps are capped at
+200 entries per run, with reserved prototype names omitted and noted.
+
+`report.ts` exports the report types and parses untrusted JSON with an input byte
+limit, explicit field/type checks, bounded arrays, known flows, unique run pairs
+and prototype-key rejection. It truncates strings again, constructs safe maps,
+and fills missing configured runs with incomplete placeholders. It never walks
+arbitrary nested data recursively. `signature.ts` normalizes volatile message
+details with bounded/token-scoped regex passes, preserving case and HTTP resource
+paths. Async signatures omit step indexes; blank, technicalText and flow-failure
+include them. `stable.ts` returns `flows` (signature sets), `counts` (run-1/run-2
+tuples for every observed signature), `flaky` and `incomplete`. Matching failures
+in both runs remain stable failures; missing runs, cap notes or two unfinished
+runs without a shared failure retain incomplete coverage. Flows must be idempotent.
+
+Tests use an injected fake Playwright and synthetic DOM objects, including
+event timing, exact fields, routing, all step actions, cleanup, deadlines, every
+cap, malformed/deep JSON, signature collisions and stable/flaky/incomplete
+classification. Timing checks cover a 2 MiB/2000-observation report under 300 ms
+and a pathological 500 KB normalization input under 50 ms. Before implementation,
+both new suites failed collection because their target modules were missing;
+no individual assertions ran at that stage. An intermediate cap test caught an
+overlarge metadata reservation; it was corrected before delivery.
+
+R2 real-container verification must confirm: Chromium startup with exactly the
+two exported flags; routing/service-worker blocking and external 204 behavior;
+request/response identity and ordering around clicks/navigation (including redirects);
+DOM innerText/computed visibility in Chromium; load-state timeout behavior;
+context closure aborting pending operations; and report-file/marker transport.
+Fake tests do not establish any of these real-browser/container behaviors.
+
+No dependencies, network, browser installation, provider execution, logs, commits
+or pushes are added. External cross-family review is not run because provider
+execution is explicitly forbidden. The clean checkout was already on
+`feat/runtime-r1` at the same commit as local `main` (`002281d`), so no branch was
+changed. `git pull` was omitted to obey the no-network constraint. Linux/macOS
+and real Playwright/container execution remain unverified.
+
+R1 targeted Windows validation: `pnpm typecheck`, `node --check
+src/runtime/collector.cjs`, and `git -c core.safecrlf=false diff --check` passed.
+`pnpm exec vitest run tests/unit/runtime-evidence.test.ts
+tests/unit/runtime-collector.test.ts --maxWorkers 1` passed all 103 new tests.
+The first broad run (`QUORUM_CONTAINER_TESTS=0`, `pnpm run test --exclude
+tests/unit/runtime-app.test.ts`) passed 1947 tests, skipped 7 existing gates,
+and failed one existing refactor-mutation timing assertion (335 ms versus its
+300 ms bound). That suite passed when repeated with one worker. The runtime-app
+suite is deliberately excluded because it opens real loopback HTTP connections;
+the task forbids all network use. An initial `pnpm test --exclude ...` invocation
+was rejected by pnpm's option parser; `pnpm run test` correctly forwards flags.
+
+The final broad run, `QUORUM_CONTAINER_TESTS=0` and `pnpm run test --exclude
+tests/unit/runtime-app.test.ts --maxWorkers 2`, rebuilt successfully and passed
+71 files / 1958 tests, with 7 existing skips, in 417.38 seconds. This is the
+repository test script with reduced concurrency and the explicit network-suite
+exclusion, not a claim that the unrestricted `pnpm test` ran. Changes remain
+uncommitted on `feat/runtime-r1`.
