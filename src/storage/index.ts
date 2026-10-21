@@ -87,8 +87,8 @@ async function assertRealParents(file: string, repoRoot: string): Promise<void> 
   }
 }
 
-// Exported so tests can shorten the waits.
-export const LEDGER_LOCK = { idleMs: 10_000, maxMs: 120_000 };
+// Exported so tests can shorten the waits and drive the clock.
+export const LEDGER_LOCK = { idleMs: 10_000, maxMs: 120_000, now: () => Date.now() };
 
 export async function appendLedger(entries: readonly unknown[], file: string, repoRoot = process.cwd(), maxBytes?: number): Promise<void> {
   if (!entries.length) return;
@@ -99,9 +99,11 @@ export async function appendLedger(entries: readonly unknown[], file: string, re
   const owner = randomUUID();
   // A busy queue is not a stuck lock: wait while the holder keeps changing, and give up only
   // after the same holder has kept it for idleMs (or after maxMs in all). Stale locks are reclaimed.
-  const start = Date.now();
-  const deadline = start + LEDGER_LOCK.maxMs;
+  const { now } = LEDGER_LOCK;
+  const start = now();
   let holder: string | undefined; let since = start;
+  const gaveUp = (cause: unknown) => Object.assign(new Error(
+    `Ledger lock ${lockPath} is still held after ${Math.round((now() - start) / 1000)} s; nothing was written.`), { code: 'ELEDGERLOCK', cause });
   for (let attempt = 0; !lock; attempt++) {
     try { lock = await open(lockPath, 'wx'); }
     catch (error) {
@@ -109,15 +111,16 @@ export async function appendLedger(entries: readonly unknown[], file: string, re
       if (code !== 'EEXIST' && !TRANSIENT.has(code)) throw error;
       const current = await readFile(lockPath, 'utf8').catch(() => undefined);
       // An unreadable lock (being deleted on Windows) tells nothing about progress.
-      if (current !== undefined && current !== holder) { holder = current; since = Date.now(); }
-      if (Date.now() - since > LEDGER_LOCK.idleMs || Date.now() > deadline) {
-        throw Object.assign(new Error(`Ledger lock ${lockPath} is still held after ${Math.round((Date.now() - start) / 1000)} s; nothing was written.`), { code: 'ELEDGERLOCK', cause: error });
-      }
+      if (current !== undefined && current !== holder) { holder = current; since = now(); }
+      if (now() - since > LEDGER_LOCK.idleMs || now() - start > LEDGER_LOCK.maxMs) throw gaveUp(error);
+      // Reclaiming a stale lock gets the idle allowance, not the whole absolute budget.
+      const reclaimDeadline = Date.now() + LEDGER_LOCK.idleMs;
       try {
-        await retireStaleLock(lockPath, deadline);
+        await retireStaleLock(lockPath, reclaimDeadline);
       } catch (statError) {
         const statCode = (statError as NodeJS.ErrnoException).code ?? '';
-        if ((statCode !== 'ENOENT' && !TRANSIENT.has(statCode)) || Date.now() >= deadline) throw statError;
+        if (statCode !== 'ENOENT' && !TRANSIENT.has(statCode)) throw statError;
+        if (Date.now() >= reclaimDeadline) throw gaveUp(statError);
       }
       await sleep(Math.min(100, 5 * 2 ** Math.min(attempt, 5)) + Math.random() * 10);
     }
