@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { acceptanceCriteria, inventoryFeatures } from '../../src/modes/index.js';
-import { appendLedger, atomicWrite, cacheKey, diskCache } from '../../src/storage/index.js';
+import { appendLedger, atomicWrite, cacheKey, diskCache, LEDGER_LOCK } from '../../src/storage/index.js';
 import { runCascade } from '../../src/cascade/index.js';
 import { validateConfig } from '../../src/config/index.js';
 import { FakeProvider } from '../../src/providers/fake.js';
@@ -175,4 +175,41 @@ it('keeps every line when many writers append at once', async () => {
   const ids = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line).id as number);
   expect(ids).toHaveLength(40);
   expect(new Set(ids).size).toBe(40);
+});
+// The lock wait measures time without progress, not total time: a long but moving queue must not fail.
+async function withLockTiming<T>(timing: Partial<typeof LEDGER_LOCK>, run: () => Promise<T>): Promise<T> {
+  const saved = { ...LEDGER_LOCK }; Object.assign(LEDGER_LOCK, timing);
+  try { return await run(); } finally { Object.assign(LEDGER_LOCK, saved); }
+}
+async function rotateLock(lockPath: string, everyMs: number, forMs: number): Promise<void> {
+  const end = Date.now() + forMs;
+  for (let turn = 0; Date.now() < end; turn++) { await writeFile(lockPath, `holder-${turn}`); await new Promise(resolve => setTimeout(resolve, everyMs)); }
+  await rm(lockPath, { force: true });
+}
+it('keeps waiting past the idle limit while the lock keeps changing holders', async () => {
+  const file = path.join(root, 'queue.jsonl'); const lockPath = `${file}.lock`;
+  await withLockTiming({ idleMs: 1000, maxMs: 20000 }, async () => {
+    await writeFile(lockPath, 'holder-start');
+    const started = Date.now();
+    await Promise.all([rotateLock(lockPath, 25, 2500), appendLedger([{ id: 1 }], file)]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2500);
+  });
+  expect(JSON.parse(await readFile(file, 'utf8')).id).toBe(1);
+}, 15000);
+it('gives up with a clear error and writes nothing when one holder keeps the lock', async () => {
+  const file = path.join(root, 'stuck.jsonl'); await writeFile(`${file}.lock`, 'holder-stuck');
+  await withLockTiming({ idleMs: 150, maxMs: 5000 }, async () => {
+    await expect(appendLedger([{ id: 1 }], file)).rejects.toMatchObject({ code: 'ELEDGERLOCK', message: expect.stringContaining('nothing was written') });
+  });
+  await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(`${file}.lock`, 'utf8')).toBe('holder-stuck');
+});
+it('stops at the absolute limit even while holders keep changing', async () => {
+  const file = path.join(root, 'endless.jsonl'); const lockPath = `${file}.lock`;
+  await withLockTiming({ idleMs: 1000, maxMs: 400 }, async () => {
+    await writeFile(lockPath, 'holder-start');
+    const rotation = rotateLock(lockPath, 25, 1500);
+    await expect(appendLedger([{ id: 1 }], file)).rejects.toMatchObject({ code: 'ELEDGERLOCK' });
+    await rotation;
+  });
 });

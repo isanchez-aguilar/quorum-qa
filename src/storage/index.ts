@@ -87,6 +87,9 @@ async function assertRealParents(file: string, repoRoot: string): Promise<void> 
   }
 }
 
+// Exported so tests can shorten the waits.
+export const LEDGER_LOCK = { idleMs: 10_000, maxMs: 120_000 };
+
 export async function appendLedger(entries: readonly unknown[], file: string, repoRoot = process.cwd(), maxBytes?: number): Promise<void> {
   if (!entries.length) return;
   await assertRealParents(file, repoRoot);
@@ -94,12 +97,22 @@ export async function appendLedger(entries: readonly unknown[], file: string, re
   let lock;
   const lockPath = `${file}.lock`;
   const owner = randomUUID();
-  const deadline = Date.now() + 10_000;
+  // A busy queue is not a stuck lock: wait while the holder keeps changing, and give up only
+  // after the same holder has kept it for idleMs (or after maxMs in all). Stale locks are reclaimed.
+  const start = Date.now();
+  const deadline = start + LEDGER_LOCK.maxMs;
+  let holder: string | undefined; let since = start;
   for (let attempt = 0; !lock; attempt++) {
     try { lock = await open(lockPath, 'wx'); }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? '';
-      if ((code !== 'EEXIST' && !TRANSIENT.has(code)) || Date.now() > deadline) throw error;
+      if (code !== 'EEXIST' && !TRANSIENT.has(code)) throw error;
+      const current = await readFile(lockPath, 'utf8').catch(() => undefined);
+      // An unreadable lock (being deleted on Windows) tells nothing about progress.
+      if (current !== undefined && current !== holder) { holder = current; since = Date.now(); }
+      if (Date.now() - since > LEDGER_LOCK.idleMs || Date.now() > deadline) {
+        throw Object.assign(new Error(`Ledger lock ${lockPath} is still held after ${Math.round((Date.now() - start) / 1000)} s; nothing was written.`), { code: 'ELEDGERLOCK', cause: error });
+      }
       try {
         await retireStaleLock(lockPath, deadline);
       } catch (statError) {
