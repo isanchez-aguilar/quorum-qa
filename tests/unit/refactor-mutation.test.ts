@@ -34,10 +34,17 @@ it('is deterministic, changed-line only, excludes tests, and round-robins operat
   expect(generateMutants('a.test.ts', content, new Set([1]))).toEqual([]);
 });
 it('bounds adversarial scanning without materializing every mutated file', () => {
-  for (const content of [('a+').repeat(100000), '"' + 'a+'.repeat(100000), '`' + 'a+'.repeat(100000)].map(text => text.padEnd(256 * 1024))) {
+  // A 300 ms wall-clock bound was flaky under full-suite load (317 ms seen; about 70 ms alone).
+  // Check the work deterministically instead: one candidate per operator, and mutated text built
+  // only on demand. The loose time ceiling still catches a quadratic scan, which takes minutes here.
+  const cases: Array<[string, number]> = [[('a+').repeat(100000), 99999], ['"' + 'a+'.repeat(100000), 0], ['`' + 'a+'.repeat(100000), 0]];
+  for (const [text, candidates] of cases) {
+    const content = text.padEnd(256 * 1024);
     const start = performance.now();
     const mutants = generateMutants('a.ts', content, new Set([1]));
-    expect(performance.now() - start).toBeLessThan(300);
+    expect(performance.now() - start).toBeLessThan(5000);
+    expect(mutants).toHaveLength(candidates);
+    expect(mutants.every(item => typeof Object.getOwnPropertyDescriptor(item, 'text')?.get === 'function')).toBe(true);
     expect(mutants.slice(0, 25).every(item => item.text.length <= 256 * 1024)).toBe(true);
   }
   expect(generateMutants('a.ts', 'a'.repeat(256 * 1024 + 1), new Set([1]))).toEqual([]);
