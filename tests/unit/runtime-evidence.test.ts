@@ -128,3 +128,23 @@ it('keeps distinct resources and error descriptions distinct', () => {
   const paths = ['/a/missing.js', '/b/missing.js'];
   expect(new Set(paths.map(path => signature({ kind: 'http', status: 404, path, message: '' }, 'home'))).size).toBe(2);
 });
+it('strips ports from parenthesised V8 stack-frame URLs', () => {
+  expect(normalizeMessage('at f (http://127.0.0.1:4173/assets/app.js:12:34)')).toBe('at f (http://127.0.0.1/assets/app.js)');
+  expect(normalizeMessage('at f (http://localhost:80/app.js:1:2)')).toBe(normalizeMessage('at f (http://localhost:5173/app.js:9:9)'));
+});
+it('matches a stable failure by step even when its message varies, and keeps truncation-only notes complete', () => {
+  const value = report();
+  for (const [index, message] of ['net::ERR_A', 'net::ERR_B'].entries()) {
+    value.runs[index]!.completed = false;
+    value.runs[index]!.observations.push({ kind: 'flow-failure', step: 0, message, errorClass: 'navigation' });
+  }
+  value.runs[0]!.notes.push('cap: message');
+  expect(stableObservations(value)).toMatchObject({ flaky: [], incomplete: [] });
+  value.runs[1]!.observations[1]!.step = undefined as never;
+  value.runs[1]!.observations.push({ kind: 'flow-failure', step: 0, message: 'x', errorClass: 'other' });
+  expect(stableObservations(value).incomplete).toEqual([]);
+});
+it('accepts reports whose observations carry no path (about:blank)', () => {
+  const value = report(); value.runs[0]!.observations[0]!.path = '';
+  expect('runs' in (parseRuntimeReport(JSON.stringify(value), plan) as object)).toBe(true);
+});

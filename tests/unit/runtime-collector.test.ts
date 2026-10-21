@@ -191,3 +191,15 @@ it('enforces the per-step timeout and suppresses late observations', async () =>
     expect(JSON.stringify(value)).toBe(before); expect(value.runs[0]!.observations[0]!.errorClass).toBe('timeout');
   } finally { vi.useRealTimers(); }
 });
+it('records no path for events on about:blank and ignores hostless routed requests', async () => {
+  const pw = fake(async (page, index) => {
+    page.url = () => 'about:blank';
+    page.emit('console', { type: () => 'error', text: () => 'early' });
+    const route = { request: () => ({ url: () => 'data:text/plain,x' }), fulfill: vi.fn(), continue: vi.fn() };
+    await pw.contexts[index].handler(route);
+    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: '' });
+  });
+  const value = await run({ playwright: pw, plan: plan() });
+  const early = value.runs[0]!.observations.find(item => item.message === 'early');
+  expect(early?.path).toBe(''); expect(value.runs[0]!.blockedExternal).toEqual({});
+});

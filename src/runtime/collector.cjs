@@ -2,7 +2,8 @@
 
 const CHROMIUM_ARGS = Object.freeze(['--no-sandbox', '--disable-dev-shm-usage']);
 const MAX_BYTES = 2 * 1024 * 1024;
-const pathname = value => { try { return new URL(value).pathname; } catch { return ''; } };
+// about:blank and other opaque URLs have no absolute path; record none.
+const pathname = value => { try { const path = new URL(value).pathname; return path.startsWith('/') ? path : ''; } catch { return ''; } };
 
 // Runs in the page. Return bounded evidence, never the full document text.
 function inspectBody() {
@@ -67,7 +68,7 @@ async function run({ playwright, plan, now = Date.now }) {
         await bounded(() => context.route('**/*', async route => {
           const url = new URL(route.request().url());
           if (['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return route.continue();
-          if (active) {
+          if (active && url.hostname) {
             if (Object.hasOwn(result.blockedExternal, url.hostname)) result.blockedExternal[url.hostname]++;
             else if (['__proto__', 'constructor', 'prototype'].includes(url.hostname)) note('cap: external hosts');
             else if (sizeCapped || bytes + reserve + 300 > MAX_BYTES) { sizeCapped = true; note('cap: report size'); }
