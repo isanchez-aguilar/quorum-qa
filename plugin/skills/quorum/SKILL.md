@@ -46,10 +46,20 @@ worktree alongside triage; escalation and confirmation wait for their summary.
 Use `--sequential-checks` or `budget.sequentialChecks: true` when triage must see
 check results first. Refactor remains sequential with respect to its evidence;
 runtime and `--no-checks` are unchanged. Parallel triage omits check output and
-failed checks add an explicit warning; report status and exit rules are unchanged.
+failed checks add an explicit warning.
 Prompts change in the default mode, so the prompt-keyed cache is cold after an
 upgrade. Markdown/JSON include phase durations (JSON milliseconds), and stderr
 prints total elapsed time and checks/triage overlap.
+
+`budget.checkTimeoutSeconds` limits each setup/check command (integer 30–3600,
+default 120), in both concurrent and sequential modes. For a slow suite, set
+`"budget": { "checkTimeoutSeconds": 600 }` in the trusted config. A timeout is
+`TIMED OUT after <N>s`, counted separately from failed checks; it makes coverage
+INCOMPLETE and exits 2 unless a BLOCKER, error-severity rule match or real failed
+check requires exit 1. Report the warning
+`check "<argv>" timed out after <N>s; raise budget.checkTimeoutSeconds`.
+JSON/SARIF include `timedOut` and the applied `timeoutMs` on each check; confirmation
+prompts say `timed out`. Refactor and runtime keep their separate timeouts.
 
 ## 4. Run it safely
 
@@ -59,7 +69,7 @@ prints total elapsed time and checks/triage overlap.
 
 ## 5. Report what Quorum said
 
-- Exit code: `0` complete with no BLOCKER, `1` a BLOCKER remains, `2` incomplete coverage, nothing to review, or a tool or config error.
+- Exit code: `0` complete with no failing BLOCKER, check or error-severity rule match; `1` one of those failures remains; `2` incomplete coverage (including check timeouts) without an exit-1 condition, nothing to review, or a tool or config error.
 - Read the Markdown report (the path is printed, by default under `.quorum/reports/`). Show BLOCKERs first with their file:line, evidence and reproduction status, then IMPORTANT findings.
 - Always mention the Coverage section when it says INCOMPLETE, and any "Unconfirmed" findings, as Quorum reports them. Don't upgrade, downgrade or invent findings, and don't present an incomplete run as clean.
 - Runtime visual findings are advisory and unverified. Two different families flagging the same pair can raise a clean verdict to SUSPECT, still exit 0. Never treat them as NEW RUNTIME PROBLEMS or override UNKNOWN. Report unpaired images, incomplete visual flows and both independent claims. Without `--visual`, the report says `Visual review: off`.

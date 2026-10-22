@@ -30,7 +30,7 @@ export async function runDeterministicChecks(
         stderr = error.stderrTail;
       }
     }
-    results.push({ argv: [...argv], exitCode, durationMs: performance.now() - start, timedOut,
+    results.push({ argv: [...argv], exitCode, durationMs: performance.now() - start, timedOut, timeoutMs,
       stdoutTail: byteTail(stdout, 4096), stderrTail: byteTail(stderr, 4096) });
   }
   return { passed: results.every(result => result.exitCode === 0 && !result.timedOut), results };

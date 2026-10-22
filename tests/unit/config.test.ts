@@ -73,7 +73,7 @@ describe('validateConfig', () => {
 
   it('testConfig_PlanExample', () => {
     const config = validateConfig(structuredClone(PLAN_EXAMPLE));
-    expect(config).toEqual({ ...PLAN_EXAMPLE, budget: { ...PLAN_EXAMPLE.budget, concurrency: 3, sequentialChecks: false, maxCallsExplicit: true } });
+    expect(config).toEqual({ ...PLAN_EXAMPLE, budget: { ...PLAN_EXAMPLE.budget, concurrency: 3, sequentialChecks: false, checkTimeoutSeconds: 120, maxCallsExplicit: true } });
     expect(resolveAuthorFamily(config.author as string)).toBe('anthropic');
   });
 
@@ -115,7 +115,7 @@ describe('validateConfig', () => {
     const { author: _author, ...planDefaults } = PLAN_EXAMPLE;
     expect(config).toEqual({
       ...planDefaults,
-      budget: { ...planDefaults.budget, concurrency: 3, sequentialChecks: false, maxCallsExplicit: false },
+      budget: { ...planDefaults.budget, concurrency: 3, sequentialChecks: false, checkTimeoutSeconds: 120, maxCallsExplicit: false },
       checks: [['npm', 'test']],
       jules: { enabled: false, repo: '', maxSessionsPerRun: 3 },
     });
@@ -128,7 +128,7 @@ describe('validateConfig', () => {
       budget: { maxCalls: 5 },
       tiers: { review: ['codex'] },
     });
-    expect(config.budget).toEqual({ concurrency: 3, sequentialChecks: false, maxCalls: 5, maxCallsExplicit: true, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 });
+    expect(config.budget).toEqual({ concurrency: 3, sequentialChecks: false, checkTimeoutSeconds: 120, maxCalls: 5, maxCallsExplicit: true, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 });
     expect(config.tiers.review).toEqual(['codex']);
     expect(config.tiers.triage).toEqual(PLAN_EXAMPLE.tiers.triage);
   });

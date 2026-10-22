@@ -160,14 +160,14 @@ it.each([['image.png', true], ['data.bin', false]] as const)('visual review cove
   expect(result.coverage.reviewedFiles).toEqual(complete ? [file] : []);
 });
 
-it('reports failed checks in Status without changing the review exit code', async () => {
+it('reports failed checks and the supplied failure exit code in Status', async () => {
   const provider = new FakeProvider('agy', 'google', originRunner(root), { flash: ['[]'] });
   const cascade = await runCascade(context(root), config(), new Map([['agy', provider]]), { catalog, gitRunner: originRunner(root) });
   const result = { ...cascade, runId: 'checks', timestamp: '2026-10-19', mode: 'feature' as const, range: 'base...HEAD', headSha: 'b', baseSha: 'a',
-    checks: { passed: false, results: [{ argv: ['synthetic'], exitCode: 1, timedOut: false, durationMs: 1, stdoutTail: '', stderrTail: '' }] },
-    criteria: [], inventory: [], families: cascade.reviewedFamilies, exitCode: 0 };
+    checks: { passed: false, results: [{ argv: ['synthetic'], exitCode: 1, timedOut: false, timeoutMs: 120_000, durationMs: 1, stdoutTail: '', stderrTail: '' }] },
+    criteria: [], inventory: [], families: cascade.reviewedFamilies, exitCode: 1 };
   const status = generateMarkdownReport(result).split('\n').find(line => line.startsWith('**Status:**'));
-  expect(status).toContain('1 failed deterministic checks'); expect(status).toContain('exit 0');
+  expect(status).toContain('1 failed deterministic checks'); expect(status).toContain('exit 1');
 });
 it('keeps every line when many writers append at once', async () => {
   // A one-in-eleven failure under full-suite load showed the old one-second lock wait was too short.

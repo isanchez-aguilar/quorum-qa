@@ -35,6 +35,9 @@ const details = (findings: Finding[], refactor = false) => findings.length ? fin
   `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? `- **Reproduction Proof:** ${f.reproduction?.status ?? 'unproven'} (${cell(f.reproduction?.failureReason ?? 'reproduction not requested')}).` : '',
 ].filter(Boolean).join('\n')).join('\n\n') : 'None.';
 
+const checkStatus = (check: NonNullable<ReviewResult['checks']>['results'][number]) => check.timedOut
+  ? `TIMED OUT after ${check.timeoutMs / 1000}s` : `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode})`;
+
 function reproductionDetails(findings: Finding[]): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return findings.filter(f => f.severity === 'BLOCKER' || f.reproduction?.status && f.reproduction.status !== 'pending').map(f => {
@@ -58,13 +61,14 @@ export function generateMarkdownReport(result: ReviewResult): string {
   const all = [...result.findings, ...result.unconfirmed.filter(f => f.family !== 'local')];
   const refactor = result.mode === 'refactor';
   const findingDetails = (findings: Finding[]) => details(findings, refactor);
+  const timedOutChecks = result.checks?.results.filter(check => check.timedOut).length ?? 0;
   return [
     '# Quorum QA Review Report', `**Run ID:** ${cell(result.runId)} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
     ...budget,
     ...(result.refactor ? [`**Verdict:** ${result.refactor.verdict}`] : []),
     `**Time:** ${cell(result.timestamp)} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
     ...(result.durations ? ['**Durations:** ' + Object.entries(result.durations).map(([phase, ms]) => `${phase} ${formatDuration(ms)}`).join(' · ')] : []),
-    `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 || check.timedOut).length ?? 0} failed deterministic checks · Cache hits: ${result.cacheHits}`,
+    `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 && !check.timedOut).length ?? 0} failed deterministic checks · ${timedOutChecks} ${timedOutChecks === 1 ? 'check' : 'checks'} timed out · Cache hits: ${result.cacheHits}`,
     '## Executive Summary', ...(refactor ? ['| Category | Suspected behaviour changes |', '|---|---:|',
       ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => `| ${severity} | ${all.filter(f => f.severity === severity).length} |`)] : [
     '| Category | Introduced | Pre-existing | Improvement | Total |', '|---|---:|---:|---:|---:|',
@@ -74,7 +78,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     }),
     `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`]),
     ...(result.refactor ? refactorMarkdown(result.refactor) : []),
-    '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs or error-severity rule matches exits 2.**',
+    '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs, failed deterministic checks or error-severity rule matches exits 2.**',
     `- Reviewed: ${coverage.reviewedFiles.map(cell).join(', ') || 'none'}`,
     ...(result.mode === 'bughunt' ? [
       `- Windows reviewed: ${(coverage.reviewedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
@@ -107,7 +111,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     '## Reproduction', reproductionDetails([...result.findings, ...result.unconfirmed]),
     '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',
     result.checks === null ? refactor ? 'Setup and suite tests are reported above for merge-base and HEAD.' : 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
-      `- ${cell(check.argv.join(' '))}: ${check.exitCode === 0 && !check.timedOut ? 'passed' : 'FAILED'} (exit ${check.exitCode})\n\n${cell(check.stdoutTail + '\n' + check.stderrTail)}`).join('\n') : 'No checks configured.',
+      `- ${cell(check.argv.join(' '))}: ${checkStatus(check)}\n\n${cell(check.stdoutTail + '\n' + check.stderrTail)}`).join('\n') : 'No checks configured.',
     '## Rule matches',
     result.ruleChecks === null ? 'Skipped (--no-checks).' : result.ruleChecks?.results.filter(row => row.totalMatches).map(row =>
       `### ${cell(row.rule.id)} (${row.rule.severity})\n\n${cell(row.rule.message)}\n\n` +
@@ -126,13 +130,20 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
     { id: 'QRM002', name: 'ImportantDefect', shortDescription: { text: 'Important defect' }, defaultConfiguration: { level: 'warning' } },
     { id: 'QRM003', name: 'OptionalImprovement', shortDescription: { text: 'Optional improvement' }, defaultConfiguration: { level: 'note' } },
   ];
+  // Only checks that did not pass are reported; a normal run keeps the plain invocation shape.
+  const notifications = (result?.checks?.results ?? []).filter(check => check.timedOut || check.exitCode !== 0).map(check => ({
+    level: check.timedOut ? 'warning' : 'error', message: { text: `${check.argv.join(' ')}: ${checkStatus(check)}` },
+  }));
   return JSON.stringify({ $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0', runs: [{
     tool: { driver: { name: 'Quorum', version: '0.0.0', rules } },
-    invocations: [{ executionSuccessful: result ? !result.errors.length && result.coverage.complete : true }],
+    invocations: [{ executionSuccessful: result ? !result.errors.length && result.coverage.complete : true,
+      ...(notifications.length ? { toolExecutionNotifications: notifications } : {}),
+    }],
     properties: {
       coverage: { complete: result?.coverage.complete ?? true, skipped: result?.coverage.skippedFiles.length ?? 0,
         lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
       unconfirmedCount: result?.unconfirmed.length ?? 0,
+      ...(result ? { checks: result.checks } : {}),
       ...(result?.refactor ? { refactor: result.refactor } : {}),
       ...(result?.runtime ? { runtime: Object.fromEntries(Object.entries(result.runtime).filter(([key]) => key !== 'shots')) } : {}),
     },

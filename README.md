@@ -67,6 +67,17 @@ Add `quorum.config.json` to the repository root:
 
 Optional `setup` argv commands install dependencies in the fresh HEAD worktree before checks. A failed setup fails the checks phase and still permits review. Setup executes install scripts unless the command disables them; `--no-checks` skips both setup and checks. `budget.maxCallSeconds` defaults to 300 (30–1800), capped further by remaining run time.
 
+`budget.checkTimeoutSeconds` sets the limit for **each** setup/check command
+(integer 30–3600, default 120), including checks running alongside triage.
+For longer suites, use `"budget": { "checkTimeoutSeconds": 600 }`, as this repo does.
+A timeout reports `TIMED OUT after <N>s` using the configured limit, counts
+separately from failures and makes coverage **INCOMPLETE** (exit 2 unless a
+BLOCKER or error-severity rule match requires exit 1; a check that exits non-zero is shown in the report but never changes the exit code).
+The warning says `check "<argv>" timed out after <N>s; raise budget.checkTimeoutSeconds`.
+Confirmation prompts identify the timeout; JSON and SARIF retain `timedOut` and
+include `timeoutMs` on every check. SARIF also includes timeout notifications.
+Refactor uses `refactor.timeoutSeconds`; runtime keeps its own timeouts.
+
 Review speed: `budget.concurrency` is an integer from 1 to 6 (default 3).
 Independent chunks' first triage passes overlap; results are merged in chunk
 order. Fallbacks, local-model second passes and confirmation remain sequential.
@@ -78,8 +89,8 @@ Set `budget.concurrency: 1` for the previous triage schedule.
 Setup and checks run sequentially in their own disposable worktree, concurrently
 with triage by default. Triage prompts say that checks are running and omit their
 output; escalation and confirmation wait for the failed-check summary. Failed
-checks add a warning that triage ran without that context; report status and exit
-rules are unchanged. `--sequential-checks` (or `budget.sequentialChecks: true`)
+checks add a warning that triage ran without that context. The timeout and exit
+policy above applies in both modes. `--sequential-checks` (or `budget.sequentialChecks: true`)
 restores checks before triage and the previous prompt text. Refactor still waits
 for its evidence; runtime and `--no-checks` retain their existing behavior.
 
@@ -208,9 +219,9 @@ omitted.
 
 ## Exit codes
 
-- `0` = complete coverage with no failing BLOCKER or error-severity rule match
-- `1` = a BLOCKER or error-severity rule match remains
-- `2` = incomplete coverage without either, nothing to review, or tool/config/usage error
+- `0` = complete coverage with no failing BLOCKER, deterministic check or error-severity rule match
+- `1` = a BLOCKER, real failing deterministic check or error-severity rule match remains
+- `2` = incomplete coverage (including check timeouts) without an exit-1 condition, nothing to review, or tool/config/usage error
 
 ## Flags
 

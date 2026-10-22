@@ -13,11 +13,13 @@ import type { ParsedFlags } from '../../src/cli/args.js';
 import type { CommandRunner } from '../../src/types/index.js';
 import { REVIEW_INSTRUCTIONS } from '../../src/cascade/prompts.js';
 import { modeInstructions } from '../../src/modes/index.js';
+import { CommandTimeoutError } from '../../src/process/runner.js';
+import { runRules } from '../../src/rules/index.js';
 
 vi.mock('../../src/context/index.js', () => ({ buildReviewContext: vi.fn() }));
 vi.mock('../../src/checks/index.js', () => ({ runDeterministicChecks: vi.fn() }));
 vi.mock('../../src/worktree/index.js', () => ({ createReviewWorktree: vi.fn(), isClean: async () => true }));
-vi.mock('../../src/rules/index.js', () => ({ loadRulesAt: async () => [], runRules: async () => ({ passed: true, results: [], notes: [] }) }));
+vi.mock('../../src/rules/index.js', () => ({ loadRulesAt: async () => [], runRules: vi.fn(async () => ({ passed: true, results: [], notes: [] })) }));
 vi.mock('../../src/cascade/index.js', async importOriginal => {
   const original = await importOriginal<typeof import('../../src/cascade/index.js')>();
   return { ...original, runCascade: vi.fn(original.runCascade) };
@@ -42,8 +44,8 @@ afterEach(async () => { vi.clearAllMocks(); await rm(root, { recursive: true, fo
 
 const running = 'Deterministic checks: running concurrently; their result is not part of this prompt.';
 const failed = { passed: false, results: [{ argv: ['node', 'test.cjs'], exitCode: 1, durationMs: 120_000,
-  timedOut: false, stdoutTail: 'synthetic failed check', stderrTail: 'expected true' }] };
-function fixture(flags: ParsedFlags = {}, budget = {}, isTTY = false) {
+  timedOut: false, timeoutMs: 120_000, stdoutTail: 'synthetic failed check', stderrTail: 'expected true' }] };
+function fixture(flags: ParsedFlags = {}, budget = {}, isTTY = false, checkRunner?: CommandRunner) {
   const prompts: string[] = [];
   const triage = new FakeProvider('agy', 'google', originRunner(root), {});
   triage.executeReview = async (_ctx, _model, prompt) => {
@@ -68,7 +70,7 @@ function fixture(flags: ParsedFlags = {}, budget = {}, isTTY = false) {
     const code = await review({ mode: 'redesign', diff: 'base...HEAD', noCache: true, json: true, ...flags },
       { out: text => { out += text; }, err: text => { err += text; }, isTTY },
       { repoRoot: root, gitRunner, providers: new Map([['agy', triage], ['codex', confirmer]]), catalog,
-        now: () => time, appendLedger: async () => {}, appendFindings: async () => {} });
+        checkRunner, now: () => time, appendLedger: async () => {}, appendFindings: async () => {} });
     const result = JSON.parse(out);
     const markdown = await readFile(path.join(root, '.quorum', 'reports', `${result.runId}.md`), 'utf8');
     return { code, result, markdown, err };
@@ -81,6 +83,62 @@ it.each([[false, false], [true, false], [false, true], [true, true]])('prints co
   expect(actual.err.includes('quorum: done in')).toBe(isTTY || verbose);
   expect(actual.result.durations).toBeDefined();
   expect(actual.markdown).toContain('checks ');
+});
+
+it.each([false, true])('wires the configured limit into setup and checks, sequential=%s', async sequentialChecks => {
+  const original = await vi.importActual<typeof import('../../src/checks/index.js')>('../../src/checks/index.js');
+  vi.mocked(runDeterministicChecks).mockImplementation(original.runDeterministicChecks);
+  const runner = vi.fn<CommandRunner>(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+  const actual = await fixture({ sequentialChecks }, { checkTimeoutSeconds: 600 }, false, runner).run();
+  expect(actual.code).toBe(0);
+  expect(runner).toHaveBeenCalledTimes(2);
+  expect(runner.mock.calls.map(call => call[2]?.timeoutMs)).toEqual([600_000, 600_000]);
+  expect(actual.result.checks.results.map((row: { timeoutMs: number }) => row.timeoutMs)).toEqual([600_000, 600_000]);
+});
+
+it.each([false, true].flatMap(sequential => ['setup.cjs', 'test.cjs'].map(command => ({ sequential, command }))))(
+  'reports an incomplete timeout in $command, sequential=$sequential', async ({ sequential, command }) => {
+    const original = await vi.importActual<typeof import('../../src/checks/index.js')>('../../src/checks/index.js');
+    vi.mocked(runDeterministicChecks).mockImplementation(original.runDeterministicChecks);
+    const runner = vi.fn<CommandRunner>(async (_file, args) => {
+      if (args.includes(command)) throw new CommandTimeoutError('', '');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const test = fixture({ sequentialChecks: sequential }, {}, false, runner);
+    const actual = await test.run();
+    expect(actual.code).toBe(2);
+    expect(actual.result.coverage.complete).toBe(false);
+    const warning = `check "node ${command}" timed out after 120s; raise budget.checkTimeoutSeconds`;
+    expect(actual.result.warnings).toContain(warning);
+    expect(actual.err).toContain(warning);
+    expect(actual.result.checks.results.at(-1)).toMatchObject({ timedOut: true, timeoutMs: 120_000 });
+    expect(actual.markdown).toContain(`node ${command}: TIMED OUT after 120s`);
+    expect(actual.markdown).not.toContain('FAILED');
+    expect(actual.result.warnings.join('\n')).not.toContain('checks failed');
+    const prompt = test.prompts[1]!;
+    expect(prompt).toContain('timed out');
+    expect(prompt).not.toContain('failed');
+    expect(runner).toHaveBeenCalledTimes(command === 'setup.cjs' ? 1 : 2);
+  });
+
+it('keeps exit 0 for a real failing check: it is evidence in the report, not an exit condition', async () => {
+  vi.mocked(runDeterministicChecks).mockResolvedValue(failed);
+  expect((await fixture().run()).code).toBe(0);
+});
+
+it.each(['BLOCKER', 'rule'] as const)('keeps exit 1 for %s even with a check timeout', async reason => {
+  vi.mocked(runDeterministicChecks).mockResolvedValue({ passed: false, results: [{ ...failed.results[0]!,
+    timedOut: true, timeoutMs: 120_000, stdoutTail: '', stderrTail: '' }] });
+  const original = await vi.importActual<typeof import('../../src/cascade/index.js')>('../../src/cascade/index.js');
+  vi.mocked(runCascade).mockImplementationOnce(async (...args) => {
+    const cascade = await original.runCascade(...args);
+    if (reason === 'BLOCKER') cascade.findings.push(finding({ severity: 'BLOCKER' }));
+    return cascade;
+  });
+  if (reason === 'rule') vi.mocked(runRules).mockResolvedValueOnce({ passed: false, results: [], notes: [] });
+  const actual = await fixture().run();
+  expect(actual.code).toBe(1);
+  expect(actual.result.coverage.complete).toBe(false);
 });
 
 it('overlaps checks with triage, joins before confirmation, and preserves failed-check status', async () => {
@@ -123,7 +181,7 @@ it('overlaps checks with triage, joins before confirmation, and preserves failed
     checks: JSON.stringify([{ name: 'node test.cjs', stdout: 'synthetic failed check', stderr: 'expected true' }]),
   }));
   expect(sequential.prompts.join('')).not.toContain(running);
-  expect(sequential.prompts[1]).not.toContain('UNTRUSTED DETERMINISTIC CHECKS');
+  expect(sequential.prompts[1]).toContain('UNTRUSTED DETERMINISTIC CHECKS');
 });
 
 it('config sequentialChecks waits for evidence, and no-checks starts no check worktree', async () => {

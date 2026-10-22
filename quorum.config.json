@@ -1,6 +1,7 @@
 {
   "setup": [["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]],
   "checks": [["pnpm", "typecheck"], ["pnpm", "test"]],
+  "budget": { "checkTimeoutSeconds": 600 },
   "tiers": {
     "triage": ["agy:gemini-3.8-flash-low", "qwen"],
     "review": ["agy:gemini-4-argon-high", "claude:sonnet"],
