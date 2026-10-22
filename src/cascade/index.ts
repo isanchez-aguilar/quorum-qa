@@ -262,7 +262,8 @@ export async function runCascade(
     }
   }
 
-  async function verify(finding: Finding, response: CallResult, confirmationOnly = false): Promise<Finding | null> {
+  const unreadableFindings = new Set<Finding>();
+  async function verify(finding: Finding, response: CallResult, confirmationOnly = false, original = finding): Promise<Finding | null> {
     const copy = context.mode === 'contract' && context.contract?.copy.find(file => sameFile(file.file, finding.file));
     const root = copy ? options.copyVerificationRoot ?? options.verificationRoot ?? context.worktreeRoot : options.verificationRoot ?? context.worktreeRoot;
     if (context.mode === 'contract') {
@@ -286,7 +287,10 @@ export async function runCascade(
     }
     if (!verification.verified || !verification.correctedFinding) {
       if (readError) {
-        lost('verifier read error', finding.file);
+        if (!unreadableFindings.has(original)) {
+          unreadableFindings.add(original);
+          lost('verifier read error', original.file);
+        }
         warn(`${finding.file}: verifier read error; finding could not be verified.`);
       }
       rejection(response.ledger, verification.reason ?? 'verification failed');
@@ -493,7 +497,7 @@ export async function runCascade(
       const parsed = parseFindings(JSON.stringify([candidate]), response.entry);
       response.ledger.rawFindingsCount = 1;
       for (const dropped of parsed.dropped) rejection(response.ledger, `parse: ${dropped.reason}`);
-      const corroborated = parsed.findings[0] ? await verify(parsed.findings[0], response) : null;
+      const corroborated = parsed.findings[0] ? await verify(parsed.findings[0], response, false, finding) : null;
       if (!corroborated) continue;
       if ((decision.file !== undefined && decision.file !== finding.file) || Math.abs(corroborated.line - finding.line) > 10
         || (context.mode === 'bughunt' && corroborated.origin === 'introduced')) {

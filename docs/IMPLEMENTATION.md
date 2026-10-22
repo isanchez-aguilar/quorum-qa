@@ -3543,3 +3543,19 @@ in six later runs of that worktree; the failing test could not be identified fro
   unmodified scanner passed after the temporary probe files were removed.
   With a one-off synthetic 400 ms scheduling delay, the original single-sample
   test failed (518 ms) while the converted test passed at the same 300 ms bound.
+
+## Review fixes follow-up
+
+- **F1:** The semantic lexer skips line and block comments while retaining string,
+  template, division, operator, and grouping semantics. A failed textual search
+  retries without comments using the same lexer, preserving line numbers and
+  source-line size limits; exact substring matches retain their existing behavior.
+- **F2:** `unless`, `except`, `instead`, and `otherwise` remain similarity tokens
+  and participate in negation parity, keeping opposite conditions separate.
+- **F3:** Empty or truncated cache keys recover through a private, exclusive
+  temporary file and atomic rename. A cross-process repair lock and recheck avoid
+  overwriting an already valid key; every repair caller rereads the stored key.
+- **F4:** Unreadable confirmation retries count once per original finding, while
+  warnings remain deduplicated per file.
+- Regression coverage reproduces all four defects, checks eight concurrent cache
+  instances, and times 256 KiB comment inputs with the shared `fastest` helper.

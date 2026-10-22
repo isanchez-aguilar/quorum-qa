@@ -8,9 +8,9 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   'can', 'could', 'will', 'would', 'may', 'might', 'if', 'when', 'then', 'than', 'which', 'who',
   'has', 'have', 'had', 'do', 'does', 'into', 'over', 'under', 'before', 'after', 'because',
   'while', 'each', 'every', 'any', 'all', 'more', 'most', 'other', 'such', 'only', 'also', 'one',
-  'lack', 'lacks', 'omitted', 'instead',
+  'lack', 'lacks', 'omitted',
 ]);
-const NEGATIONS = new Set(['not', 'no', 'never', 'without', 'disabled', 'cannot', "can't", "isn't", "doesn't", 'fails to', 'missing']);
+const NEGATIONS = new Set(['not', 'no', 'never', 'without', 'disabled', 'cannot', "can't", "isn't", "doesn't", 'fails to', 'missing', 'unless', 'except', 'instead', 'otherwise']);
 
 // Light stemming: enough to put retries/retried/retry and documentation/documented close together.
 function stem(token: string): string {
@@ -139,7 +139,7 @@ export interface FindingTokens {
 export function findingTokens(finding: Pick<Finding, 'trigger' | 'impact'>): FindingTokens {
   const trigger = toSet(tokenize(finding.trigger));
   const impact = toSet(tokenize(finding.impact));
-  const negations = finding.trigger.toLowerCase().match(/\b(?:not|no|never|without|disabled|cannot|can't|isn't|doesn't|fails\s+to|missing)\b/g) ?? [];
+  const negations = finding.trigger.toLowerCase().match(/\b(?:not|no|never|without|disabled|cannot|can't|isn't|doesn't|fails\s+to|missing|unless|except|instead|otherwise)\b/g) ?? [];
   return { trigger, impact, all: new Set([...trigger, ...impact]), negationParity: negations.length % 2 };
 }
 

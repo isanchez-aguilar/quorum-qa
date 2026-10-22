@@ -9,6 +9,7 @@ import {
   findQuote,
   FUZZY,
   matchAtLine,
+  MAX_LINE,
   MAX_QUOTE_CHARS,
   MAX_QUOTE_LINES,
   MAX_RAW_QUOTE,
@@ -16,7 +17,7 @@ import {
   normalizeQuote,
   WORK_BUDGET,
 } from './quote.js';
-import { semanticDifference } from './semantic.js';
+import { semanticDifference, withoutComments } from './semantic.js';
 
 // Files bigger than this are not read: a model citing a bundle or a data dump is not a review.
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -161,7 +162,21 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
       return { verified: true, correctedFinding: { ...finding, line: here.line, verified: true } };
     }
 
-    const outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
+    let outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
+    if (outcome.kind === 'none' && (/\/[/\*]/.test(raw) || /\/[/\*]/.test(content))) {
+      const strippedQuote = normalizeQuote(withoutComments(raw));
+      if (countAlphanumeric(strippedQuote) >= MIN_ALNUM) {
+        const strippedLines = splitLines(withoutComments(content));
+        // Removing a comment must not make an over-long source line eligible for search.
+        const searchable = strippedLines.map((line, index) => lines[index]!.length > MAX_LINE ? lines[index]! : line);
+        const candidate = findQuote(searchable, strippedQuote, finding.line, WORK_BUDGET);
+        if (candidate.kind === 'match') {
+          candidate.match.exact = false;
+          candidate.match.text = lines.slice(candidate.match.line - 1, candidate.match.line - 1 + quoteLines).join('\n');
+        }
+        outcome = candidate;
+      }
+    }
     if (outcome.kind === 'budget') {
       return reject(
         `search budget exceeded: finding the quote in "${finding.file}" needs more than ` +

@@ -79,7 +79,7 @@ const MINING_KEYWORDS = new Set(('const let var function class new this super ty
   'interface type public private protected static readonly get set def lambda with pass assert is ' +
   'enum namespace package using int string bool boolean null true false').split(' '));
 
-export function tokenize(text: string, preservePunctuation = false): CodeToken[] {
+export function tokenize(text: string, preservePunctuation = false, comment?: (start: number, end: number) => void): CodeToken[] {
   const tokens: CodeToken[] = [];
   const length = text.length;
   // One entry per open `${` of a template: how many `{` opened inside it are still open.
@@ -124,6 +124,16 @@ export function tokenize(text: string, preservePunctuation = false): CodeToken[]
     const code = text.charCodeAt(at);
     if (code <= 32) {
       at += 1;
+    } else if (code === 47 && text.charCodeAt(at + 1) === 47) {
+      const start = at;
+      at += 2;
+      while (at < length && text.charCodeAt(at) !== NEWLINE && text.charCodeAt(at) !== 13) at += 1;
+      comment?.(start, at);
+    } else if (code === 47 && text.charCodeAt(at + 1) === 42) {
+      const start = at;
+      const end = text.indexOf('*/', at + 2);
+      at = end < 0 ? length : end + 2;
+      comment?.(start, at);
     } else if (code === DOUBLE_QUOTE || code === SINGLE_QUOTE) {
       // A string ends at its delimiter or at the end of the line; an unterminated one is closed there.
       let end = at + 1;
@@ -183,6 +193,18 @@ export function tokenize(text: string, preservePunctuation = false): CodeToken[]
     }
   }
   return tokens;
+}
+
+/** Remove comments using the same literal boundaries as the semantic comparison, keeping lines. */
+export function withoutComments(text: string): string {
+  const parts: string[] = [];
+  let from = 0;
+  tokenize(text, false, (start, end) => {
+    parts.push(text.slice(from, start), text.slice(start, end).replace(/[^\r\n]/g, ' '));
+    from = end;
+  });
+  parts.push(text.slice(from));
+  return parts.join('');
 }
 
 function keyOf(token: CodeToken): string {

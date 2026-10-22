@@ -16,6 +16,8 @@ import { runtimeMarkdown } from '../../src/reporters/runtime.js';
 import { combinedConfidence } from '../../src/dedupe/cluster.js';
 import { parseAgyQuota } from '../../src/providers/agy.js';
 import { catalog, context, finding, originRunner, source } from '../fixtures/cascade.js';
+import { semanticDifference, tokenize, withoutComments } from '../../src/verifier/semantic.js';
+import { fastest } from '../helpers/timing.js';
 
 const denied = vi.hoisted(() => ({ file: '', code: 'EACCES', operation: 'open' }));
 vi.mock('node:fs/promises', async importOriginal => {
@@ -201,4 +203,102 @@ it.each(['![remote](https://example.invalid/pixel)', '[link](https://example.inv
 it('K3 prose brackets remain readable and cannot be reactivated with backslashes', () => {
   expect(cell('value [optional]')).toBe('value \\[optional\\]');
   expect(cell('\\[link](https://example.invalid)')).toBe('\\\\\\[link\\](https://example.invalid)');
+});
+
+it.each([
+  ["  const label = 'sum'; // keep the label short", 'const label = "sum";'],
+  ["/* block comment */ const mode = 'fast';", 'const mode = "fast";'],
+  ['const url = "http://example.test/a"; // docs', "const url = 'http://example.test/a';"],
+  ["const label = 'sum'; // keep the label short", "const label = 'sum';"],
+  ["const label = 'sum'; // keep the label short", 'const label = "sum"; // keep the label short'],
+  ['const ratio = a / b / c; // division', 'const ratio = a / b / c; /* quoted comment */'],
+])('F1 verifies commented code %#', async (code, quote) => {
+  await writeFile(path.join(root, 'sample.ts'), code);
+  expect((await verifyFinding(root, finding({ evidence_quote: quote }))).verified).toBe(true);
+});
+
+it('F1 skips comments on both sides while preserving literals and division', () => {
+  expect(semanticDifference('/* quote */ a / b / c // tail', 'a / b / c /* code */')).toBeNull();
+  expect(semanticDifference('a / b / c', 'a / b * c')).not.toBeNull();
+  expect(semanticDifference('value /* unfinished', 'value')).toBeNull();
+  for (const literal of ['`http://host/*path*/`', String.raw`"escaped\"//text"`, String.raw`'escaped\'/*text*/'`, '`escaped\\`//text`']) {
+    expect(semanticDifference(`const value = ${literal}; // comment`, `const value = ${literal};`)).toBeNull();
+    expect(withoutComments(literal)).toBe(literal);
+  }
+  expect(semanticDifference('`// first`', '`// second`')).not.toBeNull();
+  expect(semanticDifference('a // comment\nb', 'a\nb')).toBeNull();
+  expect(semanticDifference('a /* multi\nline */ / b', 'a / b')).toBeNull();
+});
+
+it.each([
+  ['return a - b; // arithmetic', 'return a + b;'],
+  ['return a - (b - c); // grouping', 'return a - b - c;'],
+])('F1 comment fallback still rejects semantic changes %#', async (code, quote) => {
+  await writeFile(path.join(root, 'sample.ts'), code);
+  expect((await verifyFinding(root, finding({ evidence_quote: quote }))).verified).toBe(false);
+});
+
+it('F1 tokenizes 256 KiB comments within 50 ms', () => {
+  for (const text of ['//' + 'x'.repeat(262142), '/*' + 'x'.repeat(262142), '/* x */ '.repeat(32768)]) {
+    expect(tokenize(text)).toHaveLength(0);
+    expect(fastest(() => { tokenize(text); })).toBeLessThan(50);
+    expect(fastest(() => { withoutComments(text); })).toBeLessThan(50);
+  }
+});
+
+it.each(['unless', 'except', 'instead', 'otherwise'])('F2 retains %s and separates opposite conditions', word => {
+  expect(words(word)).toEqual([word]);
+  const first = finding({ trigger: 'When the shared cache configuration enables stored application response values for repeated external requests' });
+  const opposite = { ...first, trigger: first.trigger.replace('When', word) };
+  expect(dedupeFindings([first, opposite])).toHaveLength(2);
+  expect(dedupeFindings([opposite, { ...opposite, line: 2 }])).toHaveLength(1);
+  expect(dedupeFindings([first, { ...first, line: 2 }])).toHaveLength(1);
+});
+it('F2 separates update instead of delete from update and delete', () => {
+  expect(dedupeFindings([finding({ trigger: 'runs update instead of delete' }), finding({ trigger: 'runs update and delete' })])).toHaveLength(2);
+});
+
+it.each([0, 10, 32])('F3 recovers a %i-byte key or preserves a valid key', async size => {
+  const home = path.join(root, 'home');
+  const keyFile = path.join(home, '.quorum', 'cache.key');
+  await mkdir(path.dirname(keyFile), { recursive: true });
+  const before = Buffer.alloc(size, 7);
+  await writeFile(keyFile, before);
+  const warn = vi.fn();
+  const cache = diskCache(path.join(root, 'cache'), warn, root, home);
+  cache.stage('ab', 'synthetic', 'fake'); await cache.flush();
+  expect(await cache.read('ab')).toBe('synthetic');
+  expect((await readFile(keyFile)).length).toBe(32);
+  if (size === 32) expect(await readFile(keyFile)).toEqual(before);
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it('F3 eight concurrent repairs all authenticate with the key on disk', async () => {
+  const home = path.join(root, 'home');
+  await mkdir(path.join(home, '.quorum'), { recursive: true });
+  await writeFile(path.join(home, '.quorum', 'cache.key'), '');
+  const warn = vi.fn();
+  const caches = Array.from({ length: 8 }, () => diskCache(path.join(root, 'cache'), warn, root, home));
+  await Promise.all(caches.map((cache, index) => { cache.stage(`ab${index}`, 'synthetic', 'fake'); return cache.flush(); }));
+  const fresh = diskCache(path.join(root, 'cache'), warn, root, home);
+  for (const cache of [...caches, fresh]) {
+    for (let index = 0; index < 8; index++) expect(await cache.read(`ab${index}`)).toBe('synthetic');
+  }
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it('F4 counts one original finding across two unreadable confirmations', async () => {
+  const yes = JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote });
+  const agy = new FakeProvider('agy', 'google', originRunner(root), { flash: [JSON.stringify([finding({ confidence: 0.5 })])], opus: [yes] });
+  const codex = new FakeProvider('codex', 'openai', originRunner(root), { codex: [yes] });
+  const execute = codex.executeReview.bind(codex);
+  vi.spyOn(codex, 'executeReview').mockImplementation(async (...args) => {
+    denied.file = path.join(root, 'sample.ts'); denied.code = 'EACCES';
+    return execute(...args);
+  });
+  const cfg = validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex', 'agy:opus'], visual: [] } });
+  const result = await runCascade(context(root), cfg, new Map([['agy', agy], ['codex', codex]]), { catalog, gitRunner: originRunner(root) });
+  expect(result.calls.filter(call => call.purpose === 'confirm')).toHaveLength(2);
+  expect(result.coverage.lostFindings).toEqual([{ file: 'sample.ts', reason: 'verifier read error', count: 1 }]);
+  expect(result.warnings.filter(warning => warning.includes('verifier read error;'))).toHaveLength(1);
 });

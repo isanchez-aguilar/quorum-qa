@@ -188,13 +188,39 @@ export function diskCache(root: string, warn: (message: string) => void, repoRoo
     const keyFile = path.join(home, '.quorum', 'cache.key');
     try {
       await mkdir(path.dirname(keyFile), { recursive: true, mode: 0o700 });
-      try {
-        const handle = await open(keyFile, 'wx', 0o600);
-        try { await handle.writeFile(randomBytes(32)); } finally { await handle.close(); }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const readKey = () => readFile(keyFile).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return Buffer.alloc(0);
+      });
+      let key = await readKey();
+      if (key.length === 32) return key;
+      // Recheck under a cross-process lock: a late repair must never replace a valid key
+      // already returned to another caller. Atomic rename also avoids partial creation.
+      const lockPath = `${keyFile}.lock`;
+      const deadline = Date.now() + 10_000;
+      let lock;
+      while (!lock) {
+        try { lock = await open(lockPath, 'wx', 0o600); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= deadline) throw error;
+          try { await retireStaleLock(lockPath, deadline); }
+          catch (staleError) { if ((staleError as NodeJS.ErrnoException).code !== 'ENOENT') throw staleError; }
+          await sleep(10);
+        }
       }
-      const key = await readFile(keyFile);
+      try {
+        key = await readKey();
+        if (key.length !== 32) {
+          const temporary = `${keyFile}.${randomUUID()}.tmp`;
+          try {
+            await writeFile(temporary, randomBytes(32), { mode: 0o600, flag: 'wx' });
+            await renameWithRetry(temporary, keyFile);
+          } finally { await rm(temporary, { force: true }); }
+        }
+        key = await readFile(keyFile);
+      } finally {
+        try { await lock.close(); } finally { await removeWithRetry(lockPath, Date.now() + 10_000); }
+      }
       if (key.length !== 32) throw new Error('invalid cache key');
       return key;
     } catch {
