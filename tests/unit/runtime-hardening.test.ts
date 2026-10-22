@@ -15,7 +15,7 @@ const config = validateConfig({ checks: [], runtime: { flows: [{ name: 'home', s
 function side(observation: Observation, notes: string[] = []) {
   const report: RuntimeReport = { version: 1, runs: ([1, 2] as const).map(run => ({ flow: 'home', run,
     completed: observation.kind !== 'flow-failure', observations: [observation], notes, blockedExternal: {} })) };
-  return { report, stable: stableObservations(report), durationMs: 0 };
+  return { report, stable: stableObservations(report), durationMs: 0, shots: [] };
 }
 function published(base: ReturnType<typeof side>, head = base) {
   return buildRuntimeReport({ available: true, reasons: [], notes: [], base, head }, config, { strictFlows: true });
@@ -34,7 +34,7 @@ it('keeps differences beyond 1000 characters and makes every truncation visible 
   const parsed = (message: string) => {
     const value = parseRuntimeReport(JSON.stringify(side({ kind: 'console', message }).report), config);
     if ('error' in value) throw new Error(value.error);
-    return { report: value, stable: stableObservations(value), durationMs: 0 };
+    return { report: value, stable: stableObservations(value), durationMs: 0, shots: [] };
   };
   expect(published(parsed(prefix + 'alpha'), parsed(prefix + 'beta')).comparison?.newAtHead).toHaveLength(1);
   const capped = parsed('word '.repeat(500));
@@ -90,8 +90,8 @@ it('scrubs all published forms, including notes, summaries and host-supplied evi
   }
   expect(value.comparison?.newAtHead[0]?.message).toBe('failed http://localhost:4173/api at app.js');
 });
-it('rejects screenshots true with the reserved-feature explanation', () => {
-  expect(() => validateConfig({ checks: [], runtime: { screenshots: true } })).toThrow('runtime.screenshots: true is not implemented yet (planned with the model layer); remove it or set false');
+it('accepts screenshots true for local capture without a model', () => {
+  expect(validateConfig({ checks: [], runtime: { screenshots: true } }).runtime!.screenshots).toBe(true);
 });
 it('keeps resource routes valid when a short fill value occurs in the internal URL prefix', () => {
   const runtime = structuredClone(config); runtime.flows![0]!.steps = [{ fill: 'input', value: 'e' }];

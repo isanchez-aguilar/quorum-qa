@@ -1,10 +1,11 @@
 import { evaluateRuntimeVerdict, type RuntimeVerdictResult } from '../cli/runtime.js';
 import { compareRuntime, summarizeRuntimeComparison, type RuntimeComparison, type RuntimeEntry } from '../runtime/compare.js';
 import type { RuntimeConfig } from '../runtime/config.js';
-import { runtimeText, type RuntimeEvidence } from '../runtime/run.js';
+import { runtimeText, type RuntimeEvidence, type StoredRuntimeShot } from '../runtime/run.js';
 import { cell } from './refactor.js';
 
 export interface RuntimeReport extends RuntimeVerdictResult {
+  shots: Array<StoredRuntimeShot & { side: 'base' | 'head'; paired: boolean }>;
   available: boolean; comparison?: RuntimeComparison; strictFlows: boolean; notes: string[]; summary: string;
 }
 export function buildRuntimeReport(evidence: RuntimeEvidence, config: RuntimeConfig, options: { strictFlows: boolean }): RuntimeReport {
@@ -15,6 +16,10 @@ export function buildRuntimeReport(evidence: RuntimeEvidence, config: RuntimeCon
   return { ...verdict, reasons: verdict.reasons.map(reason => runtimeText(reason, config)), available: evidence.available,
     ...(comparison ? { comparison } : {}), strictFlows: options.strictFlows,
     notes: [...new Set([...evidence.notes.map(note => runtimeText(note, config)), ...runNotes])],
+    shots: (['base', 'head'] as const).flatMap(side => (evidence[side]?.shots ?? []).map(shot => ({
+      flow: shot.flow, step: shot.step, mime: shot.mime, bytes: shot.bytes, sha256: shot.sha256, path: shot.path, side,
+      paired: (evidence[side === 'base' ? 'head' : 'base']?.shots ?? []).some(other => other.flow === shot.flow && other.step === shot.step),
+    }))),
     summary: comparison ? summarizeRuntimeComparison(comparison) : JSON.stringify({ available: false }),
   };
 }
@@ -36,6 +41,7 @@ export function runtimeMarkdown(report: RuntimeReport): string[] {
         ? ['| Category | Kind | Step | Path | Message | Base runs | Head runs |', '|---|---|---:|---|---|---|---|', ...rows]
         : ['No stable problem signatures.'])];
     }),
+    '### Screenshots', list(report.shots.map(shot => `${shot.flow}: ${shot.side}, step ${shot.step}: ${shot.path} (${shot.bytes} bytes, sha256 ${shot.sha256})${shot.paired ? '' : ' (unpaired)'}`)),
     '### Flow broke', list(comparison?.flowBroke.map(item => `${item.flow}: step ${item.step} (${item.errorClass}); ${item.message.slice(0, 300)}`) ?? []),
     '### Flaky flows', list(comparison?.flaky.map(item => `${item.side}: ${item.flow}`) ?? []),
     '### Incomplete flows', list(comparison?.incomplete.map(item => `${item.side}: ${item.flow}`) ?? []),

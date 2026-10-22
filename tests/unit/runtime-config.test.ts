@@ -92,3 +92,9 @@ it('bounds navigation and readiness URLs to 2048 characters', () => {
   expect(() => step({ goto: '/p?' + 'a'.repeat(2045) })).not.toThrow();
   expect(() => read({ readyUrl: 'http://127.0.0.1:4173/?' + 'a'.repeat(2048) })).toThrow('readyUrl');
 });
+it('rejects flow names that differ only by case or punctuation, because they share a screenshot slug', () => {
+  for (const pair of [['a.b', 'a-b'], ['Sign In', 'sign_in'], ['Home', 'home']]) {
+    expect(() => read({ flows: pair.map(name => ({ name, steps: [{ wait: 1 }] })) })).toThrow('unique');
+  }
+  expect(() => read({ flows: ['a1', 'a2'].map(name => ({ name, steps: [{ wait: 1 }] })) })).not.toThrow();
+});

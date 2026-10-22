@@ -1,6 +1,8 @@
 'use strict';
 const { scrubForDisplay, redact } = require('./scrub.cjs');
 
+const { createHash } = require('node:crypto');
+const VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 const CHROMIUM_ARGS = Object.freeze(['--no-sandbox', '--disable-dev-shm-usage']);
 const MAX_BYTES = 2 * 1024 * 1024;
 // about:blank and other opaque URLs have no absolute path; record none.
@@ -28,6 +30,9 @@ async function run({ playwright, plan, now = Date.now }) {
   const report = { version: 1, runs: plan.flows.flatMap(flow => [1, 2].map(run => ({
     flow: flow.name, run, completed: false, observations: [], blockedExternal: Object.create(null), notes: [],
   }))) };
+  const shots = [];
+  Object.defineProperty(report, 'shots', { value: shots });
+  const shotBudget = Math.floor(6 * 1024 * 1024 / plan.flows.length);
   // Reserve bounded metadata space (hosts, notes and completion) before observations.
   let bytes = Buffer.byteLength(JSON.stringify(report)); let total = 0; let sizeCapped = false;
   const reserve = report.runs.length * 16000;
@@ -49,7 +54,8 @@ async function run({ playwright, plan, now = Date.now }) {
       const result = report.runs[index]; const flow = plan.flows[Math.floor(index / 2)];
       let context; let page; let step = 0; let active = true; let expected; let currentAction;
       const requests = new WeakMap();
-      const deadline = now() + (plan.flowTimeoutSeconds ?? 60) * 1000;
+      let shotBytes = 0; let shotCount = 0; let shotBudgetHit = false;
+      let deadline = now() + (plan.flowTimeoutSeconds ?? 60) * 1000;
       const note = message => { if (!result.notes.includes(message)) result.notes.push(message); };
       const add = observation => {
         if (!active) return;
@@ -76,7 +82,7 @@ async function run({ playwright, plan, now = Date.now }) {
       }
       try {
         context = await bounded(async () => {
-          const created = await browser.newContext({ serviceWorkers: 'block' });
+          const created = await browser.newContext({ serviceWorkers: 'block', viewport: VIEWPORT });
           if (!active) { await created.close(); throw timeout(); }
           return created;
         }, Infinity);
@@ -134,6 +140,25 @@ async function run({ playwright, plan, now = Date.now }) {
               for (const snippet of body.snippets) event('technicalText', snippet);
             }
           }, timeoutMs);
+          // Outside the step timer: capture has its own bound and cannot consume flow time.
+          if (plan.screenshots && ['goto', 'click', 'press', 'waitForUrl', 'waitForSelector'].includes(currentAction)) {
+            const started = now(); let timer;
+            try {
+              const image = await Promise.race([
+                Promise.resolve().then(() => page.screenshot({ type: 'jpeg', quality: 70, fullPage: false, animations: 'disabled', caret: 'hide', timeout: 5000 })),
+                new Promise((_, reject) => { timer = setTimeout(() => reject(timeout()), 5000); }),
+              ]);
+              if (image.length > 300 * 1024) note('cap: screenshot size');
+              else if (shotCount >= 10) note('cap: screenshot count');
+              else if (shotBudgetHit || shotBytes + image.length > shotBudget) { shotBudgetHit = true; note('cap: screenshot budget'); }
+              else {
+                shotCount++; shotBytes += image.length;
+                if (result.run === 1) shots.push({ flow: flow.name, step, mime: 'image/jpeg', bytes: image.length,
+                  sha256: createHash('sha256').update(image).digest('hex'), data: image.toString('base64') });
+              }
+            } catch { note('cap: screenshot failed'); }
+            finally { clearTimeout(timer); deadline += Math.max(0, Math.min(5000, now() - started)); }
+          }
           expected = undefined;
         }
         result.completed = true;
@@ -152,7 +177,7 @@ async function run({ playwright, plan, now = Date.now }) {
   return report;
 }
 
-module.exports = { run, CHROMIUM_ARGS };
+module.exports = { run, CHROMIUM_ARGS, VIEWPORT };
 if (require.main === module) {
   const fs = require('node:fs/promises');
   const [planPath, reportPath] = process.argv.slice(2);

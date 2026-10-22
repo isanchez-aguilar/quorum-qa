@@ -77,7 +77,6 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
     pids: number(block.pids, 'runtime.pids', 512, 512, 2048),
   };
   if (block.screenshots !== undefined && typeof block.screenshots !== 'boolean') issues.push('runtime.screenshots must be a boolean');
-  if (block.screenshots === true) issues.push('runtime.screenshots: true is not implemented yet (planned with the model layer); remove it or set false');
   if (block.start !== undefined) {
     if (!Array.isArray(block.start) || !block.start.length || !block.start.every(arg => typeof arg === 'string' && arg.trim() !== '')) {
       issues.push('runtime.start must be a non-empty argv array of non-empty strings, not a shell string');
@@ -103,8 +102,9 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
         if (!validName) issues.push(`${flowPath}.name must use only letters, digits, spaces, _, . or -`);
         const name = validName ? flow.name as string : '';
         if (validName) {
-          const folded = name.toLowerCase();
-          if (names.has(folded)) issues.push(`${flowPath}.name must be unique (case-insensitive)`);
+          // Unique by the file-name slug used for screenshots: "a.b", "a-b" and "A B" are the same flow name.
+          const folded = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+          if (names.has(folded)) issues.push(`${flowPath}.name must be unique (ignoring case, spaces, "." "_" and "-")`);
           names.add(folded);
         }
         const steps: Step[] = [];

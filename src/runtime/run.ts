@@ -1,22 +1,101 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveCommand, type ResolveOptions } from '../checks/resolver.js';
 import { CommandTimeoutError } from '../process/runner.js';
+import { assertNoLinks } from '../context/contract.js';
+import { git } from '../context/git.js';
 import { prepareDependencies, PREPARATION_LIMITS, RUNNER_CACHE_DIRS } from '../reproduce/isolation.js';
 import type { CommandRunner, QuorumConfig, ReviewContext } from '../types/index.js';
 import { createReviewWorktree } from '../worktree/index.js';
 import type { RuntimeConfig } from './config.js';
 import { DEFAULT_RUNTIME_IMAGE, PLAYWRIGHT_CORE } from './image.js';
 import { parseRuntimeReport, REPORT_BYTES, type RuntimeReport } from './report.js';
-import { stableObservations } from './stable.js';
+import { isScreenshotNote, stableObservations } from './stable.js';
 import { scrubForDisplay, redact } from './signature.js';
 
-export interface SideResult { report: RuntimeReport; stable: ReturnType<typeof stableObservations>; durationMs: number }
+export interface RuntimeShot { flow: string; step: number; mime: 'image/jpeg'; bytes: number; sha256: string; data: string }
+export type StoredRuntimeShot = Omit<RuntimeShot, 'data'> & { path: string };
+export interface SideResult { shots: StoredRuntimeShot[]; report: RuntimeReport; stable: ReturnType<typeof stableObservations>; durationMs: number }
 export interface RuntimeEvidence { available: boolean; reasons: string[]; notes: string[]; base?: SideResult; head?: SideResult }
 export function playwrightVolume(image: string): string {
   return `quorum-runtime-playwright-${PLAYWRIGHT_CORE.version}-${createHash('sha256').update(JSON.stringify([image, PLAYWRIGHT_CORE.integrity])).digest('hex').slice(0, 16)}`;
+}
+
+const SHOT_BYTES = 300 * 1024;
+const SHOTS_BYTES = 6 * 1024 * 1024;
+export const SHOTS_OUTPUT_BYTES = REPORT_BYTES + Math.ceil(SHOTS_BYTES * 4 / 3) + 64 * 1024;
+
+export function runtimeShots(stdout: string, marker: string, config: RuntimeConfig): { shots: RuntimeShot[]; notes: string[] } {
+  const shots: RuntimeShot[] = []; let dropped = 0;
+  const flows = new Map(config.flows?.map(flow => [flow.name, flow]));
+  const seen = new Set<string>(); const counts = new Map<string, number>(); const sizes = new Map<string, number>();
+  const budget = Math.floor(SHOTS_BYTES / flows.size);
+  const keys = ['flow', 'step', 'mime', 'bytes', 'sha256', 'data'];
+  for (const line of stdout.split('\n')) {
+    if (!line.startsWith(marker + 'IMG ')) continue;
+    try {
+      if (Buffer.byteLength(line) > 450 * 1024) throw new Error('line');
+      const value: unknown = JSON.parse(line.slice(marker.length + 4));
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).some(key => !keys.includes(key)) || keys.some(key => !Object.hasOwn(value, key))) throw new Error('object');
+      const shot = value as RuntimeShot;
+      const flow = flows.get(shot.flow);
+      if (!flow || shot.mime !== 'image/jpeg' || !Number.isSafeInteger(shot.step) || shot.step < 0 || shot.step >= flow.steps.length
+        || !Number.isSafeInteger(shot.bytes) || shot.bytes < 3 || shot.bytes > SHOT_BYTES
+        || typeof shot.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(shot.sha256) || typeof shot.data !== 'string') throw new Error('fields');
+      const data = Buffer.from(shot.data, 'base64');
+      if (data.length !== shot.bytes || data.toString('base64') !== shot.data
+        || data[0] !== 255 || data[1] !== 216 || data[2] !== 255
+        || createHash('sha256').update(data).digest('hex') !== shot.sha256) throw new Error('image');
+      const key = JSON.stringify([shot.flow, shot.step]);
+      const count = counts.get(shot.flow) ?? 0; const size = sizes.get(shot.flow) ?? 0;
+      if (seen.has(key) || count >= 10 || size + data.length > budget) throw new Error('cap');
+      seen.add(key); counts.set(shot.flow, count + 1); sizes.set(shot.flow, size + data.length);
+      shots.push(shot);
+    } catch { dropped++; }
+  }
+  return { shots, notes: dropped ? [`dropped ${dropped} invalid screenshots`] : [] };
+}
+
+export async function storeRuntimeShots(shots: RuntimeShot[], config: RuntimeConfig, options: {
+  root: string; runId: string; side: 'base' | 'head'; gitRunner: CommandRunner; warn?: (message: string) => void;
+}): Promise<{ shots: StoredRuntimeShot[]; notes: string[] }> {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(options.runId) || !['base', 'head'].includes(options.side)) throw new Error('Invalid screenshot destination');
+  const slugs = new Map<string, string>(); const used = new Set<string>();
+  for (const flow of config.flows ?? []) {
+    const slug = flow.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    // Case uniqueness alone does not exclude punctuation collisions (a.b / a-b).
+    if (used.has(slug)) throw new Error('Screenshot flow slug collision');
+    used.add(slug); slugs.set(flow.name, slug);
+  }
+  const ignored = await git(['check-ignore', '--quiet', '--', '.quorum/'], options.root, options.gitRunner);
+  if (ignored.exitCode !== 0) {
+    const note = 'screenshots not stored: .quorum/ is not git-ignored'; options.warn?.(note);
+    return { shots: [], notes: [note] };
+  }
+  if (!shots.length) return { shots: [], notes: [] };
+  let directory = path.resolve(options.root);
+  await assertNoLinks(directory);
+  // Check each existing parent before creating its child; never recurse through a link.
+  for (const part of ['.quorum', 'runtime-shots', options.runId, options.side]) {
+    directory = path.join(directory, part);
+    try { await mkdir(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    await assertNoLinks(directory, options.root);
+  }
+  const stored: StoredRuntimeShot[] = [];
+  for (const [index, shot] of shots.entries()) {
+    const slug = slugs.get(shot.flow);
+    const flow = config.flows?.find(flow => flow.name === shot.flow);
+    if (slug === undefined || !Number.isSafeInteger(shot.step) || shot.step < 0 || shot.step >= flow!.steps.length) throw new Error('Invalid screenshot destination');
+    const file = path.join(directory, `${String(index + 1).padStart(2, '0')}-${slug}-${shot.step}.jpg`);
+    await assertNoLinks(directory, options.root);
+    await writeFile(file, Buffer.from(shot.data, 'base64'), { flag: 'wx' });
+    stored.push({ flow: shot.flow, step: shot.step, mime: shot.mime, bytes: shot.bytes, sha256: shot.sha256,
+      path: path.relative(options.root, file).replace(/\\/g, '/') });
+  }
+  return { shots: stored, notes: [] };
 }
 
 // Never interpolate exception messages, command output or flow input into diagnostics.
@@ -46,7 +125,9 @@ export function runtimePayload(stdout: string, marker: string, config: RuntimeCo
     const report = parseRuntimeReport(raw, config);
     if ('error' in report) return report;
     for (const run of report.runs) {
-      run.notes = run.notes.map(note => runtimeText(note, config));
+      // Fixed capture diagnostics are structural: redacting a short fill value must not
+      // turn an informational screenshot note into incomplete deterministic coverage.
+      run.notes = run.notes.map(note => isScreenshotNote(note) ? note : runtimeText(note, config));
       for (const observation of run.observations) {
         observation.message = runtimeText(observation.message, config);
         if (observation.path !== undefined) observation.path = runtimeText(observation.path, config, true);
@@ -57,12 +138,13 @@ export function runtimePayload(stdout: string, marker: string, config: RuntimeCo
 }
 
 export async function runRuntimeEvidence(context: ReviewContext, config: QuorumConfig, options: {
-  root: string; gitRunner: CommandRunner; containerRunner: CommandRunner;
+  root: string; runId?: string; gitRunner: CommandRunner; containerRunner: CommandRunner;
   warn?: (message: string) => void; announce?: (message: string) => void; now?: () => number;
   resolveOptions?: ResolveOptions;
 }): Promise<RuntimeEvidence> {
   const evidence: RuntimeEvidence = { available: false, reasons: [], notes: [] };
   const now = options.now ?? Date.now;
+  const runId = options.runId ?? `qrm-${randomUUID()}`;
   const expires = now() + config.budget.maxMinutes * 60_000;
   const remaining = () => Math.max(0, expires - now());
   let engine: string | undefined;
@@ -82,20 +164,20 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
   const image = runtime.image ?? DEFAULT_RUNTIME_IMAGE;
   const warn = (message: string) => options.warn?.(runtimeText(message, runtime));
   if (image !== DEFAULT_RUNTIME_IMAGE) warn('Runtime image override: the browser/playwright-core pairing is unverified.');
-  const invoke = (args: string[], limit = remaining()) => {
+  const invoke = (args: string[], limit = remaining(), maxOutputBytes = REPORT_BYTES + 4096) => {
     if (limit <= 0) return Promise.reject(new CommandTimeoutError('', ''));
     const resolved = resolveCommand(engine!, args, options.resolveOptions);
     return options.containerRunner(resolved.file, resolved.args, {
-      timeoutMs: limit, windowsVerbatimArguments: resolved.windowsVerbatimArguments, maxOutputBytes: REPORT_BYTES + 4096,
+      timeoutMs: limit, windowsVerbatimArguments: resolved.windowsVerbatimArguments, maxOutputBytes,
     });
   };
-  const runContainer = async (args: string[], limit = remaining(), name = `quorum-runtime-${randomUUID()}`) => {
+  const runContainer = async (args: string[], limit = remaining(), name = `quorum-runtime-${randomUUID()}`, maxOutputBytes = REPORT_BYTES + 4096) => {
     if (limit <= 0) throw new CommandTimeoutError('', '');
     let killed = false; let killing: Promise<unknown> | undefined;
     const kill = () => { killed = true; return killing ??= invoke(['kill', name], 5000).catch(() => undefined); };
     const timer = setTimeout(() => { void kill(); }, limit);
     try {
-      const result = await invoke(['run', '--name', name, ...args], limit);
+      const result = await invoke(['run', '--name', name, ...args], limit, maxOutputBytes);
       if (killed) throw new CommandTimeoutError('', '');
       return result;
     } catch (error) {
@@ -185,20 +267,34 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
         screenshots: runtime.screenshots, flows: runtime.flows };
       await writeFile(path.join(directory, 'plan.json'), JSON.stringify(plan), { flag: 'wx' });
       const marker = `QUORUM_RUNTIME_${randomUUID()}:`;
-      const limit = Math.min(remaining(), (runtime.readyTimeoutSeconds + runtime.flows.length * 2 * runtime.flowTimeoutSeconds + 30) * 1000);
+      const captureSeconds = runtime.screenshots ? runtime.flows.reduce((count, flow) => count + flow.steps.filter(step =>
+        ['goto', 'click', 'press', 'waitForUrl', 'waitForSelector'].some(action => Object.hasOwn(step, action))).length * 2 * 5, 0) : 0;
+      const limit = Math.min(remaining(), (runtime.readyTimeoutSeconds + runtime.flows.length * 2 * runtime.flowTimeoutSeconds + captureSeconds + 30) * 1000);
       const result = await runContainer(['--rm', '--network', 'none', '--user', '1001:1001', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/dev/shm:rw,size=512m',
         '--memory', `${runtime.memoryMiB}m`, '--pids-limit', String(runtime.pids), '--cpus', '2', '--workdir', '/work', '--env', 'HOME=/tmp',
         '--mount', `type=bind,src=${deps.root},dst=/work,readonly`, '--mount', dependencyMount + ',readonly',
         ...RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1001,gid=1001,mode=0700`]),
         '--mount', pwMount + ',readonly', '--mount', `type=bind,src=${directory},dst=/quorum/bin,readonly`,
-        deps.image, 'node', '/quorum/bin/runner.cjs', '/quorum/bin/plan.json', marker, JSON.stringify(runtime.start)], limit);
+        deps.image, 'node', '/quorum/bin/runner.cjs', '/quorum/bin/plan.json', marker, JSON.stringify(runtime.start)], limit, undefined,
+        runtime.screenshots ? SHOTS_OUTPUT_BYTES : REPORT_BYTES + 4096);
       const report = runtimePayload(result.stdout, marker, runtime);
       if ('error' in report) {
         evidence.reasons.push(`${side}: ${report.error}`);
         if (report.note) evidence.notes.push(`${side}: ${report.note}`);
       } else if (result.exitCode !== 0) evidence.reasons.push(`${side}: collector failed`);
-      else evidence[side] = { report, stable: stableObservations(report), durationMs: now() - started };
+      else {
+        const collected: SideResult = { report, stable: stableObservations(report), durationMs: now() - started, shots: [] };
+        if (runtime.screenshots) {
+          const parsed = runtimeShots(result.stdout, marker, runtime);
+          evidence.notes.push(...parsed.notes.map(note => `${side}: ${note}`));
+          try {
+            const stored = await storeRuntimeShots(parsed.shots, runtime, { root: options.root, runId, side, gitRunner: options.gitRunner, warn });
+            collected.shots = stored.shots; evidence.notes.push(...stored.notes.map(note => `${side}: ${note}`));
+          } catch { const note = 'screenshots not stored: unsafe or unavailable destination'; warn(note); evidence.notes.push(`${side}: ${note}`); }
+        }
+        evidence[side] = collected;
+      }
     } catch (error) {
       evidence.reasons.push(`${side}: ${error instanceof CommandTimeoutError ? 'timeout' : 'runtime execution failed'}`);
     } finally {

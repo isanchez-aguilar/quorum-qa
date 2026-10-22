@@ -1,6 +1,6 @@
 # Plan: runtime R5, screenshots and the optional model layer
 
-Status: plan, not built. Written 2026-10-21. Read [RUNTIME-PLAN.md](RUNTIME-PLAN.md) first; R0-R3 are built and the verdict is deterministic. R5 adds two things on top and changes nothing about the deterministic verdict: **(a) screenshots** and **(b) an opt-in visual review by a model**.
+Status: V0 built (local capture, transport, storage and caps; no model). V1 and V2 pending; real Docker verification remains opt-in. Written 2026-10-21. Read [RUNTIME-PLAN.md](RUNTIME-PLAN.md) first; R0-R3 are built and the verdict is deterministic. R5 adds two things on top and changes nothing about the deterministic verdict: **(a) screenshots** and **(b) an opt-in visual review by a model**.
 
 ## Why
 
@@ -20,7 +20,7 @@ The deterministic collector sees console errors, HTTP status, blank pages and te
 - **Capture.** In `collector.cjs`, after each step that triggers the DOM inspection (goto, click, press, waitForUrl, waitForSelector; the hardening pass extended the inspection to all five) and after the page settles, on **both runs** of each flow: `page.screenshot({ type: 'jpeg', quality: 70, fullPage: false, animations: 'disabled', caret: 'hide' })` with a fixed viewport of 1280x800 set when the context is created (the viewport is fixed for every run, with or without screenshots). Capturing in both runs keeps the timing symmetric, so the two-run flake filter is not biased by the flag; **only run 1's images are kept and transported**. The capture time is excluded from the flow deadline, so enabling screenshots cannot turn a passing flow into a timeout.
 - **Caps.** At most 10 images per flow and 300 KB per image (an over-cap image is dropped with a `cap: screenshot` note, never downscaled silently). The per-side budget of 6 MB is shared **fairly**: each flow may use at most `floor(6 MB / number of flows)`. Image bytes are not counted in the 2 MiB JSON report cap because they travel separately.
 - **Transport.** The JSON report stays the only structured channel. Images go out as stdout lines **before** the report: `<marker>IMG <json>` where the JSON is `{ flow, step, mime, bytes, sha256, data }` (base64), one line per image, each line capped at 450 KB, using the same fresh per-run marker; the report is still the LAST marker in the output, so `runtimePayload`'s `lastIndexOf(marker)` keeps finding it (a test asserts the order). The host parser reads the `IMG ` lines by scanning lines, takes only those that start with the fresh marker followed by `IMG `, verifies mime (`image/jpeg` only), size, sha256 and flow/step against the plan, drops duplicates and anything over the caps. App output cannot forge lines because the app's stdout is discarded inside the container (runner.cjs) and the marker is fresh. The container command's `maxOutputBytes` rises from `REPORT_BYTES + 4096` to `REPORT_BYTES + 6 MB * 4/3 + slack` only when capture is on (the runner's own hard limit is 16 MiB, so this fits); hitting the output limit is `UNKNOWN` as before, never a silent drop.
-- **Storage.** `.quorum/runtime-shots/<runId>/<base|head>/<flow>-<step>.jpg` (the directory is git-ignored; file names come from the validated flow name and step index only). Same-name flows cannot collide: flow names are unique case-insensitively.
+- **Storage.** `.quorum/runtime-shots/<runId>/<base|head>/<NN>-<flow-slug>-<step>.jpg` (the directory is git-ignored; file names come from the validated flow name and step index only). Flow names are unique case-insensitively; storage also asserts slug uniqueness because punctuation can collapse to the same dash. NN is a zero-padded image index.
 - **Paired images.** An image is *paired* when base and head both have one for the same flow and step. Unpaired images are listed, not reviewed.
 
 ## (b) Visual review (`--visual`)
@@ -43,7 +43,7 @@ The deterministic collector sees console errors, HTTP status, blank pages and te
 
 ## Where it plugs in
 
-- `collector.cjs` (capture, caps), `runner.cjs` (emit IMG lines after the report), `run.ts`/`report.ts` (parse and store images, new `shots` in `SideResult`), a new `src/runtime/visual.ts` (pairing, prompt, calling the cascade's `visual` tier, corroboration), `compare.ts` (attach visual findings), `cli/runtime.ts` (`--visual`, consent line, verdict rule), `reporters/runtime.ts` (a "Visual review (advisory)" section with image paths, never the images inline), config schema (`runtime.visual.maxCalls`, re-enable `screenshots`), `docs`.
+- `collector.cjs` (capture, caps), `runner.cjs` (emit IMG lines before the report), `run.ts`/`report.ts` (parse and store images, new `shots` in `SideResult`), a new `src/runtime/visual.ts` (pairing, prompt, calling the cascade's `visual` tier, corroboration), `compare.ts` (attach visual findings), `cli/runtime.ts` (`--visual`, consent line, verdict rule), `reporters/runtime.ts` (a "Visual review (advisory)" section with image paths, never the images inline), config schema (`runtime.visual.maxCalls`, re-enable `screenshots`), `docs`.
 - The consent line when `--visual` is on names the providers that will receive screenshots.
 
 ## Milestones

@@ -9,6 +9,7 @@ import { DEFAULT_RUNTIME_IMAGE } from '../../src/runtime/image.js';
 import { runRuntimeEvidence } from '../../src/runtime/run.js';
 import { compareRuntime } from '../../src/runtime/compare.js';
 import { evaluateRuntimeVerdict } from '../../src/cli/runtime.js';
+import { createHash } from 'node:crypto';
 
 it('runtime container: good, console-error, http500, external and blank on disposable base/head', async test => {
   if (process.env.QUORUM_CONTAINER_TESTS !== '1') { test.skip('Set QUORUM_CONTAINER_TESTS=1 explicitly'); return; }
@@ -46,6 +47,9 @@ it('runtime container: good, console-error, http500, external and blank on dispo
       await writeFile(path.join(root, 'server.cjs'), source.replace("|| 'good'", `|| ${JSON.stringify(behavior)}`));
       await git(['add', 'server.cjs']); await git(['commit', '--signoff', '-m', `Select ${behavior}`]);
       const headCommit = await git(['rev-parse', 'HEAD']);
+      config.runtime!.flows![0]!.steps = behavior === 'good'
+        ? [{ goto: '/' }, { click: 'a' }, { waitForUrl: '/about' }, { waitForSelector: 'h1' }, { press: 'body', key: 'Tab' }]
+        : [{ goto: '/' }];
       const evidence = await runRuntimeEvidence({ mode: 'runtime', diff: '', baseCommit, mergeBaseCommit: baseCommit,
         headCommit, worktreeRoot: root, touchedFiles: ['server.cjs'] }, config, { root, gitRunner: runCommand, containerRunner: runCommand });
       expect(evidence.reasons, behavior).toEqual([]); expect(evidence.available, behavior).toBe(true);
@@ -57,7 +61,26 @@ it('runtime container: good, console-error, http500, external and blank on dispo
       const problem = ['console-error', 'http500', 'blank'].includes(behavior);
       expect(verdict.verdict, behavior).toBe(problem ? 'NEW RUNTIME PROBLEMS' : 'NO NEW RUNTIME PROBLEMS FOUND');
       expect(verdict.exitCode, behavior).toBe(problem ? 1 : 0);
-      if (behavior === 'good') expect(signatures).toEqual([]);
+      if (behavior === 'good') {
+        expect(signatures).toEqual([]);
+        const captured = await runRuntimeEvidence({ mode: 'runtime', diff: '', baseCommit, mergeBaseCommit: baseCommit,
+          headCommit, worktreeRoot: root, touchedFiles: ['server.cjs'] }, { ...config, runtime: { ...config.runtime!, screenshots: true } },
+        { root, runId: 'qrm-container-shots', gitRunner: runCommand, containerRunner: runCommand });
+        expect(captured.available).toBe(true); expect(captured.reasons).toEqual([]); expect(captured.notes).toEqual([]);
+        for (const side of ['base', 'head'] as const) {
+          expect(captured[side]!.report).toEqual(evidence[side]!.report);
+          expect(captured[side]!.stable).toEqual(evidence[side]!.stable);
+          const inspected = config.runtime!.flows!.flatMap(flow => flow.steps.flatMap((step, index) =>
+            ['goto', 'click', 'press', 'waitForUrl', 'waitForSelector'].some(action => Object.hasOwn(step, action)) ? [{ flow: flow.name, step: index }] : []));
+          expect(captured[side]!.shots.map(({ flow, step }) => ({ flow, step }))).toEqual(inspected);
+          for (const shot of captured[side]!.shots) {
+            const bytes = await readFile(path.join(root, shot.path));
+            expect([...bytes.subarray(0, 3)]).toEqual([255, 216, 255]);
+            expect(bytes.length).toBe(shot.bytes); expect(shot.mime).toBe('image/jpeg');
+            expect(createHash('sha256').update(bytes).digest('hex')).toBe(shot.sha256);
+          }
+        }
+      }
       if (behavior === 'console-error') expect(signatures).toContain('console|home|boom');
       if (behavior === 'http500') expect(signatures).toContain('http|home|500 /api/data');
       if (behavior === 'blank') expect(signatures).toContain('blank|home|0|blank');

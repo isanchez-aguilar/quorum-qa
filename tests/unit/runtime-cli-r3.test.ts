@@ -6,6 +6,7 @@ import { main } from '../../src/cli/index.js';
 import { createReviewWorktree } from '../../src/worktree/index.js';
 import type { CommandRunner } from '../../src/types/index.js';
 import type { Observation } from '../../src/runtime/report.js';
+import { createHash } from 'node:crypto';
 
 vi.mock('../../src/worktree/index.js', () => ({ createReviewWorktree: vi.fn() }));
 vi.mock('../../src/checks/resolver.js', () => ({ resolveCommand: (file: string, args: string[]) => ({ file, args }) }));
@@ -21,7 +22,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-async function execute(behavior: string, flags: string[] = []) {
+async function execute(behavior: string, flags: string[] = [], screenshots = false) {
   let out = ''; let err = ''; let runs = 0;
   const forbidden = vi.fn(async () => { throw new Error('must not run'); });
   const gitRunner: CommandRunner = async (_file, args) => {
@@ -29,7 +30,7 @@ async function execute(behavior: string, flags: string[] = []) {
     let stdout = '';
     if (args.includes('rev-parse') || args.includes('merge-base')) stdout = args.includes('--show-toplevel') ? root : 'a'.repeat(40);
     if (args.includes('show') && args.some(arg => arg.endsWith(':quorum.config.json'))) stdout = JSON.stringify({ checks: [], runtime: {
-      start: ['node', 'server.cjs'], readyUrl: 'http://localhost:4173/',
+      start: ['node', 'server.cjs'], readyUrl: 'http://localhost:4173/', screenshots,
       flows: [{ name: 'home', steps: [{ goto: '/' }, { fill: 'input', value: 'PRIVATE_VALUE' }] }],
     } });
     return { stdout, stderr: '', exitCode: 0 };
@@ -46,7 +47,9 @@ async function execute(behavior: string, flags: string[] = []) {
       : { version: 1, runs: [1, 2].map(run => ({ flow: 'home', run, completed: mode !== 'broken', observations,
         blockedExternal: mode === 'external' ? { 'example.test': 2 } : {}, notes: [],
       })) };
-    return { ...result, stdout: args.at(-2)! + JSON.stringify(payload) };
+    const data = Buffer.from([255, 216, 255, 1]);
+    const shot = { flow: 'home', step: 0, mime: 'image/jpeg', bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), data: data.toString('base64') };
+    return { ...result, stdout: (screenshots ? args.at(-2)! + 'IMG ' + JSON.stringify(shot) + '\n' : '') + args.at(-2)! + JSON.stringify(payload) };
   };
   const code = await main(['review', '--mode', 'runtime', '--diff', 'main...HEAD', '--out', 'runtime.md', '--sarif', 'runtime.sarif', ...flags], {
     out: text => { out += text; }, err: text => { err += text; },
@@ -66,9 +69,21 @@ it.each([
   const json = JSON.parse(result.out); expect(json.runtime.verdict).toBe(verdict); expect(json.exitCode).toBe(code);
   const markdown = await readFile(path.join(root, 'runtime.md'), 'utf8'); expect(markdown).toContain(verdict);
   const sarif = await readFile(path.join(root, 'runtime.sarif'), 'utf8'); expect(sarif).not.toContain('PRIVATE_VALUE');
-  expect(JSON.parse(sarif).runs[0].properties.runtime).toEqual(json.runtime);
+  const { shots: _shots, ...deterministic } = json.runtime;
+  expect(JSON.parse(sarif).runs[0].properties.runtime).toEqual(deterministic);
   if (behavior === 'external') { expect(markdown).toContain('example.test: 4'); expect(json.runtime.comparison.newAtHead).toEqual([]); }
   expect(result.err).not.toContain('comparison and verdict arrive');
+});
+it('uses the review run id for screenshots and keeps SARIF and model summary unchanged', async () => {
+  const result = await execute('good', ['--json'], true); expect(result.code).toBe(0);
+  const json = JSON.parse(result.out);
+  expect(json.runtime.shots).toHaveLength(2);
+  for (const shot of json.runtime.shots) {
+    expect(shot.path).toBe(`.quorum/runtime-shots/${json.runId}/${shot.side}/01-home-0.jpg`);
+    expect(await readFile(path.join(root, shot.path))).toEqual(Buffer.from([255, 216, 255, 1]));
+  }
+  expect(await readFile(path.join(root, 'runtime.sarif'), 'utf8')).not.toContain('runtime-shots');
+  expect(json.runtime.summary).not.toContain('shots');
 });
 it('prints Markdown and changes broken-flow verdict with strict-flows', async () => {
   expect(await execute('broken')).toMatchObject({ code: 0, out: expect.stringContaining('SUSPECT') });

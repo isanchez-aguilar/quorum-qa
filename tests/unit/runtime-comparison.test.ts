@@ -12,7 +12,7 @@ export function side(observations: Observation[] = [], overrides: Partial<Runtim
   const report = { version: 1 as const, runs: config.flows!.flatMap(({ name }) => ([1, 2] as const).map(run => ({
     flow: name, run, completed: true, observations: name === 'home' ? [...observations] : [], blockedExternal: {}, notes: [], ...overrides,
   }))) };
-  return { report, stable: stableObservations(report), durationMs: 1 };
+  return { report, stable: stableObservations(report), durationMs: 1, shots: [] };
 }
 const error = (message: string, step = 0): Observation => ({ kind: 'console', message, step, path: '/' });
 const failure: Observation = { kind: 'flow-failure', message: 'selector missing', errorClass: 'selector', step: 1 };
@@ -58,7 +58,7 @@ it('tracks absent flows, including parser-inserted missing runs', () => {
   expect(compareRuntime(side(), head, config).uncoveredFlows).toEqual(['login']);
   const parsed = parseRuntimeReport(JSON.stringify(head.report), config);
   if ('error' in parsed) throw new Error(parsed.error);
-  expect(compareRuntime(side(), { report: parsed, stable: stableObservations(parsed), durationMs: 0 }, config).uncoveredFlows).toEqual(['login']);
+  expect(compareRuntime(side(), { report: parsed, stable: stableObservations(parsed), durationMs: 0, shots: [] }, config).uncoveredFlows).toEqual(['login']);
 });
 it('counts blocked hosts on each side without making them problems', () => {
   const result = compareRuntime(side([], { blockedExternal: { 'example.test': 2 } }), side([], { blockedExternal: { 'example.test': 3 } }), config);

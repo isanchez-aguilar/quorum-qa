@@ -3375,10 +3375,34 @@ symlinks/modes preserved; only the copy is writable and it is removed in finally
 No setup means no copy and read-only shared dependencies. Shared preparation is
 serialized by volume in-process and uses an atomic named-container lease across
 processes; a conflict is unavailable ("dependency volume in use"). A stale lease
-is not automatically stolen. Screenshots are reserved for R5 (true is rejected).
+is not automatically stolen. The hardening pass reserved screenshots; runtime V0 below re-enables local capture.
 Runtime rejects provider/cache/reproduction CLI flags that it cannot honor.
 
 Regression tests use fake browser/container implementations, including cleanup,
 concurrent preparation, redaction boundaries and 500 KB scrubber timing. Real
 Docker and end-to-end CLI validation remain separate checks. Known limit:
 `budget.maxMinutes` does not bound Git/worktree preparation.
+
+## Runtime V0 as built
+
+`runtime.screenshots: true` stores local JPEGs and calls no model. Every context
+uses the exported frozen 1280x800 viewport. Both runs capture after inspected
+steps settle; only run 1 is retained. A separate five-second capture timeout
+extends the flow deadline by measured capture time (at most five seconds), and
+the container allowance includes capture time within the global budget. Image
+caps/failures are visible notes and do not make deterministic coverage incomplete.
+
+The collector attaches a non-enumerable `shots` array to its existing report.
+Runner emits bounded IMG lines before the final report marker; app stdout stays
+discarded. Host parsing verifies exact fields, canonical base64, JPEG magic,
+length, SHA-256, configured flow/step, duplicates, count and fair byte budgets.
+Only collection raises the output bound to 10,551,296 bytes; overflow is UNKNOWN.
+Images remain separate from the 2 MiB JSON report.
+
+Files persist at `.quorum/runtime-shots/<runId>/<base|head>/<NN>-<flow-slug>-<step>.jpg`,
+using the report run ID, validated flow names and exclusive writes. Storage checks
+parent links and Git ignore status; it asserts slug uniqueness (punctuation can
+otherwise collide). A storage refusal adds a note without affecting the verdict.
+Markdown/JSON list paths, sizes, hashes and pairing, without base64 or inline
+images. SARIF and the bounded model summary retain their prior structure.
+Tests use fake browsers and containers; the extended real Docker test is opt-in.

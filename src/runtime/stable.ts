@@ -1,6 +1,8 @@
 import type { RuntimeReport } from './report.js';
 import { signature } from './signature.js';
 
+export const isScreenshotNote = (note: string): boolean => /^cap: screenshot (?:failed|size|budget|count)$/.test(note);
+
 export function stableObservations(report: RuntimeReport): {
   flows: Record<string, Set<string>>; counts: Record<string, [number, number]>; flaky: string[]; incomplete: string[];
 } {
@@ -25,7 +27,7 @@ export function stableObservations(report: RuntimeReport): {
     if (Boolean(runs[0]?.completed) !== Boolean(runs[1]?.completed)
       || [...failures[0]!, ...failures[1]!].some(step => !failures[0]!.has(step) || !failures[1]!.has(step))) flaky.push(flow);
     // Even a truncated message/path can hide a difference between revisions.
-    if (runs.some(run => !run || run.notes.length || run.observations.some(item => item.errorClass === 'infrastructure'))
+    if (runs.some(run => !run || run.notes.some(note => !isScreenshotNote(note)) || run.observations.some(item => item.errorClass === 'infrastructure'))
       || !runs[0]?.completed && !runs[1]?.completed && !stableFailure) incomplete.push(flow);
   }
   return { flows, counts, flaky, incomplete };
