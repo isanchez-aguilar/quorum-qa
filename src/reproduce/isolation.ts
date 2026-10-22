@@ -45,6 +45,15 @@ const READY_FILE = '/work/node_modules/.quorum-ready';
 // They are created in the writable preparation step and covered by tmpfs in the test step, so the
 // dependency volume itself stays read-only. Bump LAYOUT when this list changes so old volumes rebuild.
 export const RUNNER_CACHE_DIRS = ['.vite-temp', '.vite', '.vitest', '.cache'];
+/**
+ * `--tmpfs` arguments that make the runner cache directories writable for the container user.
+ * Docker accepts uid/gid on a tmpfs; Podman rejects them ("unknown mount option uid"), so there the
+ * directory is sticky and world-writable instead: it is private to this container and discarded with it.
+ */
+export function runnerCacheTmpfs(engine: string, uid: number): string[] {
+  const options = engine === 'podman' ? 'rw,mode=1777' : `rw,uid=${uid},gid=${uid},mode=0700`;
+  return RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:${options}`]);
+}
 const LAYOUT = 'layout-2';
 export const PREPARATION_LIMITS = ['--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
   '--memory', '2g', '--pids-limit', '512', '--cpus', '2', '--read-only', '--tmpfs', '/tmp'];
@@ -292,7 +301,7 @@ export async function runIsolatedTest(
     const args = ['run', '--rm', '--name', name, '--network', 'none', '--user', '1000:1000',
       '--read-only', '--tmpfs', '/tmp', '--workdir', '/work',
       '--mount', `type=bind,src=${root},dst=/work`, '--mount', `${dependencyMount},readonly`,
-      ...RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1000,gid=1000,mode=0700`]),
+      ...runnerCacheTmpfs(runtime, 1000),
       ...CACHE_ENV, '--memory', '1g', '--pids-limit', '256', '--cpus', '2',
       '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL', preparedImage,
       'node', '-e', REPORT_WRAPPER, marker, reportPath, JSON.stringify(command)];
