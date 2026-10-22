@@ -713,12 +713,14 @@ describe('M1 fix 1: a fuzzy match must not flip the meaning', () => {
 });
 
 describe('semantic tokens', () => {
-  it('keeps identifiers, operators, negation, truth words, numbers and strings, and no punctuation', () => {
+  it('keeps identifiers, operators, grouping, negation, truth words, numbers and strings', () => {
     expect(semanticTokens('if (!user.token) return false;')).toEqual([
       'word:if',
+      'punctuation:(',
       'operator:!',
       'ident:user',
       'ident:token',
+      'punctuation:)',
       'word:return',
       'word:false',
     ]);
@@ -748,7 +750,9 @@ describe('semantic tokens', () => {
   it('matches words whole and case-insensitively', () => {
     expect(semanticTokens('notify(nothing); isNull; returnValue')).toEqual([
       'ident:notify',
+      'punctuation:(',
       'ident:nothing',
+      'punctuation:)',
       'ident:isNull',
       'ident:returnValue',
     ]);
@@ -757,16 +761,15 @@ describe('semantic tokens', () => {
       'ident:x',
       'ident:is',
       'word:none',
+      'punctuation::',
       'word:return',
       'word:true',
     ]);
   });
 
-  it('ignores a typo in an identifier and number separators, not the quote style', () => {
+  it('ignores a typo in an identifier, number separators and ordinary quote style', () => {
     expect(semanticDifference('a = fooBar + 1_000;', 'a = fooBaz + 1000;')).toBeNull();
-    expect(semanticDifference("x = 'same'", 'x = "same"')).toBe(
-      'the quote has the string \'same\' where the code has the string "same"',
-    );
+    expect(semanticDifference("x = 'same'", 'x = "same"')).toBeNull();
   });
 
   it('names the first token that differs', () => {
@@ -1229,12 +1232,16 @@ describe('M1 final round fix 2: strings keep their delimiter, templates are code
   });
 
   it.each(swaps)(
-    'code delimited by %s and a quote delimited by %s is rejected',
+    'code delimited by %s and a quote delimited by %s preserves string semantics',
     async (codeDelimiter, quoteDelimiter) => {
       const result = await against(
         `const greeting = ${codeDelimiter}${body}${codeDelimiter};`,
         `const greeting = ${quoteDelimiter}${body}${quoteDelimiter};`,
       );
+      if (codeDelimiter !== '`' && quoteDelimiter !== '`') {
+        expect(result.verified).toBe(true);
+        return;
+      }
       expect(result.verified).toBe(false);
       expect(result.reason).toContain(
         `the quote has ${describeString(quoteDelimiter)} where the code has ${describeString(codeDelimiter)}`,
@@ -1295,9 +1302,9 @@ describe('M1 final round fix 2: strings keep their delimiter, templates are code
     expect(semanticTokens('`${fn({ a: 1 })} end`')).toEqual([
       'template:open',
       'template:expression-open',
-      'ident:fn',
-      'ident:a',
-      'number:1',
+      'ident:fn', 'punctuation:(', 'punctuation:{',
+      'ident:a', 'punctuation::',
+      'number:1', 'punctuation:}', 'punctuation:)',
       'template:expression-close',
       'string:` end',
       'template:close',
@@ -1308,7 +1315,7 @@ describe('M1 final round fix 2: strings keep their delimiter, templates are code
       'template:expression-open',
       'ident:items',
       'ident:map',
-      'ident:i',
+      'punctuation:(', 'punctuation:(', 'ident:i', 'punctuation:)',
       'operator:=>',
       'template:open',
       'string:`<',
@@ -1317,6 +1324,7 @@ describe('M1 final round fix 2: strings keep their delimiter, templates are code
       'template:expression-close',
       'string:`>',
       'template:close',
+      'punctuation:)',
       'template:expression-close',
       'string:`</li>',
       'template:close',

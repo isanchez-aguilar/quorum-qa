@@ -24,7 +24,7 @@ function failureKind(message: string, details: unknown): Test['failureKind'] {
   if (/^(?:Error: )?(?:Cannot find (?:module|package)|Failed to (?:resolve|load)|ERR_MODULE_NOT_FOUND)\b|^ImportError\b/i.test(message)) return 'import';
   if (/^(?:Error: )?(?:Test timed out|Exceeded timeout)\b/i.test(message)) return 'timeout';
   if (/^(?:AssertionError|JestAssertionError)(?:\b|:)|^Error: expect\(|^expect\([^\n]*\)\./.test(message)
-    || Array.isArray(details) && details.some(detail => record(detail) && record(detail.matcherResult))) return 'assertion';
+    || record(details) && record(details.matcherResult)) return 'assertion';
   return 'error';
 }
 
@@ -66,11 +66,14 @@ export function parseTestReport(raw: unknown, worktreeRoot = '/work'): TestRepor
       }
       if (test.status === 'failed') {
         const messages = (assertion.failureMessages as string[]).map(cleanMessage);
-        for (const message of messages) {
-          if (failureKind(message, assertion.failureDetails) !== 'assertion' && infrastructureReason(message)) report.suiteErrors.push(message);
+        const details = assertion.failureDetails;
+        const mismatched = 'failureDetails' in assertion && (!Array.isArray(details) || details.length !== messages.length);
+        const kinds = messages.map((message, index) => mismatched ? 'unknown' : failureKind(message, Array.isArray(details) ? details[index] : undefined));
+        test.failures = messages.map((message, index) => ({ message, kind: kinds[index] ?? 'unknown' }));
+        for (const failure of test.failures) {
+          if (failure.kind !== 'assertion' && infrastructureReason(failure.message)) report.suiteErrors.push(failure.message);
         }
         const message = messages[0] ?? '';
-        const kinds = messages.map(item => failureKind(item, assertion.failureDetails));
         test.failureKind = kinds.length > 0 && kinds.every(kind => kind === 'assertion') ? 'assertion'
           : kinds.find(kind => kind !== 'assertion') ?? 'error';
         test.message = message.split(/\r?\n/, 1)[0] ?? '';
@@ -78,6 +81,9 @@ export function parseTestReport(raw: unknown, worktreeRoot = '/work'): TestRepor
       report.tests.push(test);
     }
     if (suite.status === 'failed' && suite.assertionResults.length === 0 && !suite.message && !suite.testExecError) report.suiteErrors.push('Test suite failed before running tests');
+  }
+  if (value.wasInterrupted === true || value.success === false && !report.tests.some(test => test.status === 'failed')) {
+    report.infrastructureError = 'interrupted or inconsistent test run';
   }
   return report;
 }
@@ -103,14 +109,27 @@ export function passedAtBase(report: TestReport, testFile: string): boolean {
 }
 
 export function infrastructureReason(output: string): string | undefined {
-  if (/worker[^\r\n]*(?:crash|exit|died)|out of memory|\b(?:ENOSPC|EMFILE|ENOMEM)\b|\bprocess (?:was )?killed\b|\bexited with signal\b|\bterminated by signal\b/i.test(output)
+  if (/out of memory|\b(?:ENOSPC|EMFILE|ENOMEM)\b|\bprocess (?:was )?killed\b|\bexited with signal\b|\bterminated by signal\b/i.test(output)
     || /\b(?:SIGKILL|SIGSEGV|SIGTERM|SIGABRT|SIGBUS|SIGILL|SIGFPE)\b/.test(output)) return 'test infrastructure failure';
-  if (/\b(?:EROFS|EACCES)\b[^\r\n]*(?:cache|node_modules|\.vite)|(?:cache|node_modules|\.vite)[^\r\n]*\b(?:EROFS|EACCES)\b/i.test(output)) return 'cache is not writable';
-  if (/\bcommand not found\b|\bexecutable file not found\b|\bspawn [^\r\n]+ ENOENT\b/i.test(output)) return 'command not found';
+  // Each line is scanned a constant number of times. Never restart an unbounded
+  // suffix search at each occurrence of worker, cache, or spawn.
+  let cacheError = false;
+  let missingCommand = /\bcommand not found\b|\bexecutable file not found\b/i.test(output);
+  for (const line of output.split(/\r?\n/)) {
+    const lower = line.toLowerCase();
+    const worker = lower.indexOf('worker');
+    if (worker >= 0 && /crash|exit|died/.test(lower.slice(worker + 6))) return 'test infrastructure failure';
+    if (/\b(?:erofs|eacces)\b/.test(lower) && /cache|node_modules|\.vite/.test(lower)) cacheError = true;
+    const spawn = /\bspawn /.exec(lower);
+    if (spawn && / enoent\b/.test(lower.slice(spawn.index + 7))) missingCommand = true;
+  }
+  if (cacheError) return 'cache is not writable';
+  if (missingCommand) return 'command not found';
   return undefined;
 }
 
 export function infrastructureFailure(report: TestReport | null, diagnostic = '', testFile?: string): string | undefined {
+  if (report?.infrastructureError) return report.infrastructureError;
   const reason = infrastructureReason([diagnostic, ...(report?.suiteErrors ?? [])].join('\n'));
   if (reason) return reason;
   if (report === null) return 'missing test report';

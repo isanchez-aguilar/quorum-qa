@@ -124,6 +124,9 @@ export async function reproduceBlocker(finding: Finding, proposal: ReproductionP
       const base = await atRevision(context.baseCommit);
       if (base.rejected) return { status: 'rejected', reason: base.rejected };
       const baseRun = base.result!;
+      if (baseRun.report?.infrastructureError || baseRun.report && passedAtBase(baseRun.report, proposal.path) && baseRun.exitCode !== 0) {
+        return unproven('interrupted or inconsistent base run');
+      }
       const baseInfra = baseRun.reason ?? (baseRun.timedOut ? 'container timeout' : infrastructureFailure(baseRun.report, '', proposal.path));
       if (baseInfra) return unproven(baseInfra);
       if (!passedAtBase(baseRun.report!, proposal.path)) return { status: 'not-reproduced', reason: 'test did not pass at base' };

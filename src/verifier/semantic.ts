@@ -4,8 +4,8 @@
 // same sequence of tokens, so `if (user.token) return false;` can never verify against
 // `if (!user.token) return false;`, and `if (b < a)` can never verify against `if (a < b)`,
 // however close the characters are. Operators, keywords, numbers and strings must be identical.
-// Identifiers must be identical too, except for a typo: see sameIdentifier. Punctuation that only
-// groups or separates (parentheses, brackets, braces, commas, semicolons, dots) is not a token.
+// Identifiers must be identical too, except for a typo: see sameIdentifier. Grouping brackets
+// and operators are significant; separators (commas, semicolons, dots) remain tolerated.
 // The scan is a single linear pass: no backtracking, and no regular expression runs over the text
 // from more than one starting point.
 
@@ -149,11 +149,13 @@ export function tokenize(text: string, preservePunctuation = false): CodeToken[]
         readTemplateText();
       } else {
         expressions[top] = (expressions[top] as number) - 1;
+        tokens.push({ kind: 'punctuation', text: '}' });
         at += 1;
       }
     } else if (code === OPEN_BRACE && expressions.length > 0) {
       const top = expressions.length - 1;
       expressions[top] = (expressions[top] as number) + 1;
+      tokens.push({ kind: 'punctuation', text: '{' });
       at += 1;
     } else {
       let matched: string | undefined;
@@ -176,8 +178,7 @@ export function tokenize(text: string, preservePunctuation = false): CodeToken[]
           if (matched !== undefined) tokens.push({ kind: 'operator', text: matched });
         }
       }
-      if (preservePunctuation && matched === undefined) tokens.push({ kind: 'punctuation', text: text[at]! });
-      // Verification skips punctuation; mining keeps it to avoid conflating different shapes.
+      if (matched === undefined && (preservePunctuation || '()[]{}?:'.includes(text[at]!))) tokens.push({ kind: 'punctuation', text: text[at]! });
       at += matched === undefined || matched.length === 0 ? 1 : matched.length;
     }
   }
@@ -232,6 +233,7 @@ export function sameIdentifier(quoted: string, real: string): boolean {
 function sameToken(quoted: CodeToken, real: CodeToken): boolean {
   if (quoted.kind !== real.kind) return false;
   if (quoted.kind === 'ident') return sameIdentifier(quoted.text, real.text);
+  if (quoted.kind === 'string' && quoted.delim !== '`' && real.delim !== '`') return quoted.text === real.text;
   return quoted.text === real.text && quoted.delim === real.delim;
 }
 

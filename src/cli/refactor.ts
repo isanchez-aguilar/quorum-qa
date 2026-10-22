@@ -11,9 +11,12 @@ export function evaluateRefactorVerdict(
   const reasons = [...evidence.reasons];
   if (evidence.mutation?.survived.length) reasons.push(`${evidence.mutation.survived.length} of ${evidence.mutation.attempted} sampled mutants of the changed lines survived the test suite: the tests do not pin this code (${evidence.mutation.survived.slice(0, 3).map(item => `${item.file}:${item.line} ${item.operator}`).join(', ')})`);
   if (evidence.api.incomplete || evidence.api.unscanned?.length) {
-    reasons.push(...(evidence.api.notes.length ? evidence.api.notes : ['Public API scan is incomplete.']));
+    for (const note of evidence.api.notes.length ? evidence.api.notes : ['Public API scan is incomplete.']) reasons.push(note);
   }
-  if (evidence.blastRadius.incomplete) reasons.push('blast radius incomplete', ...evidence.blastRadius.notes);
+  if (evidence.blastRadius.incomplete) {
+    reasons.push('blast radius incomplete');
+    for (const note of evidence.blastRadius.notes) reasons.push(note);
+  }
   // A local-only report is not a verified model verdict.
   const verified = [...cascade.findings, ...cascade.unconfirmed.filter(finding => finding.family !== 'local')];
   const blocker = verified.some(finding => finding.verified && finding.severity === 'BLOCKER');
@@ -25,7 +28,8 @@ export function evaluateRefactorVerdict(
     return { verdict: 'NOT EQUIVALENT', exitCode: 1, reasons };
   }
   if (cascade.errors.length || !cascade.coverage.complete) {
-    reasons.push(...cascade.errors, 'Review coverage is incomplete.');
+    for (const error of cascade.errors) reasons.push(error);
+    reasons.push('Review coverage is incomplete.');
     return { verdict: 'UNKNOWN', exitCode: 2, reasons };
   }
   if (evidence.tests.editedFiles.length) reasons.push('Edited test files weaken the behaviour evidence.');

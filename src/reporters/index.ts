@@ -3,7 +3,7 @@ import type { CascadeResult } from '../cascade/index.js';
 import type { runDeterministicChecks } from '../checks/index.js';
 import type { Family, Finding } from '../types/index.js';
 import type { RuleRun } from '../rules/index.js';
-import { refactorMarkdown, refactorSarif, type RefactorReport } from './refactor.js';
+import { cell, refactorMarkdown, refactorSarif, type RefactorReport } from './refactor.js';
 import { runtimeMarkdown, runtimeSarif, type RuntimeReport } from './runtime.js';
 
 export interface ReviewResult extends CascadeResult {
@@ -25,11 +25,10 @@ export interface ReviewResult extends CascadeResult {
   families: Family[];
   exitCode: number;
 }
-const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').replace(/</g, '&lt;');
 const details = (findings: Finding[], refactor = false) => findings.length ? findings.map((f, i) => [
   `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line}${refactor ? ' (suspected behaviour change)' : ` (${f.origin})`}`,
-  `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${f.provider}:${f.model} (${f.family})`,
-  f.clauseNote ? `- **Rule:** ${f.clauseNote}` : f.clause ? `- **Rule:** ${f.clause}` : '',
+  `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${cell(f.provider)}:${cell(f.model)} (${f.family})`,
+  f.clauseNote ? `- **Rule:** ${cell(f.clauseNote)}` : f.clause ? `- **Rule:** ${cell(f.clause)}` : '',
   f.singleSource ? '- **single model, not confirmed**' : '',
   `- **Impact:** ${cell(f.impact)}`, `- **Evidence Quote:** ${cell(f.evidence_quote)}`,
   `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? `- **Reproduction Proof:** ${f.reproduction?.status ?? 'unproven'} (${cell(f.reproduction?.failureReason ?? 'reproduction not requested')}).` : '',
@@ -39,8 +38,11 @@ function reproductionDetails(findings: Finding[]): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return findings.filter(f => f.severity === 'BLOCKER' || f.reproduction?.status && f.reproduction.status !== 'pending').map(f => {
     const proposal = f.reproduction;
-    const summary = escape((proposal?.path || '(none)').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ''));
-    const fence = '`'.repeat(Math.max(3, ...[...(proposal?.content ?? '').matchAll(/`+/g)].map(match => match[0].length + 1)));
+    const summary = escape((proposal?.path || '(none)').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ''))
+      .replace(/\[/g, '&#91;').replace(/\]/g, '&#93;');
+    let fenceLength = 3;
+    for (const match of (proposal?.content ?? '').matchAll(/`+/g)) fenceLength = Math.max(fenceLength, match[0].length + 1);
+    const fence = '`'.repeat(fenceLength);
     return `### ${cell(f.file)}:${f.line}\n\nStatus: **${proposal?.status ?? 'unproven'}**\n\n`
       + `Reason: ${cell(proposal?.failureReason ?? 'reproduction not requested')}\n\n`
       + (proposal?.content ? `<details><summary>${summary}</summary>\n\n${fence}\n${proposal.content}\n${fence}\n\n</details>` : 'No proposed test.');
@@ -55,9 +57,9 @@ export function generateMarkdownReport(result: ReviewResult): string {
   const refactor = result.mode === 'refactor';
   const findingDetails = (findings: Finding[]) => details(findings, refactor);
   return [
-    '# Quorum QA Review Report', `**Run ID:** ${result.runId} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
+    '# Quorum QA Review Report', `**Run ID:** ${cell(result.runId)} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
     ...(result.refactor ? [`**Verdict:** ${result.refactor.verdict}`] : []),
-    `**Time:** ${result.timestamp} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
+    `**Time:** ${cell(result.timestamp)} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
     `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 || check.timedOut).length ?? 0} failed deterministic checks · Cache hits: ${result.cacheHits}`,
     '## Executive Summary', ...(refactor ? ['| Category | Suspected behaviour changes |', '|---|---:|',
       ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => `| ${severity} | ${all.filter(f => f.severity === severity).length} |`)] : [
@@ -109,8 +111,8 @@ export function generateMarkdownReport(result: ReviewResult): string {
       (row.totalMatches > 50 ? `\n\n+${row.totalMatches - 50} more` : '')).join('\n\n') || 'None.',
     '## Warnings', [...result.warnings, ...result.errors].map(w => `- ${cell(w)}`).join('\n') || 'None.',
     '## Independence', `Families that reviewed: ${result.families.join(', ') || 'none'}.`,
-    ...result.warnings.filter(w => w.startsWith('Independence')),
-    '## Review Metadata', `Head: ${result.headSha} · Base: ${result.baseSha} · Calls: ${result.ledgerDraft.reduce((n, row) => n + row.callsUsed, 0)}`,
+    ...result.warnings.filter(w => w.startsWith('Independence')).map(cell),
+    '## Review Metadata', `Head: ${cell(result.headSha)} · Base: ${cell(result.baseSha)} · Calls: ${result.ledgerDraft.reduce((n, row) => n + row.callsUsed, 0)}`,
   ].join('\n\n').replace(/\|\n\n(?=\|)/g, '|\n') + '\n';
 }
 

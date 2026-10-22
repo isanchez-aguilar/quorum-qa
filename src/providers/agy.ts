@@ -25,7 +25,7 @@ export function parseAgyQuota(text: string, model: string): Quota {
     }) : []);
     const active = group.buckets.filter((bucket): bucket is Record<string, unknown> => record(bucket) && bucket.disabled !== true && !disabledNames.has(String(bucket.name)));
     if (!active.length || active.some(bucket => typeof bucket.remaining_fraction !== 'number' || !Number.isFinite(bucket.remaining_fraction) || bucket.remaining_fraction < 0 || bucket.remaining_fraction > 1)) return 'unknown';
-    const minimum = Math.min(...active.map(bucket => bucket.remaining_fraction as number));
+    const minimum = active.reduce((minimum, bucket) => Math.min(minimum, bucket.remaining_fraction as number), Infinity);
     const resets = active.filter(bucket => bucket.remaining_fraction === minimum).map(bucket => bucket.reset_time)
       .filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(a) - Date.parse(b));
     return { group: mapping.group, remainingPercent: minimum * 100, ...(resets[0] ? { resetTime: resets[0] } : {}) };

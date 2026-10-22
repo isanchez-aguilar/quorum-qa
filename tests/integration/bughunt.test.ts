@@ -42,7 +42,7 @@ async function review(raw = '[]', confirmations: string[] = [], args: string[] =
   const codex = new FakeProvider('codex', 'openai', runner, { codex: confirmations });
   let out = ''; let err = '';
   const code = await main(['review', '--mode', 'bughunt', ...(args.includes('--diff') ? [] : ['--diff', 'base...HEAD']), '--no-checks', '--out', '.quorum/report.md', '--json', ...args],
-    { out: text => { out += text; }, err: text => { err += text; } }, { repoRoot: root, gitRunner: runner, catalog, providers: new Map([['agy', agy], ['codex', codex]]) });
+    { out: text => { out += text; }, err: text => { err += text; } }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, catalog, providers: new Map([['agy', agy], ['codex', codex]]) });
   return { code, out, err, agy, codex, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
 const confirm = (line: number, quote: string) => JSON.stringify({ decision: 'confirm', line, evidence_quote: quote });
@@ -127,7 +127,7 @@ it('isolates cache by mode and radius even when windows are identical', async ()
   let out = '';
   const fake = new FakeProvider('agy', 'google', runner, { flash: ['[]'] });
   expect(await main(['review', '--mode', 'feature', '--spec', 'spec.md', '--diff', 'base...HEAD', '--no-checks', '--out', '.quorum/report.md'],
-    { out: text => { out += text; }, err: () => {} }, { repoRoot: root, gitRunner: runner, catalog, providers: new Map([['agy', fake]]) })).toBe(0);
+    { out: text => { out += text; }, err: () => {} }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, catalog, providers: new Map([['agy', fake]]) })).toBe(0);
   const first = await review('[]', [], ['--radius', '40']);
   const second = await review('[]', [], ['--radius', '41']);
   const cached = await review('[]', [], ['--radius', '40']);
@@ -171,7 +171,7 @@ it.each([false, true])('local-only blockers do not exit one with waiver=%s', asy
   const fake = new FakeProvider('qwen', 'local', runner, { qwen: [JSON.stringify([bug()])] });
   let out = '';
   const code = await main(['review', '--mode', 'bughunt', '--diff', 'base...HEAD', '--trust-head-config', '--no-checks', '--json', '--out', '.quorum/report.md', ...(allow ? ['--allow-unproven'] : [])],
-    { out: text => { out += text; }, err: () => {} }, { repoRoot: root, gitRunner: runner, catalog, providers: new Map([['qwen', fake]]) });
+    { out: text => { out += text; }, err: () => {} }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, catalog, providers: new Map([['qwen', fake]]) });
   expect(code).toBe(2);
   expect(JSON.parse(out).unconfirmed).toMatchObject([{ family: 'local', severity: 'BLOCKER' }]);
 });

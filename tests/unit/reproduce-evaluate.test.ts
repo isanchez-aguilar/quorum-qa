@@ -28,6 +28,7 @@ describe('vitest and Jest JSON reporters', () => {
     const raw = await fixture(runner);
     raw.testResults[0].message = '';
     raw.testResults[0].status = 'passed';
+    raw.success = true;
     raw.testResults[0].assertionResults[0].status = 'passed';
     raw.testResults[0].assertionResults[0].failureMessages = [];
     const parsed = parseTestReport(raw)!;
@@ -55,7 +56,7 @@ describe('vitest and Jest JSON reporters', () => {
     raw.testResults[0].message = 'Cannot find module synthetic-missing';
     if (runner === 'jest') raw.testResults[0].testExecError = { message: 'Cannot find module synthetic-missing' };
     const parsed = parseTestReport(raw)!;
-    expect(evaluateReproduction(parsed, testFile, 'Cannot find module')).toBe('non-assertion-failure');
+    expect(evaluateReproduction(parsed, testFile, 'Cannot find module')).toBe('unproven');
     expect(passedAtBase(parsed, testFile)).toBe(false);
   });
   it('normalizes host reporter Windows absolute paths', async () => {

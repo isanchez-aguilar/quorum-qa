@@ -42,7 +42,7 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
     .filter(([flag]) => !args.includes(flag!)).flat();
   const code = await main(['review', ...defaults, '--json', ...args], {
     out: text => { out += text; }, err: text => { err += text; },
-  }, { repoRoot: root, gitRunner: runner, providers: new Map([['agy', provider]]), catalog, ...dependencies });
+  }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, providers: new Map([['agy', provider]]), catalog, ...dependencies });
   return { code, out, err, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
 
@@ -262,7 +262,7 @@ describe('M5 zero-quota review CLI', () => {
   });
   it('exits 2 on incomplete coverage and on invalid ranges', async () => {
     expect((await review(new FakeProvider('agy', 'google', runner, { flash: ['not json'], pro: ['not json'] }))).code).toBe(2);
-    const invalid = await main(['review', '--spec', 'spec.md', '--diff', 'HEAD~1..HEAD'], { out() {}, err() {} }, { repoRoot: root, gitRunner: runner });
+    const invalid = await main(['review', '--spec', 'spec.md', '--diff', 'HEAD~1..HEAD'], { out() {}, err() {} }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner });
     expect(invalid).toBe(2);
   });
   it('recovers an invalid triage response through review fallback', async () => {
@@ -311,7 +311,7 @@ describe('M5 zero-quota review CLI', () => {
     const since = await git('rev-parse', 'HEAD');
     await writeFile(path.join(root, 'fixed.ts'), 'export const fixed = true;\n'); await git('add', '.'); await git('commit', '-m', 'fix');
     const provider = fake(); let output = '';
-    const code = await main(['review', '--spec', 'spec.md', '--since', since, '--json'], { out: text => { output += text; }, err() {} }, { repoRoot: root, gitRunner: runner, providers: new Map([['agy', provider]]), catalog });
+    const code = await main(['review', '--spec', 'spec.md', '--since', since, '--json'], { out: text => { output += text; }, err() {} }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, providers: new Map([['agy', provider]]), catalog });
     expect(code).toBe(0); expect(provider.calls[0]?.prompt).toContain('fixed.ts'); expect(provider.calls[0]?.prompt).not.toContain('sample.ts');
     expect(JSON.parse(output).baseSha).toBe(since); expect(since).not.toBe(base);
   });
@@ -320,7 +320,7 @@ describe('M5 zero-quota review CLI', () => {
     const since = await git('rev-parse', 'HEAD');
     await writeFile(path.join(root, 'fixed.ts'), 'export const fixed = true;\n'); await git('add', '.'); await git('commit', '-m', 'fix');
     const checkRunner = vi.fn<CommandRunner>(); const provider = fake();
-    const code = await main(['review', '--spec', 'spec.md', '--since', since], { out() {}, err() {} }, { repoRoot: root, gitRunner: runner, checkRunner, providers: new Map([['agy', provider]]), catalog });
+    const code = await main(['review', '--spec', 'spec.md', '--since', since], { out() {}, err() {} }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, checkRunner, providers: new Map([['agy', provider]]), catalog });
     expect(code).toBe(0); expect(checkRunner).not.toHaveBeenCalled();
   });
   it('bypasses cached reviews with --no-cache and spends no reproduction calls without blockers', async () => {

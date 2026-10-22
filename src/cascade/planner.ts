@@ -28,13 +28,13 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
   for (const tier of TIERS) {
     const resolved = resolveTier(tier, config, catalog, quotaSnapshot, { authorFamily: context.authorFamily, nowMs });
     tiers[tier] = resolved.models;
-    warnings.push(...resolved.warnings);
+    for (const warning of resolved.warnings) warnings.push(warning);
   }
   const routes = Object.fromEntries(Object.entries(config.escalate.routes ?? {}).map(([keyword, refs]) => {
     const resolved = resolveTier('confirm', config, catalog, quotaSnapshot, {
       refs, label: `route "${keyword}"`, authorFamily: context.authorFamily, nowMs, excludeLocal: true,
     });
-    warnings.push(...resolved.warnings);
+    for (const warning of resolved.warnings) warnings.push(warning);
     if (!resolved.models.length) warnings.push(`Confirmation route "${keyword}" unavailable; falling back to confirm tier.`);
     return [keyword, resolved.models];
   }));
@@ -53,7 +53,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
       timestamp: quotaSnapshot[group]?.timestamp, status };
   });
   const payload = reviewChunks(context);
-  warnings.push(...(context.contextNotes ?? []), ...payload.notes);
+  for (const note of [...(context.contextNotes ?? []), ...payload.notes]) warnings.push(note);
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
   const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));

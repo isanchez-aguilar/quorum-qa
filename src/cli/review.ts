@@ -40,6 +40,7 @@ import { createVisualImages, emptyVisualReview, runVisualReview, visualCandidate
 import { runtimeText } from '../runtime/run.js';
 
 export interface ReviewDependencies {
+  cacheHome?: string;
   contextRunner?: CommandRunner;
   contextProvider?: ContextProvider;
   fetch?: typeof globalThis.fetch;
@@ -256,7 +257,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'contract' && flags.copy) {
     const copy = await loadCopy(path.resolve(root, flags.copy), root, path.resolve(root, flags.rules!));
     if (copy.files.some(file => file.file === context.rulesFile)) throw new UsageError('--copy must not include the rules document.');
-    context.contract!.copy = copy.files; context.contract!.notes.push(...copy.notes);
+    context.contract!.copy = copy.files;
+    for (const note of copy.notes) context.contract!.notes.push(note);
   }
   const plan = deterministicOnly ? undefined : createExecutionPlan(context, config, catalog);
   const quotaFile = path.join(root, '.quorum', 'quota.json');
@@ -320,7 +322,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     runner: dependencies.contextRunner ?? runCommand, deadlineMs: budget.remainingMs,
   });
   context.providerContext = enrichment.perFile;
-  context.contextNotes.push(...enrichment.notes);
+  for (const note of enrichment.notes) context.contextNotes.push(note);
   // Establish the review baseline after context, while retaining the earlier write check.
   const afterContext = await checkoutSnapshot(root, runner);
   const contextChange = checkoutDifference(baseline, afterContext);
@@ -332,7 +334,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const attachmentRoot = verificationTree?.path ?? path.join(root, '.quorum', runId);
   const imageDirectory = `${attachmentRoot}-images`;
   const copyDirectory = `${attachmentRoot}-copy`;
-  const cache = flags.noCache || deterministicOnly ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root);
+  const cache = flags.noCache || deterministicOnly ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root, dependencies.cacheHome);
   let result: ReviewResult;
   try {
     if (!deterministicOnly) try { await atomicWrite(quotaFile, JSON.stringify(snapshot), root); } catch (error) { warn(`Quota write failed: ${String(error)}`); }
@@ -388,7 +390,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     try { await rm(imageDirectory, { recursive: true, force: true }); } catch (error) { warn(`Image cleanup failed: ${String(error)}`); }
     try { await verificationTree?.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
   }
-  result.warnings.push(...warnings.filter(w => !result.warnings.includes(w)));
+  for (const warning of warnings) if (!result.warnings.includes(warning)) result.warnings.push(warning);
   return outputReview(result, flags, root, io);
 }
 

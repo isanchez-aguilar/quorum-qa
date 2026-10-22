@@ -31,6 +31,7 @@ export interface VerifyResult {
   // stays the ORIGINAL quote; a fuzzy note carries the text actually found in the code.
   correctedFinding?: Finding;
   reason?: string;
+  readError?: boolean;
 }
 
 function reject(reason: string): VerifyResult {
@@ -65,8 +66,8 @@ async function readBounded(handle: FileHandle, size: number): Promise<string | n
  * and the evidence quote is found at (or near) the cited line. Never mutates the finding.
  *
  * A quote is verified when it appears verbatim, or when a fuzzy match (similarity >= 0.85) has the
- * same code tokens in the same order: operators, keywords such as true/false/null, numbers, strings
- * (with their delimiters; a template literal's `${...}` expressions are code) and identifiers, where
+ * same code tokens in the same order: grouping, operators, keywords such as true/false/null, numbers,
+ * string contents (ordinary quote style may differ; template `${...}` expressions are code) and identifiers, where
  * an identifier may carry a typo (see semantic.ts). A fuzzy match that differs in a token is
  * rejected naming the token.
  *
@@ -97,7 +98,7 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     // Only to word the reason: a directory cannot be opened as a file on every platform.
     const info = await stat(real).catch(() => null);
     if (info?.isDirectory() === true) return reject(`"${finding.file}" is a directory, not a file`);
-    return reject(`file not readable: "${finding.file}"`);
+    return { ...reject(`file not readable: "${finding.file}"`), readError: true };
   }
 
   try {
@@ -139,7 +140,7 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     try {
       content = await readBounded(handle, info.size);
     } catch {
-      return reject(`file not readable: "${finding.file}"`);
+      return { ...reject(`file not readable: "${finding.file}"`), readError: true };
     }
     if (content === null) {
       return reject(`file changed while it was being verified: "${finding.file}" grew past ${info.size} bytes`);
@@ -214,6 +215,8 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     const correctedFinding: Finding = { ...finding, line: match.line, verified: true };
     if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
     return { verified: true, correctedFinding };
+  } catch {
+    return { ...reject(`file not readable: "${finding.file}"`), readError: true };
   } finally {
     await handle.close().catch(() => undefined);
   }

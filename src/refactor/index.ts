@@ -226,7 +226,7 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
   const editedFiles = editedTestFiles(context.touchedFiles, reports.base, reports.head, [...testPresence.base].filter(file => testPresence.head.has(file)));
   const tests = compareTests(reports.base, reports.head, editedFiles);
   const api = compareApi(sources.base, sources.head, packages.base, packages.head);
-  api.notes.push(...notes);
+  for (const note of notes) api.notes.push(note);
   api.incomplete ||= notes.length > 0;
   const evidence = { ...(mutation ? { mutation } : {}), available: reasons.length === 0, reasons, tests, api, blastRadius };
   return { ...evidence, summary: summarizeEvidence(evidence) };

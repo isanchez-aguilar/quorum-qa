@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { homedir } from 'node:os';
 import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { QuotaSnapshot } from '../catalog/groups.js';
@@ -179,21 +180,50 @@ export function cacheKey(payload: string, prompt: string, ref: string): string {
   return createHash('sha256').update(JSON.stringify([payload, prompt, ref])).digest('hex');
 }
 
-export function diskCache(root: string, warn: (message: string) => void, repoRoot = process.cwd()) {
+export function diskCache(root: string, warn: (message: string) => void, repoRoot = process.cwd(), home = homedir()) {
   const pending = new Map<string, { rawOutput: string; model: string }>();
   const file = (key: string) => path.join(root, 'v1', key.slice(0, 2), `${key}.json`);
+  let userKey: Promise<Buffer | undefined> | undefined;
+  const secret = () => userKey ??= (async () => {
+    const keyFile = path.join(home, '.quorum', 'cache.key');
+    try {
+      await mkdir(path.dirname(keyFile), { recursive: true, mode: 0o700 });
+      try {
+        const handle = await open(keyFile, 'wx', 0o600);
+        try { await handle.writeFile(randomBytes(32)); } finally { await handle.close(); }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      const key = await readFile(keyFile);
+      if (key.length !== 32) throw new Error('invalid cache key');
+      return key;
+    } catch {
+      // Never expose the secret or filesystem error details.
+      warn('Cache disabled: user authentication key could not be created or read.');
+      return undefined;
+    }
+  })();
+  const mac = (secret: Buffer, key: string, model: string, rawOutput: string) =>
+    createHmac('sha256', secret).update(JSON.stringify([1, key, model, rawOutput])).digest();
   return {
     async read(key: string): Promise<string | undefined> {
+      const authentication = await secret();
+      if (!authentication) return undefined;
       try {
         const value = JSON.parse(await readFile(file(key), 'utf8')) as Record<string, unknown>;
-        if (value.version === 1 && value.key === key && typeof value.rawOutput === 'string') return value.rawOutput;
+        if (value.version === 1 && value.key === key && typeof value.model === 'string' && typeof value.rawOutput === 'string'
+          && typeof value.mac === 'string' && /^[a-f0-9]{64}$/.test(value.mac)
+          && timingSafeEqual(Buffer.from(value.mac, 'hex'), mac(authentication, key, value.model, value.rawOutput))) return value.rawOutput;
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warn(`Cache read failed: ${String(error)}`); }
       return undefined;
     },
     stage(key: string, rawOutput: string, model: string) { pending.set(key, { rawOutput, model }); },
     async flush() {
+      const authentication = await secret();
+      if (!authentication) { pending.clear(); return; }
       for (const [key, value] of pending) {
-        try { await atomicWrite(file(key), JSON.stringify({ version: 1, key, createdAt: new Date().toISOString(), ...value }), repoRoot); }
+        try { await atomicWrite(file(key), JSON.stringify({ version: 1, key, createdAt: new Date().toISOString(), ...value,
+          mac: mac(authentication, key, value.model, value.rawOutput).toString('hex') }), repoRoot); }
         catch (error) { warn(`Cache write failed: ${String(error)}`); }
       }
     },

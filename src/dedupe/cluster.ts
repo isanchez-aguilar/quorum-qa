@@ -134,7 +134,7 @@ function round(value: number): number {
 /** 5.3: one family keeps its best score, two distinct families add 0.25 (capped), three or more give 1. */
 export function combinedConfidence(members: readonly Finding[]): number {
   const families = new Set<Family>(members.map((member) => member.family));
-  const best = Math.max(...members.map((member) => member.confidence));
+  const best = members.reduce((best, member) => Math.max(best, member.confidence), -Infinity);
   if (families.size >= 3) return 1;
   if (families.size === 2) return round(Math.min(1, best + CROSS_FAMILY_BOOST));
   return best;

@@ -6,6 +6,20 @@
 
 ---
 
+## Review fixes batch A
+
+- **C1:** semantic verification retains grouping brackets and operators, including ternary punctuation; ordinary quote style and trailing separators remain tolerated, while template literals retain their meaning.
+- **C2:** negation tokens are retained and trigger negation parity gates strong merges. Shared absence alone does not establish a possibly-related annotation.
+- **C3:** disk cache entries carry HMAC-SHA256 over `[version, key, model, rawOutput]`, checked with `timingSafeEqual`. A lazily created, exclusive 32-byte user key lives at `~/.quorum/cache.key` (0600 where supported); unavailable keys disable caching with a warning. Unsigned or forged entries miss. Cache home is injectable for synthetic tests.
+- **C4:** verifier read errors are distinguished from absent evidence and retained in `coverage.lostFindings` as `verifier read error`, with file warnings and incomplete coverage.
+- **P1:** interrupted or inconsistent reports carry an infrastructure marker; a passing base additionally requires exit 0, otherwise reproduction remains unproven.
+- **P2:** failure details are paired with messages by index. Mismatched detail counts produce unknown failures, never assertion proof.
+- **P3:** infrastructure detection scans each line a constant number of times, including worker, cache-permission and missing-command patterns. Regressions cover 256 KiB/1 MiB inputs and best-of-five 64/256 KiB scaling below 8.
+- **K2:** reproduction fences use an iterative maximum. Unbounded confidence/quota reductions and review-note/finding appends avoid function-argument spreads; runtime maxima remain bounded by 20 flows and 50 steps per flow.
+- **K3:** untrusted Markdown prose escapes brackets, backslashes, pipes, newlines and HTML openers throughout review/refactor output, including rule notes and independence warnings. Runtime output already encodes Markdown delimiters; regression tests cover it too. Proposed code inside fences is preserved.
+
+Regression probes are named by item ID in `tests/unit/review-batch-a*.test.ts`; reporter-specific cases also cover refactor output. Historical token expectations and passing-report fixtures were updated to the corrected semantics, rather than preserving discarded grouping/negation or contradictory `success: false` evidence.
+
 ## 1. Repository Layout
 
 Every directory and source file for v1, with a one-line summary of its responsibility:
