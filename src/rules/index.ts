@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { ConfigError } from '../config/schema.js';
 import { cleanDiff, diffSectionPath } from '../context/diff.js';
-import { git, validateRef } from '../context/git.js';
+import { loadTrustedJson } from '../config/trusted-file.js';
 import { matchesTestGlob } from '../reproduce/write.js';
 import type { CommandRunner, ReviewContext } from '../types/index.js';
 
@@ -67,20 +67,8 @@ export function validateRules(raw: unknown): Rule[] {
 
 /** The caller selects merge-base (default) or head only after explicit trust opt-in. */
 export async function loadRulesAt(commit: string, root: string, runner: CommandRunner): Promise<Rule[]> {
-  validateRef(commit, false);
-  const listing = await git(['ls-tree', '-z', commit, '--', RULES_FILE_NAME], root, runner);
-  if (listing.exitCode !== 0) throw new Error(`Cannot load rules: ${listing.stderr}`);
-  if (!listing.stdout) return [];
-  // A git symlink (mode 120000) would make `git show` return its target path as text.
-  if (!/^100(?:644|755) blob /.test(listing.stdout)) {
-    throw new ConfigError(['quorum.rules.json must be a regular file, not a symlink'], 'Invalid quorum rules');
-  }
-  const result = await git(['show', `${commit}:${RULES_FILE_NAME}`], root, runner);
-  if (result.exitCode !== 0) throw new Error(`Cannot load rules: ${result.stderr}`);
-  let raw: unknown;
-  try { raw = JSON.parse(result.stdout.replace(/^\uFEFF/, '')); }
-  catch { throw new ConfigError(['quorum.rules.json is not valid JSON'], 'Invalid quorum rules'); }
-  return validateRules(raw);
+  const raw = await loadTrustedJson(commit, RULES_FILE_NAME, root, runner);
+  return raw === undefined ? [] : validateRules(raw);
 }
 
 /** No pattern is executed on the main thread. Each invocation has one hard deadline. */

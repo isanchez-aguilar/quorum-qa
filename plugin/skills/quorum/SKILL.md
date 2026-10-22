@@ -74,3 +74,27 @@ prompts say `timed out`. Refactor and runtime keep their separate timeouts.
 - Always mention the Coverage section when it says INCOMPLETE, and any "Unconfirmed" findings, as Quorum reports them. Don't upgrade, downgrade or invent findings, and don't present an incomplete run as clean.
 - Runtime visual findings are advisory and unverified. Two different families flagging the same pair can raise a clean verdict to SUSPECT, still exit 0. Never treat them as NEW RUNTIME PROBLEMS or override UNKNOWN. Report unpaired images, incomplete visual flows and both independent claims. Without `--visual`, the report says `Visual review: off`.
 - If the user wants fixes, that is a separate step: Quorum's reviewers never edit code.
+
+## 6. Record a reviewed false positive
+
+When the user has judged a code finding false, use the complete saved
+`review --json` report with
+`quorum suppress add --from <report.json> --finding <n> --reason "<10–500 character explanation>"`
+and optionally `--expires YYYY-MM-DD`. The index is 1-based across `findings`,
+then `unconfirmed`. This makes no provider calls. It writes only the working-tree
+`quorum.suppress.json`; the user commits it. Never suppress automatically just
+because a finding is inconvenient or recurring.
+
+`quorum suppress list [--from <report.json>]` shows active/expired/unused status;
+`quorum suppress remove <id>` removes an entry. `doctor` validates the file and
+warns about expiration or quotes missing from current code. Suppressions match
+file/quote, not line, with at least 12 normalized characters; changed code can
+make the finding return. Entries come from the trusted config commit, so branch
+additions wait until merged. `--trust-head-config` opts into committed HEAD only.
+
+Mention **Suppressed (N)** and ignored/expired warnings in the report summary.
+Suppressed findings retain the tool, location, severity, ID and reason in
+Markdown/JSON but leave verdict counts and SARIF. Reproduced two-family BLOCKERs
+remain active. History retains `suppressed: true`, excluded from rule mining;
+`--no-cache` does not affect this. Runtime and deterministic rule results are
+not code findings and are not suppressed.

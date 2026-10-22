@@ -29,7 +29,7 @@ it.each([false, true])('M1: rule evidence controls refactor CLI, deterministic-o
   vi.mocked(runCascade).mockResolvedValue(cascade);
   vi.mocked(buildReviewContext).mockResolvedValue({ ...context(root), mode: 'refactor' });
   const gitRunner: CommandRunner = async (_command, args) => ({ exitCode: 0, stderr: '',
-    stdout: args.includes('show') ? JSON.stringify({ checks: [] }) : 'a'.repeat(40) });
+    stdout: args.includes('ls-tree') || args.includes('diff') ? '' : args.includes('show') ? JSON.stringify({ checks: [] }) : 'a'.repeat(40) });
   try {
     for (const [severity, pattern, verdict, exitCode] of [
       ['error', 'load', 'NOT EQUIVALENT', 1], ['warning', 'load', 'SUSPECT', 0], ['error', 'absent', 'NO BEHAVIOUR CHANGE FOUND', 0],

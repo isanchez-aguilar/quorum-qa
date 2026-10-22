@@ -8,6 +8,10 @@ export class UsageError extends Error {
 export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'] as const;
 
 export interface ParsedFlags {
+  from?: string;
+  finding?: string;
+  reason?: string;
+  expires?: string;
   verbose?: boolean;
   visual?: boolean;
   help?: boolean;
@@ -51,7 +55,7 @@ export interface ParsedArgs {
 }
 
 type BooleanFlag = 'verbose' | 'sequentialChecks' | 'visual' | 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
-type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
+type ValueFlag = 'from' | 'finding' | 'reason' | 'expires' | 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   verbose: 'verbose',
@@ -75,6 +79,7 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
 };
 
 const VALUE_FLAGS: Record<string, ValueFlag> = {
+  from: 'from', finding: 'finding', reason: 'reason', expires: 'expires',
   format: 'format',
   min: 'min',
   days: 'days',

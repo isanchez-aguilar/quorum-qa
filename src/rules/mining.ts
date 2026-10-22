@@ -146,6 +146,7 @@ export async function proposeRules(
     if (!row.trim()) continue;
     let value: unknown;
     try { value = JSON.parse(row); } catch { report.invalidEntries++; continue; }
+    if (value && typeof value === 'object' && (value as Record<string, unknown>).suppressed === true) continue;
     if (!isFinding(value) || !Number.isFinite(Date.parse(value.timestamp))) { report.invalidEntries++; continue; }
     const time = Date.parse(value.timestamp);
     if (time < cutoff || time > now) continue;

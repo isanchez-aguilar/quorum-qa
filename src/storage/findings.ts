@@ -4,6 +4,7 @@ import { appendLedger } from './index.js';
 export const FINDINGS_MAX_BYTES = 5 * 1024 * 1024;
 
 export interface HistoryEntry {
+  suppressed?: boolean;
   runId: string;
   timestamp: string;
   mode: string;
