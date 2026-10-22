@@ -2211,6 +2211,18 @@ above define the extended coverage rule and optional confirmation routes.
   retries transient rename errors. The reclaim directory is removed in `finally`.
   Abrupt process termination during reclamation can leave that directory behind;
   reclamation then fails closed at the deadline rather than stealing a lock.
+- Acquiring the ledger lock waits for **progress**, not for a fixed time (fixed
+  2026-10-21): a writer keeps waiting while the lock's owner token keeps
+  changing, and gives up only when one owner has held it for 10 s
+  (`LEDGER_LOCK.idleMs`) or after 120 s in all (`LEDGER_LOCK.maxMs`). Giving up
+  throws `ELEDGERLOCK` ("nothing was written"). Reclaiming a stale lock gets only
+  the idle allowance, so a reclaimed lock Windows will not let go of also ends in
+  `ELEDGERLOCK` after about 10 s, not after the absolute limit with a raw
+  filesystem error. The tests drive `LEDGER_LOCK.now` with a fake clock, so they
+  are deterministic and fail on a fixed-deadline wait. The old fixed 10 s deadline made
+  the tail of a long but moving queue fail with `EEXIST` under load (19 of 480
+  concurrent writers across 12 processes; no line was ever lost or duplicated);
+  with the fix 800 concurrent writers all land.
   Removing such an orphan requires establishing that no reclaimer is active.
 - Each successfully parsed local-only chunk gets a full non-local review pass,
   with review-tier fallback. Its findings join the normal verifier/confirmation

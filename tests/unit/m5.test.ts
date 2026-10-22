@@ -1,9 +1,10 @@
+import { rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { acceptanceCriteria, inventoryFeatures } from '../../src/modes/index.js';
-import { appendLedger, atomicWrite, cacheKey, diskCache } from '../../src/storage/index.js';
+import { appendLedger, atomicWrite, cacheKey, diskCache, LEDGER_LOCK } from '../../src/storage/index.js';
 import { runCascade } from '../../src/cascade/index.js';
 import { validateConfig } from '../../src/config/index.js';
 import { FakeProvider } from '../../src/providers/fake.js';
@@ -14,17 +15,17 @@ import { generateMarkdownReport } from '../../src/reporters/index.js';
 import { checkoutDifference, checkoutSnapshot } from '../../src/worktree/checkout.js';
 import type { CommandRunner } from '../../src/types/index.js';
 
-const locked = vi.hoisted(() => ({ path: '', code: 'EBUSY' }));
+const locked = vi.hoisted(() => ({ path: '', code: 'EBUSY', match: undefined as ((file: string) => boolean) | undefined }));
 vi.mock('node:fs/promises', async importOriginal => {
   const original = await importOriginal<typeof import('node:fs/promises')>();
   return { ...original, rm: async (...args: Parameters<typeof original.rm>) => {
-    if (args[0] === locked.path) throw Object.assign(new Error('Synthetic locked directory'), { code: locked.code });
+    if (args[0] === locked.path || locked.match?.(String(args[0]))) throw Object.assign(new Error('Synthetic locked directory'), { code: locked.code });
     return original.rm(...args);
   } };
 });
 let root: string;
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), 'quorum-m5-unit-')); await writeFile(path.join(root, 'sample.ts'), source); });
-afterEach(async () => { locked.path = ''; await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { locked.path = ''; locked.match = undefined; await rm(root, { recursive: true, force: true }); });
 const config = () => validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
 
 it('extracts checkboxes everywhere and items only inside acceptance headings', () => {
@@ -175,4 +176,49 @@ it('keeps every line when many writers append at once', async () => {
   const ids = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line).id as number);
   expect(ids).toHaveLength(40);
   expect(new Set(ids).size).toBe(40);
+});
+// The lock wait measures time without progress, not total time. A fake clock makes these
+// deterministic: every clock read advances it, and can also rotate or release the lock.
+async function withLockClock<T>(lockPath: string, options: { stepMs: number; rotate: boolean; releaseAfterMs?: number }, run: () => Promise<T>): Promise<T> {
+  const saved = { ...LEDGER_LOCK }; let clock = 0;
+  LEDGER_LOCK.now = () => {
+    clock += options.stepMs;
+    if (options.releaseAfterMs !== undefined && clock > options.releaseAfterMs) rmSync(lockPath, { force: true });
+    else if (options.rotate) writeFileSync(lockPath, `holder-${clock}`);
+    return clock;
+  };
+  try { return await run(); } finally { Object.assign(LEDGER_LOCK, saved); }
+}
+it('keeps waiting well past the idle limit while the lock keeps changing holders', async () => {
+  // Thirty fake seconds of a moving queue: a fixed ten-second deadline would have given up.
+  const file = path.join(root, 'queue.jsonl'); const lockPath = `${file}.lock`;
+  writeFileSync(lockPath, 'holder-start');
+  await withLockClock(lockPath, { stepMs: 1000, rotate: true, releaseAfterMs: 30_000 }, () => appendLedger([{ id: 1 }], file));
+  expect(JSON.parse(await readFile(file, 'utf8')).id).toBe(1);
+});
+it('gives up with a clear error and writes nothing when one holder keeps the lock', async () => {
+  const file = path.join(root, 'stuck.jsonl'); writeFileSync(`${file}.lock`, 'holder-stuck');
+  await withLockClock(`${file}.lock`, { stepMs: 1000, rotate: false }, async () => {
+    await expect(appendLedger([{ id: 1 }], file)).rejects.toMatchObject({ code: 'ELEDGERLOCK', message: expect.stringContaining('nothing was written') });
+  });
+  await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(`${file}.lock`, 'utf8')).toBe('holder-stuck');
+});
+it('stops at the absolute limit even while holders keep changing', async () => {
+  const file = path.join(root, 'endless.jsonl'); const lockPath = `${file}.lock`;
+  writeFileSync(lockPath, 'holder-start');
+  await withLockClock(lockPath, { stepMs: 2000, rotate: true }, async () => {
+    await expect(appendLedger([{ id: 1 }], file)).rejects.toMatchObject({ code: 'ELEDGERLOCK' });
+  });
+  await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+});
+it('gives up within the idle allowance when a reclaimed stale lock cannot be removed', async () => {
+  const file = path.join(root, 'reclaim.jsonl'); const lockPath = `${file}.lock`;
+  await writeFile(lockPath, 'holder-crashed'); const old = new Date(Date.now() - 601000); await utimes(lockPath, old, old);
+  locked.match = file => file.includes('.stale-'); locked.code = 'EPERM';
+  const saved = { ...LEDGER_LOCK }; LEDGER_LOCK.idleMs = 300;
+  const started = Date.now();
+  try { await expect(appendLedger([{ id: 1 }], file)).rejects.toMatchObject({ code: 'ELEDGERLOCK' }); }
+  finally { Object.assign(LEDGER_LOCK, saved); }
+  expect(Date.now() - started).toBeLessThan(5000);
 });
