@@ -7,6 +7,8 @@ import { validateConfig } from '../../src/config/schema.js';
 import { runCommand } from '../../src/process/runner.js';
 import { DEFAULT_RUNTIME_IMAGE } from '../../src/runtime/image.js';
 import { runRuntimeEvidence } from '../../src/runtime/run.js';
+import { compareRuntime } from '../../src/runtime/compare.js';
+import { evaluateRuntimeVerdict } from '../../src/cli/runtime.js';
 
 it('runtime container: good, console-error, http500, external and blank on disposable base/head', async test => {
   if (process.env.QUORUM_CONTAINER_TESTS !== '1') { test.skip('Set QUORUM_CONTAINER_TESTS=1 explicitly'); return; }
@@ -50,6 +52,11 @@ it('runtime container: good, console-error, http500, external and blank on dispo
       expect(evidence.base?.stable.flows.home?.size, behavior).toBe(0);
       expect(evidence.head?.report.runs.every(run => run.completed), behavior).toBe(true);
       const signatures = [...evidence.head!.stable.flows.home!];
+      const comparison = compareRuntime(evidence.base!, evidence.head!, config.runtime!);
+      const verdict = evaluateRuntimeVerdict(evidence, comparison, { strictFlows: false });
+      const problem = ['console-error', 'http500', 'blank'].includes(behavior);
+      expect(verdict.verdict, behavior).toBe(problem ? 'NEW RUNTIME PROBLEMS' : 'NO NEW RUNTIME PROBLEMS FOUND');
+      expect(verdict.exitCode, behavior).toBe(problem ? 1 : 0);
       if (behavior === 'good') expect(signatures).toEqual([]);
       if (behavior === 'console-error') expect(signatures).toContain('console|home|boom');
       if (behavior === 'http500') expect(signatures).toContain('http|home|500 /api/data');

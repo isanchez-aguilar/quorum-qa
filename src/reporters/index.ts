@@ -4,12 +4,14 @@ import type { runDeterministicChecks } from '../checks/index.js';
 import type { Family, Finding } from '../types/index.js';
 import type { RuleRun } from '../rules/index.js';
 import { refactorMarkdown, refactorSarif, type RefactorReport } from './refactor.js';
+import { runtimeMarkdown, runtimeSarif, type RuntimeReport } from './runtime.js';
 
 export interface ReviewResult extends CascadeResult {
   runId: string;
   timestamp: string;
   mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
   refactor?: RefactorReport;
+  runtime?: RuntimeReport;
   range: string;
   headSha: string;
   baseSha: string;
@@ -46,6 +48,8 @@ function reproductionDetails(findings: Finding[]): string {
 }
 
 export function generateMarkdownReport(result: ReviewResult): string {
+  if (result.runtime) return ['# Quorum Runtime Review Report', ...runtimeMarkdown(result.runtime),
+    '## Warnings', result.warnings.map(warning => `- ${cell(warning)}`).join('\n') || 'None.'].join('\n\n').replace(/\|\n\n(?=\|)/g, '|\n') + '\n';
   const { coverage } = result;
   const all = [...result.findings, ...result.unconfirmed.filter(f => f.family !== 'local')];
   const refactor = result.mode === 'refactor';
@@ -124,6 +128,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
         lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
       unconfirmedCount: result?.unconfirmed.length ?? 0,
       ...(result?.refactor ? { refactor: result.refactor } : {}),
+      ...(result?.runtime ? { runtime: result.runtime } : {}),
     },
     results: [...findings.map(f => {
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;
@@ -135,7 +140,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
           ...(f.reproduction ? { reproduction: { status: f.reproduction.status }, 'reproduction.status': f.reproduction.status } : {}) },
         partialFingerprints: { 'quorum/v1': createHash('sha256').update(f.file.replace(/\\/g, '/') + '\n' + f.evidence_quote.trim().replace(/\s+/g, ' ')).digest('hex') },
       };
-    }), ...refactorSarif(result?.refactor), ...(result?.ruleChecks?.results ?? []).flatMap(row => row.matches.map(match => ({
+    }), ...refactorSarif(result?.refactor), ...runtimeSarif(result?.runtime), ...(result?.ruleChecks?.results ?? []).flatMap(row => row.matches.map(match => ({
       ruleId: `quorum-rule/${row.rule.id}`, level: row.rule.severity, message: { text: row.rule.message },
       locations: [{ physicalLocation: { artifactLocation: { uri: match.file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' },
         region: { startLine: match.line, snippet: { text: match.text } } } }],

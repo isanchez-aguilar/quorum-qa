@@ -1,6 +1,6 @@
 # Plan: `--mode runtime`
 
-Status: R0-R2 built (config, validation, dry-run, collector, report parser, signatures, flake filter and base/head container orchestration); R3-R5 planned. Runtime execution still exits 2: comparison and verdict arrive in R3. Updated 2026-10-21. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
+Status: R0–R3 built (config, collector, base/head container orchestration, stable comparison, coverage-aware verdicts, Markdown/SARIF/JSON and bounded model summary); R4 independent review and R5 optional model layer remain. Runtime is usable and deterministic, with no provider calls. Updated 2026-10-21. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
 
 ## What it answers
 
@@ -62,12 +62,16 @@ An observation becomes a **signature**. Asynchronous events (`console`, `pageerr
 
 | Verdict | Exit | When |
 |---|---:|---|
-| `NEW RUNTIME PROBLEMS` | 1 | at least one new console error, 5xx/4xx, blank page or technical text at head |
-| `SUSPECT` | 0 | every flow completed on both revisions, but a flow failed a step at head only (`flow-failure`) or a flow was `flaky` |
-| `NO NEW RUNTIME PROBLEMS FOUND` | 0 | all flows ran to completion on both revisions, nothing new |
+| `NEW RUNTIME PROBLEMS` | 1 | at least one confirmed new console error, pageerror, unexpected/static 4xx, 5xx, network error, blank page or technical text at head, even with incomplete coverage; or a newly broken stable step with `--strict-flows` and otherwise available coverage |
+| `SUSPECT` | 0 | no unknown coverage or confirmed new browser problem, but a flow failed a stable step at head only (`flow-failure`) without `--strict-flows`, or a flow was `flaky` |
+| `NO NEW RUNTIME PROBLEMS FOUND` | 0 | all flows covered on both revisions (completed or stable step failure), nothing new or flaky |
 | `UNKNOWN` | 2 | app did not start, readiness timeout, collector crash, no container runtime, base or head could not run, a flow crashed on both sides, **or any configured flow did not complete (incomplete flow coverage)** |
 
 Status codes: 5xx and network errors always count as problems. A 4xx counts unless the step lists it in `expectStatus: [404]`; a 404/4xx on a static sub-resource (script, style, image) always counts. Resolved question 2 below.
+
+Unknown coverage is checked first. Confirmed new browser problems still yield exit 1
+when other coverage is unknown, with both reasons retained. A strict-flow failure
+alone does not override unknown coverage. Blocked external hosts are informational.
 
 The report always says which flows ran, and that "no new problems found" covers only those flows.
 
@@ -109,6 +113,6 @@ Each milestone: Codex implements from a brief, Claude verifies by execution, Gem
 - **4xx handling:** as in the verdict table (5xx/network always; 4xx unless `expectStatus`; static sub-resources always).
 - **Image pull:** the 3.6 GB image and index digest were verified before R2. The R2 opt-in fixture test is authorized to prepare its dependency volumes with network access; ordinary unit tests use fake runners.
 
-## R2 execution
+## Runtime execution
 
-`--mode runtime` runs the merge-base and head in disposable worktrees with no provider calls. `--format json` (or `--json`) prints an interim per-side summary; the exit code remains 2 until R3 implements comparison and verdict. `--no-checks` is refused. Run `QUORUM_CONTAINER_TESTS=1 pnpm exec vitest run tests/container/runtime.test.ts` for the opt-in test (set the environment variable using the current shell's syntax).
+`--mode runtime` runs the merge-base and head in disposable worktrees with no provider calls. `--format json` (or `--json`) prints the full review result, including comparison, verdict and summary. Markdown and optional SARIF reuse the review report paths (`--out`, `--sarif`). `--strict-flows` is runtime-only; `--no-checks` is refused. Run `QUORUM_CONTAINER_TESTS=1 pnpm exec vitest run tests/container/runtime.test.ts` for the opt-in test (set the environment variable using the current shell's syntax).

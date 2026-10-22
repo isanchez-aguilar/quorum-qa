@@ -185,7 +185,7 @@ omitted.
 
 | Command | Flag | Description |
 |---|---|---|
-| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Review mode (runtime: R0 validation/dry-run only) |
+| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Review mode (runtime: deterministic base/head comparison, no provider calls) |
 | `review` | `--deterministic-only` | Refactor evidence without provider calls |
 | `review` | `--mutation` | Refactor only: up to maxMutants extra suite runs (default 8); survivors yield SUSPECT |
 | `review` | `--allow-api-change` | List refactor API breakage without failing for it |
@@ -202,6 +202,8 @@ omitted.
 | `review` | `--allow-unproven` | Waive BLOCKERs only without cross-family confirmation. Cross-family BLOCKERs fail even when reproduction is unproven |
 | `review` | `--no-host-prompt` | Never authorizes host execution; automatic "no" (unproven) |
 | `review` | `--out <report.md>` | Markdown output (default .quorum/reports/<runId>.md) |
+| `review` | `--strict-flows` | Runtime only: newly broken stable steps fail with exit 1 |
+| `review` | `--format json` | Runtime only: full comparison and verdict as JSON (also `--json`) |
 | `review` | `--sarif <file>` | SARIF 2.1.0 output |
 | `review` | `--json` | Print the full review result |
 | `review` | `--no-cache` | Bypass cache reads and writes |
@@ -212,7 +214,7 @@ omitted.
 | General | `--help` | Print this help |
 | General | `--version` | Print the version |
 
-## Runtime preview (R0)
+## Runtime review (R0–R3)
 
 `quorum review --mode runtime --dry-run` validates the trusted config's `runtime`
 block and prints the start argv, readiness URL, flow/step counts, timeouts, image
@@ -221,9 +223,21 @@ are required only in runtime mode; a block alone does not select the mode.
 See [RUNTIME-PLAN.md](docs/RUNTIME-PLAN.md) for the declarative flow format.
 Use synthetic test data and idempotent flows.
 
-Only configuration, validation, dry-run and the synthetic fixture app are built.
-The collector, container orchestration and verdict/reporting remain planned
-(R1-R3): execution currently exits 2 without running the app, checks or providers.
+`quorum review --mode runtime --diff main...HEAD` runs each configured flow twice
+at merge-base and head inside the pinned Playwright container. It compares stable
+observations deterministically, with no provider calls. New browser problems
+produce **NEW RUNTIME PROBLEMS** (exit 1); pre-existing problems and blocked
+external hosts are informational. A newly broken step or flaky flow produces
+**SUSPECT** (exit 0). Use runtime-only `--strict-flows` to make newly broken steps
+fail with exit 1. Unavailable or incomplete evidence produces **UNKNOWN** (exit 2),
+unless a confirmed new problem already requires exit 1; both reasons are listed.
+**NO NEW RUNTIME PROBLEMS FOUND** (exit 0) names only the covered flows.
+
+Markdown is printed and saved with `--out <report.md>` (default
+`.quorum/reports/<runId>.md`); `--sarif <file>` adds SARIF. `--json` or runtime-only
+`--format json` prints the full result, including `runtime.comparison`, verdict,
+reasons and a bounded JSON model summary. Fill values are redacted from evidence.
+The app must work offline with loopback services; flows must be idempotent.
 `--no-checks` is incompatible because runtime mode must run the app.
 `--spec`, `--inventory`, `--images`, `--rules`, `--deterministic-only`,
 `--allow-api-change` and `--mutation` are rejected in runtime mode.

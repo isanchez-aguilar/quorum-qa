@@ -22,6 +22,11 @@ export function signature(observation: Observation, flow: string): string | unde
     // HTTP paths identify resources, not filesystem paths; keep their leading slash.
     return `http|${flow}|${observation.status} ${normalizeMessage('http://runtime' + (observation.path ?? '')).replace('http://runtime', '')}`;
   }
+  // A failed request is identified by its resource too: the same net:: error on a different
+  // endpoint is a different problem.
+  if (observation.kind === 'requestfailed' && observation.path) {
+    return `requestfailed|${flow}|${normalizeMessage('http://runtime' + observation.path).replace('http://runtime', '')} ${normalizeMessage(observation.message)}`;
+  }
   const step = ['blank', 'technicalText', 'flow-failure'].includes(observation.kind) ? `${observation.step}|` : '';
   return `${observation.kind}|${flow}|${step}${normalizeMessage(observation.message)}`;
 }

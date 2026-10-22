@@ -52,7 +52,8 @@ Options for review:
                              or a family (anthropic, openai, google, local)
   --since <sha>              Re-review only the changes since this commit
   --dry-run                  Print the plan and spend nothing
-  --format json              Runtime only: print the interim evidence as JSON
+  --format json              Runtime only: print comparison and verdict as JSON
+  --strict-flows             Runtime only: fail when a flow breaks at head
   --reproduce                Try to reproduce BLOCKERs with a failing test
   --allow-unproven           Waive BLOCKERs only without cross-family confirmation
                              Cross-family BLOCKERs fail even when reproduction is unproven
@@ -117,6 +118,7 @@ export async function main(
     }
 
     if (flags.mutation && (command !== 'review' || flags.mode !== 'refactor')) throw new UsageError('--mutation requires refactor mode.');
+    if (flags.strictFlows && (command !== 'review' || flags.mode !== 'runtime')) throw new UsageError('--strict-flows requires runtime mode.');
     switch (command) {
       case 'rules': {
         if (positionals.length !== 1 || positionals[0] !== 'propose') throw new UsageError('Use quorum rules propose.');

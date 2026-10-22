@@ -3299,3 +3299,62 @@ Final R2 local validation: `pnpm typecheck` passed; `pnpm test` rebuilt and pass
 passed, as did `git -c core.safecrlf=false diff --check`. Changes remain
 uncommitted on the existing `feat/runtime-r2` branch. No Git write command was
 run against this checkout, and no provider CLI was executed.
+
+## v2 runtime R3 as built
+
+`src/runtime/compare.ts` compares the stable signature sets per configured flow
+and in total. Entries retain kind, flow, step for step-bound observations,
+display message/path from head (base for fixed entries), and both runs' counts
+on each side. Async observations remain independent of step timing. A flow
+completed twice at base with the same step failing twice at head goes into
+`flowBroke`, never `newAtHead`; matching failures on both sides are pre-existing.
+Failing-step stability uses the step even when error messages differ by run.
+
+Comparison retains side-labelled flaky/incomplete flows, missing configured
+flows (including the parser's synthetic `missing run` entries), covered flows
+and per-side blocked-host totals. Blocked external requests are informational.
+`evaluateRuntimeVerdict` checks unknown coverage first: unavailable evidence,
+missing sides, incomplete flows and uncovered flows cannot pass. Confirmed new
+browser problems override UNKNOWN with exit 1 while retaining coverage reasons.
+Newly broken steps yield SUSPECT (exit 0), or NEW RUNTIME PROBLEMS (exit 1) with
+runtime-only `--strict-flows`; strict flows alone do not override UNKNOWN.
+Flaky flows are SUSPECT. A clean verdict names exactly the covered flows.
+
+`src/reporters/runtime.ts` builds a redacted report with comparison, verdict,
+exit code, reasons, notes and a JSON summary bounded to 4096 UTF-8 bytes. The
+summary retains category totals while trimming samples; it is exposed for R5
+without invoking any model. Markdown uses the refactor cell helper with extra
+literal escaping for page-supplied Markdown/HTML and a 300-character message
+cap. SARIF emits new problems as errors, newly broken flows as warnings (errors
+with strict flows), and pre-existing problems as notes. Locations point only to
+`quorum.config.json` with logical flow/step locations, never invented source
+lines. Fill values are redacted through `runtimeText` before report serialization.
+
+Runtime execution now uses the existing review output writer, extracted into
+`outputReview`, for default/`--out` Markdown, optional `--sarif`, and stdout JSON
+(`--json` or runtime-only `--format json`). JSON retains the shared review envelope
+with a `runtime` section. No provider, quota, ledger or findings-history calls
+are made. Dry-run is unchanged. No dependencies were added.
+
+New tests cover stable set differences, async step drift, stable failures with
+changing messages, coverage precedence, expected versus static 4xx, duplicate
+counts, blocked hosts, hostile Markdown, redaction, SARIF locations/levels,
+JSON round trips and byte-bounded summaries with many flows. Fake-container
+tests run through `main()` for good, console-error, http500, blank, external,
+not-ready and broken-step behavior, and verify saved Markdown/SARIF alongside
+stdout JSON. The opt-in real-container test now asserts each behavior's verdict.
+
+Before implementation, comparison and reporter suites failed collection because
+their new modules were absent (no individual assertions ran). The added
+`doctor --strict-flows` assertion then failed because the command reached doctor
+instead of rejecting the flag; the global usage guard fixed it. Other new
+assertions were verified after implementation, not claimed as red-first tests.
+Real containers and cross-family provider review remain unverified under this
+task's explicit prohibition on Docker and provider CLIs. All Git operations in
+this worktree were read-only; changes are left uncommitted on `feat/runtime-r3`.
+
+Final R3 validation: `pnpm typecheck` passed. `pnpm test` rebuilt and passed
+78 files / 2041 tests, with 8 skipped gates, in 105.27 seconds. The container
+gate was explicitly disabled (`QUORUM_CONTAINER_TESTS=0`); no real container or
+provider was run. `git -c core.safecrlf=false diff --check` passed. No logs are
+retained; fake-runner report files and synthetic directories are cleaned up.

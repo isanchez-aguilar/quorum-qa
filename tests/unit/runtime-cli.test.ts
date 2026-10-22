@@ -1,4 +1,7 @@
 import { expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { parseArgs, REVIEW_MODES } from '../../src/cli/args.js';
 import { main } from '../../src/cli/index.js';
 import type { CommandRunner } from '../../src/types/index.js';
@@ -9,19 +12,22 @@ import { validateConfig } from '../../src/config/schema.js';
 async function run(flags: string[] = [], runtime: unknown = { start: ['node', 'server.cjs'], readyUrl: 'http://localhost:4173/',
   flows: [{ name: 'login', steps: [{ goto: '/' }, { fill: 'input', value: 'PRIVATE_TEST_VALUE' }] }] }) {
   let out = ''; let err = '';
+  const root = await mkdtemp(path.join(os.tmpdir(), 'quorum-runtime-cli-'));
   const commands: string[][] = [];
   const gitRunner: CommandRunner = async (command, args) => {
     expect(command).toMatch(/(?:^|[\\/])git(?:\.exe)?$/i); commands.push(args);
     let stdout = '';
-    if (args.includes('rev-parse') || args.includes('merge-base')) stdout = args.includes('--show-toplevel') ? process.cwd() : 'a'.repeat(40);
+    if (args.includes('rev-parse') || args.includes('merge-base')) stdout = args.includes('--show-toplevel') ? root : 'a'.repeat(40);
     if (args.includes('show') && args.some(arg => arg.endsWith(':quorum.config.json'))) stdout = JSON.stringify({ checks: [['must-not-run']], runtime });
     return { stdout, stderr: '', exitCode: 0 };
   };
   const forbidden = vi.fn(async () => { throw new Error('must not run'); });
-  const code = await main(['review', '--mode', 'runtime', '--diff', 'main...HEAD', ...flags], {
+  let code: number;
+  try { code = await main(['review', '--mode', 'runtime', '--diff', 'main...HEAD', ...flags], {
     out: text => { out += text; }, err: text => { err += text; },
-  }, { gitRunner, checkRunner: forbidden, containerRunner: async () => ({ stdout: '', stderr: '', exitCode: 1 }), contextRunner: forbidden, fetch: forbidden,
+  }, { repoRoot: root, gitRunner, checkRunner: forbidden, containerRunner: async () => ({ stdout: '', stderr: '', exitCode: 1 }), contextRunner: forbidden, fetch: forbidden,
     appendLedger: forbidden, appendFindings: forbidden, providers: new Map() });
+  } finally { await rm(root, { recursive: true, force: true }); }
   expect(forbidden).not.toHaveBeenCalled();
   expect(commands.flat().join(' ')).not.toMatch(/quorum\.rules|worktree add/);
   return { code, out, err };
@@ -37,9 +43,9 @@ it.each(['--spec=x', '--inventory=x', '--images=x', '--rules=x', '--deterministi
 it('refuses no-checks even for dry-run', async () => {
   const result = await run(['--no-checks', '--dry-run']); expect(result.code).toBe(2); expect(result.err).toContain('runtime mode must run the app');
 });
-it('reports unavailable evidence with the R2 message and no provider calls', async () => {
+it('reports unavailable evidence as UNKNOWN with no provider calls', async () => {
   const result = await run(); expect(result.code).toBe(2);
-  expect(result.err).toContain('runtime mode: comparison and verdict arrive in R3');
+  expect(result.out).toContain('UNKNOWN'); expect(result.out).toContain('no container runtime');
 });
 it('prints only the runtime plan without field values, even for an empty diff', async () => {
   const result = await run(['--dry-run']); expect(result.code).toBe(0);
@@ -67,8 +73,8 @@ it('requires a runtime block and prints configured limits without serializing fl
   expect(out).not.toMatch(/PRIVATE_TEST_VALUE|private-flow-name/);
 });
 
-it('prints interim JSON with --format json and still exits 2', async () => {
+it('prints UNKNOWN JSON with --format json when evidence is unavailable', async () => {
   const result = await run(['--format', 'json']);
-  expect(result.code).toBe(2); expect(JSON.parse(result.out)).toMatchObject({ available: false, base: null, head: null, reasons: ['no container runtime'], exitCode: 2 });
+  expect(result.code).toBe(2); expect(JSON.parse(result.out)).toMatchObject({ runtime: { available: false, verdict: 'UNKNOWN', reasons: expect.arrayContaining(['no container runtime']) }, exitCode: 2 });
 });
 it('rejects unsupported format values', () => { expect(() => parseArgs(['review', '--format', 'xml'])).toThrow('--format must be json'); });
