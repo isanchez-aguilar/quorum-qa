@@ -27,13 +27,13 @@ export function runtimeMarkdown(report: RuntimeReport): string[] {
   return [
     `**Verdict:** ${report.verdict} · exit ${report.exitCode}`,
     '## Runtime comparison',
-    ...Object.entries(comparison?.flows ?? {}).flatMap(([flow, result]) => [
-      `### Flow: ${literal(flow)}`,
-      '| Category | Kind | Step | Path | Message | Base runs | Head runs |', '|---|---|---:|---|---|---|---|',
-      ...(['newAtHead', 'preExisting', 'fixed'] as const).flatMap(category => result[category].map(item =>
-        `| ${{ newAtHead: 'New at head', preExisting: 'Pre-existing', fixed: 'Fixed' }[category]} | ${item.kind} | ${item.step ?? ''} | ${literal(item.path ?? '')} | ${literal(item.message.slice(0, 300))} | ${item.counts.base.join(', ')} | ${item.counts.head.join(', ')} |`)),
-      ...(!result.newAtHead.length && !result.preExisting.length && !result.fixed.length ? ['No stable problem signatures.'] : []),
-    ]),
+    ...Object.entries(comparison?.flows ?? {}).flatMap(([flow, result]) => {
+      const rows = (['newAtHead', 'preExisting', 'fixed'] as const).flatMap(category => result[category].map(item =>
+        `| ${{ newAtHead: 'New at head', preExisting: 'Pre-existing', fixed: 'Fixed' }[category]} | ${item.kind} | ${item.step ?? ''} | ${literal(item.path ?? '')} | ${literal(item.message.slice(0, 300))} | ${item.counts.base.join(', ')} | ${item.counts.head.join(', ')} |`));
+      return [`### Flow: ${literal(flow)}`, ...(rows.length
+        ? ['| Category | Kind | Step | Path | Message | Base runs | Head runs |', '|---|---|---:|---|---|---|---|', ...rows]
+        : ['No stable problem signatures.'])];
+    }),
     '### Flow broke', list(comparison?.flowBroke.map(item => `${item.flow}: step ${item.step} (${item.errorClass}); ${item.message.slice(0, 300)}`) ?? []),
     '### Flaky flows', list(comparison?.flaky.map(item => `${item.side}: ${item.flow}`) ?? []),
     '### Incomplete flows', list(comparison?.incomplete.map(item => `${item.side}: ${item.flow}`) ?? []),

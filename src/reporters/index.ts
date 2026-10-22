@@ -49,7 +49,7 @@ function reproductionDetails(findings: Finding[]): string {
 
 export function generateMarkdownReport(result: ReviewResult): string {
   if (result.runtime) return ['# Quorum Runtime Review Report', ...runtimeMarkdown(result.runtime),
-    '## Warnings', ...result.warnings.map(cell)].join('\n\n').replace(/\|\n\n(?=\|)/g, '|\n') + '\n';
+    '## Warnings', result.warnings.map(warning => `- ${cell(warning)}`).join('\n') || 'None.'].join('\n\n').replace(/\|\n\n(?=\|)/g, '|\n') + '\n';
   const { coverage } = result;
   const all = [...result.findings, ...result.unconfirmed.filter(f => f.family !== 'local')];
   const refactor = result.mode === 'refactor';

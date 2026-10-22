@@ -119,3 +119,31 @@ it('redacts display evidence and signatures, and bounds valid model JSON in byte
   expect(Buffer.byteLength(summary)).toBeLessThanOrEqual(4096);
   expect(JSON.parse(summary).totals.newAtHead).toBe(2000);
 });
+// Flow failures are matched by step, not by their error text, across revisions.
+function failingAt(step: number, message: string): SideResult {
+  const value = side();
+  for (const run of value.report.runs.filter(item => item.flow === 'home')) {
+    run.completed = false;
+    run.observations = [{ kind: 'flow-failure', message: `${message} (run ${run.run})`, errorClass: 'selector', step }];
+  }
+  return { ...value, stable: stableObservations(value.report) };
+}
+it('reports a failure that moved to a later step as broken, never as clean', () => {
+  const result = compareRuntime(failingAt(0, 'missing #a'), failingAt(1, 'missing #b'), config);
+  expect(result.flowBroke.map(item => item.step)).toEqual([1]);
+  expect(result.fixed.map(item => item.step)).toEqual([0]);
+  expect(result.preExisting).toEqual([]);
+  expect(verdict(failingAt(0, 'missing #a'), failingAt(1, 'missing #b')).verdict).toBe('SUSPECT');
+  expect(verdict(failingAt(0, 'missing #a'), failingAt(1, 'missing #b'), true)).toMatchObject({ verdict: 'NEW RUNTIME PROBLEMS', exitCode: 1 });
+});
+it('treats the same failing step with different error text as pre-existing, not fixed', () => {
+  const result = compareRuntime(failingAt(1, 'Timeout 10000ms exceeded'), failingAt(1, 'locator resolved to hidden element'), config);
+  expect(result.preExisting.map(item => [item.kind, item.step])).toEqual([['flow-failure', 1]]);
+  expect(result.fixed).toEqual([]); expect(result.flowBroke).toEqual([]);
+});
+it('identifies failed requests by resource, so a new failing endpoint is new', () => {
+  const failed = (path: string): Observation => ({ kind: 'requestfailed', message: 'net::ERR_FAILED', path });
+  const result = compareRuntime(side([failed('/tracker.js')]), side([failed('/api/checkout')]), config);
+  expect(result.newAtHead.map(item => item.path)).toEqual(['/api/checkout']);
+  expect(result.fixed.map(item => item.path)).toEqual(['/tracker.js']);
+});

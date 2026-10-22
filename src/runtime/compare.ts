@@ -53,17 +53,27 @@ export function compareRuntime(base: SideResult, head: SideResult, config: Runti
     for (const key of new Set([...before, ...after])) {
       const source = after.has(key) ? head : base;
       const observation = source.report.runs.filter(run => run.flow === flow).flatMap(run => run.observations).find(item => signature(item, flow) === key);
-      if (!observation) continue;
+      // Flow failures are matched by step below: their error text may differ between revisions.
+      if (!observation || observation.kind === 'flow-failure') continue;
       const category = before.has(key) ? after.has(key) ? 'preExisting' : 'fixed' : 'newAtHead';
-      if (category === 'newAtHead' && observation.kind === 'flow-failure') continue;
       row[category].push(entry(key, observation));
     }
-    if (completed(base, flow)) for (const observation of stableFailures(head, flow)) {
-      if (row.flowBroke.some(item => item.step === observation.step)) continue;
+    const failureCounts = (side: SideResult, step: number) => [1, 2].map(index => side.report.runs.find(run => run.flow === flow && run.run === index)
+      ?.observations.filter(other => other.kind === 'flow-failure' && other.step === step).length ?? 0) as [number, number];
+    const failedSteps = (side: SideResult) => new Map(stableFailures(side, flow).map(observation => [observation.step!, observation]));
+    const baseFailed = failedSteps(base); const headFailed = failedSteps(head);
+    for (const [step, observation] of headFailed) {
       const item = entry(signature(observation, flow)!, observation);
-      item.counts.head = [1, 2].map(index => head.report.runs.find(run => run.flow === flow && run.run === index)!.observations
-        .filter(other => other.kind === 'flow-failure' && other.step === observation.step).length) as [number, number];
-      row.flowBroke.push({ ...item, step: observation.step!, errorClass: observation.errorClass ?? 'other' });
+      item.counts = { base: failureCounts(base, step), head: failureCounts(head, step) };
+      // Same failing step at both revisions is pre-existing; a step that fails only at head broke,
+      // whether base completed the flow or failed earlier at another step.
+      if (baseFailed.has(step)) row.preExisting.push(item);
+      else row.flowBroke.push({ ...item, step, errorClass: observation.errorClass ?? 'other' });
+    }
+    for (const [step, observation] of baseFailed) if (!headFailed.has(step)) {
+      const item = entry(signature(observation, flow)!, observation);
+      item.counts = { base: failureCounts(base, step), head: failureCounts(head, step) };
+      row.fixed.push(item);
     }
     for (const category of ['newAtHead', 'fixed', 'preExisting'] as const) result[category].push(...row[category]);
     result.flowBroke.push(...row.flowBroke);
@@ -82,6 +92,10 @@ export function summarizeRuntimeComparison(comparison: RuntimeComparison): strin
     coveredFlows: comparison.coveredFlows.slice(0, 20), uncoveredFlows: comparison.uncoveredFlows.slice(0, 20),
   };
   const lists = [summary.newAtHead, summary.flowBroke, summary.flaky, summary.incomplete, summary.coveredFlows, summary.uncoveredFlows];
-  while (Buffer.byteLength(JSON.stringify(summary)) > 4096) lists.sort((a, b) => b.length - a.length)[0]!.pop();
+  while (Buffer.byteLength(JSON.stringify(summary)) > 4096) {
+    const largest = lists.sort((a, b) => b.length - a.length)[0]!;
+    if (!largest.length) break;
+    largest.pop();
+  }
   return JSON.stringify(summary);
 }
