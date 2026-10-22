@@ -142,7 +142,7 @@ if (require.main === module) {
   const [planPath, reportPath] = process.argv.slice(2);
   (async () => {
     const plan = JSON.parse(await fs.readFile(planPath, 'utf8'));
-    const report = await run({ playwright: require('playwright'), plan });
+    const report = await run({ playwright: require('/quorum/playwright/node_modules/playwright-core'), plan });
     await fs.writeFile(reportPath, JSON.stringify(report));
   })().catch(() => { process.exitCode = 1; });
 }

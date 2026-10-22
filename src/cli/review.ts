@@ -33,7 +33,8 @@ import type { CliIo } from './index.js';
 import { UsageError, type ParsedFlags } from './args.js';
 import { runRefactorEvidence, resolveRefactorTestCommand } from '../refactor/index.js';
 import { evaluateRefactorVerdict } from './refactor.js';
-import { runtimeReview } from './runtime.js';
+import { runtimeReview, printRuntimeEvidence } from './runtime.js';
+import { runRuntimeEvidence } from '../runtime/run.js';
 
 export interface ReviewDependencies {
   contextRunner?: CommandRunner;
@@ -71,6 +72,7 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  if (flags.format && mode !== 'runtime') throw new UsageError('--format requires runtime mode.');
   if (mode === 'runtime') {
     if (flags.noChecks) throw new UsageError('runtime mode must run the app; --no-checks is not supported.');
     for (const flag of ['spec', 'inventory', 'images', 'rules'] as const) {
@@ -114,7 +116,13 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'runtime') {
     const base = flags.since && !headConfig ? (await bootstrapConfig()).base : parts[1]!;
     const trusted = headConfig ?? await configAt(await mergeBase(await revParse(base, root, runner), head, root, runner), root, runner);
-    return runtimeReview(trusted.runtime, flags.dryRun === true, io);
+    const planned = runtimeReview(trusted.runtime, flags.dryRun === true, io);
+    if (flags.dryRun) return planned;
+    const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner });
+    const evidence = await runRuntimeEvidence(context, trusted, { root, gitRunner: runner,
+      containerRunner: dependencies.containerRunner ?? runCommand, now,
+      warn: message => io.err(`quorum: ${message}\n`), announce: message => io.err(message) });
+    return printRuntimeEvidence(evidence, flags.json === true || flags.format === 'json', io);
   }
   const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner, exactBase: mode !== 'refactor' && parts[2] === '..' });
   if (mode === 'bughunt') context.radius = flags.radius ?? 40;

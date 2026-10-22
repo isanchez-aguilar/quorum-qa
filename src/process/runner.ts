@@ -38,6 +38,11 @@ export const runCommand: CommandRunner = (command, args, options = {}) => new Pr
     reject(new Error('timeoutMs must be finite and non-negative'));
     return;
   }
+  const outputLimit = options.maxOutputBytes ?? MAX_OUTPUT_BYTES;
+  if (!Number.isSafeInteger(outputLimit) || outputLimit < 1 || outputLimit > 16 * MAX_OUTPUT_BYTES) {
+    reject(new Error('maxOutputBytes must be an integer between 1 and 16 MiB'));
+    return;
+  }
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -62,18 +67,18 @@ export const runCommand: CommandRunner = (command, args, options = {}) => new Pr
     clearTimeout(graceTimer);
     child.stdout.destroy();
     child.stderr.destroy();
-    reject(new CommandTimeoutError(byteTail(stdout.toString(), MAX_OUTPUT_BYTES),
-      byteTail(stderr.toString() + terminationDiagnostic, MAX_OUTPUT_BYTES)));
+    reject(new CommandTimeoutError(byteTail(stdout.toString(), outputLimit),
+      byteTail(stderr.toString() + terminationDiagnostic, outputLimit)));
   };
-  const append = (previous: Buffer, chunk: Buffer) => Buffer.concat([previous, chunk]).subarray(-MAX_OUTPUT_BYTES);
+  const append = (previous: Buffer, chunk: Buffer) => Buffer.concat([previous, chunk]).subarray(-outputLimit);
   child.stdout.on('data', (chunk: Buffer) => {
-    exceeded ||= stdoutHead.length + chunk.length > MAX_OUTPUT_BYTES;
-    stdoutHead = Buffer.concat([stdoutHead, chunk]).subarray(0, MAX_OUTPUT_BYTES);
+    exceeded ||= stdoutHead.length + chunk.length > outputLimit;
+    stdoutHead = Buffer.concat([stdoutHead, chunk]).subarray(0, outputLimit);
     stdout = append(stdout, chunk);
   });
   child.stderr.on('data', (chunk: Buffer) => {
-    exceeded ||= stderrHead.length + chunk.length > MAX_OUTPUT_BYTES;
-    stderrHead = Buffer.concat([stderrHead, chunk]).subarray(0, MAX_OUTPUT_BYTES);
+    exceeded ||= stderrHead.length + chunk.length > outputLimit;
+    stderrHead = Buffer.concat([stderrHead, chunk]).subarray(0, outputLimit);
     stderr = append(stderr, chunk);
   });
   child.stdin.on('error', () => { /* A command may exit before consuming its input. */ });
@@ -85,8 +90,8 @@ export const runCommand: CommandRunner = (command, args, options = {}) => new Pr
     clearTimeout(timer);
     void termination.then(() => {
       if (timedOut) timeout();
-      else if (exceeded) reject(new CommandOutputLimitError(bytePrefix(stdoutHead.toString(), MAX_OUTPUT_BYTES), bytePrefix(stderrHead.toString(), MAX_OUTPUT_BYTES),
-        byteTail(stdout.toString(), MAX_OUTPUT_BYTES), byteTail(stderr.toString(), MAX_OUTPUT_BYTES), code ?? 1));
+      else if (exceeded) reject(new CommandOutputLimitError(bytePrefix(stdoutHead.toString(), outputLimit), bytePrefix(stderrHead.toString(), outputLimit),
+        byteTail(stdout.toString(), outputLimit), byteTail(stderr.toString(), outputLimit), code ?? 1));
       else resolve({ stdout: stdout.toString(), stderr: stderr.toString(), exitCode: code ?? (signal ? 1 : 0) });
     }, reject);
   });

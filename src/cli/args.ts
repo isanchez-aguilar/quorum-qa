@@ -28,6 +28,7 @@ export interface ParsedFlags {
   allowUnproven?: boolean;
   probe?: boolean;
   json?: boolean;
+  format?: 'json';
   out?: string;
   sarif?: string;
   noCache?: boolean;
@@ -46,7 +47,7 @@ export interface ParsedArgs {
 }
 
 type BooleanFlag = 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
-type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif';
+type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   mutation: 'mutation',
@@ -66,6 +67,7 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
 };
 
 const VALUE_FLAGS: Record<string, ValueFlag> = {
+  format: 'format',
   min: 'min',
   days: 'days',
   radius: 'radius',
@@ -141,6 +143,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
           );
         }
         flags.mode = value as (typeof REVIEW_MODES)[number];
+      } else if (key === 'format') {
+        if (value !== 'json') throw new UsageError('--format must be json.');
+        flags.format = value;
       } else if (key === 'radius') {
         if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new UsageError('--radius must be an integer.');
         flags.radius = Math.min(200, Math.max(1, Number(value)));

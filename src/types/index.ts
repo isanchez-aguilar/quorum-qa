@@ -52,6 +52,7 @@ export type CommandRunner = (
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
+    maxOutputBytes?: number;
     // Set by the cmd.exe resolver so Node does not re-quote the command line.
     windowsVerbatimArguments?: boolean;
   },
