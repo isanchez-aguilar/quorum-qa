@@ -3457,3 +3457,39 @@ primary button with inline CSS and no browser errors. Unit/HTTP tests and `main(
 tests use synthetic data, scripted providers and fake container runners. Real
 provider image ingestion, CLI permission enforcement and visual judgement remain
 V2 checks; no quota, real provider calls or Docker runs are part of V1 validation.
+
+## First real-provider runs (2026-10-22)
+
+**V2, the visual review (R5).** Synthetic repository with the fixture app: the base serves the
+good page, the head serves `layout-break` (two overlapping boxes, the primary button missing,
+no console error and no HTTP error). `quorum review --mode runtime --visual` with
+`tiers.visual = [agy:gemini-3.8-flash-high, agy:claude-sonnet-5-5-medium]` made **2 model calls
+with 4 images**. Both families, independently, reported the missing "Primary action" button and the
+truncated, overlapping "Layout box" texts for `home/0`; the pair was corroborated and the
+verdict rose from `NO NEW RUNTIME PROBLEMS FOUND` to `SUSPECT` (exit 0), as designed. The
+deterministic comparison had found nothing, which is the case this layer exists for.
+With `gemini-4-argon-high` as the only visual model (the default) and its quota under the floor
+(0.48 %), the run made no call, stored the screenshots, reported `visual coverage incomplete` and
+kept the deterministic verdict: the degradation is safe.
+Findings from the model arrive as `visual, unverified` and appear in their own section; the
+models' claims were accurate for this fixture, which says nothing about false-positive rates on
+real apps.
+
+**Self-review of the runtime sources** (`--mode feature` with the plan's commitments as eight
+acceptance criteria, range = the 14 runtime source files, 1 495 lines). 12 calls, all within the
+default ceiling: 7 triage calls to `agy:gemini-3.8-flash-low`, then 5 confirmation calls (Codex x4,
+Claude Opus unavailable because the CLI login had expired). Result: 1 BLOCKER and 7 IMPORTANT + 1
+OPTIONAL, all from the single triage model. Each was checked against the code by hand and **none
+was a real defect**: `evidence.reasons` holds only failures, per-run volumes are removed in a
+`finally`, report strings are redacted before they reach SARIF, the provider's image workspace is
+a temporary directory by design, a stable failure at the same step on both sides is pre-existing by
+design, and the stderr tail is redacted before it is cut. Codex rejected the findings it was
+asked about. The 12-call ceiling was spent before the batch confirmation of the IMPORTANT findings
+could run, so they were reported as "single model, not confirmed"; an unconfirmed BLOCKER exits 1
+by design. Lessons: (1) a single flash-low triage pass is noisy on code it only sees as a diff of
+new files, so the confirmation stage is what makes a report trustworthy; raise `budget.maxCalls`
+when a range has many chunks; (2) a criterion that says "any flow that did not complete is
+UNKNOWN" contradicts the intended rule for a stable same-step failure, so acceptance criteria
+should be written from the verdict table rather than from the summary.
+The deterministic `pnpm test` check failed once inside the review's disposable worktree and passed
+in six later runs of that worktree; the failing test could not be identified from the stored report.
