@@ -14,7 +14,7 @@ Use `quorum` if it is on PATH. Otherwise ask the user where Quorum is checked ou
 
 ## 2. Check the setup (no quota)
 
-For model review, run `quorum doctor` in the repository to review. Skip provider diagnostics for runtime R0, which only validates and prints a plan. A FAIL line comes with a fix; show it to the user. The repository needs a committed `quorum.config.json`: Quorum reads it from the merge-base of the range, never from the change itself.
+For model review, run `quorum doctor` in the repository to review. Skip provider diagnostics for `--mode runtime`, which is deterministic and makes no provider calls; it needs Docker and the pinned Playwright image instead. A FAIL line comes with a fix; show it to the user. The repository needs a committed `quorum.config.json`: Quorum reads it from the merge-base of the range, never from the change itself.
 
 `quorum doctor --probe` spends one call per provider. Run it only if the user agrees.
 
@@ -24,7 +24,7 @@ Pick the mode from what the user asked:
 
 - `--mode feature --spec <file>`: the spec must have acceptance criteria as Markdown checkboxes or a list under a heading that contains "acceptance".
 - `--mode redesign --inventory <file>`, optionally with `--images <dir>` and `--rules <file>`.
-- `--mode runtime --dry-run`: validate the runtime config and print its app/flow plan without field values. Only R0 is built; execution exits 2 until R1-R3 are built. Runtime requires running the app and rejects `--no-checks`.
+- `--mode runtime --diff <base>...HEAD`: runs the configured flows against the merge-base and the head in locked-down containers and reports problems that are NEW at head (console errors, 5xx, blank pages, technical text). Exit 1 means new problems, 0 clean or suspect, 2 unknown (never read 2 as clean). `--dry-run` validates the runtime config and prints the app/flow plan without field values; `--strict-flows` makes a newly broken flow fail. Runtime executes the change's code, so it rejects `--no-checks`; the first run downloads a 3.6 GB image.
 
 The default range is the config's base `...HEAD`; pass `--diff <range>` or `--since <sha>` when the user names one. Pass `--author <name>` when you know which model wrote the change (`claude` if it was you), so Quorum picks reviewers from other model families.
 

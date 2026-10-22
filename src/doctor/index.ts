@@ -12,6 +12,7 @@ import { CodeGraphContextProvider, hasCodeGraphIndex } from '../context/codegrap
 import type { DoctorCheck } from './checks.js';
 import { ConfigError, hasConfiguredTestCommand } from '../config/schema.js';
 import { RULES_FILE_NAME, validateRules } from '../rules/index.js';
+import { DEFAULT_RUNTIME_IMAGE } from '../runtime/image.js';
 
 export type { DoctorCheck } from './checks.js';
 export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
@@ -89,6 +90,17 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const podman = docker?.exitCode === 0 ? undefined : await run('podman', ['--version']);
   const container = docker?.exitCode === 0 || podman?.exitCode === 0;
   results.push({ id: 'container', status: container ? 'PASS' : 'WARN', message: container ? 'Container runtime is available.' : 'Neither Docker nor Podman is available; reproduction requires explicit interactive confirmation.' });
+  if (config?.runtime) {
+    // Runtime mode runs the app in the pinned Playwright image; a missing image means a 3.6 GB first pull.
+    const image = config.runtime.image ?? DEFAULT_RUNTIME_IMAGE; const engine = docker?.exitCode === 0 ? 'docker' : 'podman';
+    const present = container ? await run(engine, ['image', 'inspect', '--format', '{{.Id}}', image]) : undefined;
+    results.push(!container
+      ? { id: 'runtime.image', status: 'FAIL', message: 'Runtime mode needs Docker or Podman and neither is available.', fix: 'Install and start Docker Desktop, or run runtime review where it is available.' }
+      : present?.exitCode === 0
+        ? { id: 'runtime.image', status: 'PASS', message: 'The runtime Playwright image is present.' }
+        : { id: 'runtime.image', status: 'WARN', message: 'The runtime Playwright image is not present locally; the first runtime review downloads about 3.6 GB.',
+          fix: `Optionally pre-pull it: ${engine} pull ${image}` });
+  }
   const required = (provider: string) => names.some(ref => ref === provider || ref.startsWith(`${provider}:`));
   const claude = await run('claude', ['--version']);
   results.push({ id: 'claude.path', status: claude?.exitCode === 0 ? 'PASS' : required('claude') ? 'FAIL' : 'WARN',

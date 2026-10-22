@@ -24,9 +24,8 @@ export function stableObservations(report: RuntimeReport): {
     const stableFailure = [...failures[0]!].some(step => failures[1]!.has(step));
     if (Boolean(runs[0]?.completed) !== Boolean(runs[1]?.completed)
       || [...failures[0]!, ...failures[1]!].some(step => !failures[0]!.has(step) || !failures[1]!.has(step))) flaky.push(flow);
-    // Truncating one message or path keeps the evidence; any other cap loses observations.
-    const lossy = (note: string) => note !== 'cap: message' && note !== 'cap: path';
-    if (runs.some(run => !run || run.notes.some(lossy))
+    // Even a truncated message/path can hide a difference between revisions.
+    if (runs.some(run => !run || run.notes.length || run.observations.some(item => item.errorClass === 'infrastructure'))
       || !runs[0]?.completed && !runs[1]?.completed && !stableFailure) incomplete.push(flow);
   }
   return { flows, counts, flaky, incomplete };

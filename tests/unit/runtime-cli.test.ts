@@ -63,13 +63,13 @@ it('requires a runtime block and prints configured limits without serializing fl
   expect(await run(['--dry-run'], {})).toMatchObject({ code: 2, err: expect.stringContaining('runtime.start') });
   const config = validateConfig({ checks: [], runtime: { start: ['node', 'server.cjs'], readyUrl: 'http://[::1]/',
     readyTimeoutSeconds: 5, flowTimeoutSeconds: 10, stepTimeoutSeconds: 1, memoryMiB: 8192, pids: 2048,
-    image: 'image@sha256:' + 'A'.repeat(64), screenshots: true,
+    image: 'image@sha256:' + 'A'.repeat(64), screenshots: false,
     flows: [{ name: 'private-flow-name', steps: [{ fill: 'input', value: 'PRIVATE_TEST_VALUE' }] }] } });
   let out = '';
   expect(runtimeReview(config.runtime, true, { out: text => { out += text; }, err: () => {} })).toBe(0);
   expect(out).toContain('Timeouts: ready 5s; flow 10s; step 1s');
   expect(out).toContain('Image: image@sha256:' + 'A'.repeat(64));
-  expect(out).toContain('Limits: 8192 MiB; 2048 pids\n  Screenshots: on');
+  expect(out).toContain('Limits: 8192 MiB; 2048 pids\n  Screenshots: off');
   expect(out).not.toMatch(/PRIVATE_TEST_VALUE|private-flow-name/);
 });
 
@@ -78,3 +78,17 @@ it('prints UNKNOWN JSON with --format json when evidence is unavailable', async 
   expect(result.code).toBe(2); expect(JSON.parse(result.out)).toMatchObject({ runtime: { available: false, verdict: 'UNKNOWN', reasons: expect.arrayContaining(['no container runtime']) }, exitCode: 2 });
 });
 it('rejects unsupported format values', () => { expect(() => parseArgs(['review', '--format', 'xml'])).toThrow('--format must be json'); });
+it.each(['--reproduce', '--allow-unproven', '--no-host-prompt', '--author=claude', '--no-cache', '--probe'])('refuses ignored runtime option %s before execution', async flag => {
+  const result = await run([flag, '--dry-run']);
+  expect(result.code).toBe(2); expect(result.err).toContain(flag.split('=')[0]);
+  expect(result.err).toContain('runtime is deterministic and makes no provider calls');
+});
+it('scrubs the readiness URL in dry-run', async () => {
+  const result = await run(['--dry-run'], { start: ['node'], readyUrl: 'http://localhost/?token=SYNTHETIC_SECRET#fragment',
+    flows: [{ name: 'home', steps: [{ goto: '/' }] }] });
+  expect(result.code).toBe(0); expect(result.out).toContain('Ready URL: http://localhost/\n');
+  expect(result.out).not.toMatch(/SYNTHETIC_SECRET|fragment/);
+});
+it.each([['--json'], ['--format', 'json'], ['--strict-flows'], ['--trust-head-config'], ['--out', 'runtime.md'], ['--sarif', 'runtime.sarif']])('keeps supported runtime flags working: %j', async (...flags) => {
+  expect((await run(['--dry-run', ...flags])).code).toBe(0);
+});

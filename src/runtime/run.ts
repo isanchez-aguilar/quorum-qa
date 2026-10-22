@@ -11,6 +11,7 @@ import type { RuntimeConfig } from './config.js';
 import { DEFAULT_RUNTIME_IMAGE, PLAYWRIGHT_CORE } from './image.js';
 import { parseRuntimeReport, REPORT_BYTES, type RuntimeReport } from './report.js';
 import { stableObservations } from './stable.js';
+import { scrubForDisplay, redact } from './signature.js';
 
 export interface SideResult { report: RuntimeReport; stable: ReturnType<typeof stableObservations>; durationMs: number }
 export interface RuntimeEvidence { available: boolean; reasons: string[]; notes: string[]; base?: SideResult; head?: SideResult }
@@ -19,10 +20,9 @@ export function playwrightVolume(image: string): string {
 }
 
 // Never interpolate exception messages, command output or flow input into diagnostics.
-export function runtimeText(text: string, config: RuntimeConfig): string {
-  for (const flow of config.flows ?? []) for (const step of flow.steps) {
-    if ('fill' in step && step.value) text = text.split(step.value).join('[redacted]');
-  }
+export function runtimeText(text: string, config: RuntimeConfig, resourcePath = false): string {
+  text = redact(text, config);
+  text = resourcePath ? scrubForDisplay('http://runtime' + text).slice('http://runtime'.length) : scrubForDisplay(text);
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
 }
 
@@ -49,7 +49,7 @@ export function runtimePayload(stdout: string, marker: string, config: RuntimeCo
       run.notes = run.notes.map(note => runtimeText(note, config));
       for (const observation of run.observations) {
         observation.message = runtimeText(observation.message, config);
-        if (observation.path !== undefined) observation.path = runtimeText(observation.path, config);
+        if (observation.path !== undefined) observation.path = runtimeText(observation.path, config, true);
       }
     }
     return report;
@@ -147,6 +147,7 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
   options.announce?.(runtimeText(`quorum: running ${config.setup?.length ?? 0} setup commands and runtime flows from the reviewed change in disposable base/head worktrees inside containers; this executes the change's code and install scripts invoked by setup; dependency install scripts are ${config.reproduce.allowInstallScripts ? 'enabled' : 'disabled'} (runtime mode refuses --no-checks)\n`, runtime));
   for (const side of ['base', 'head'] as const) {
     let tree: Awaited<ReturnType<typeof createReviewWorktree>> | undefined; let directory: string | undefined;
+    let runVolume: string | undefined;
     const started = now();
     try {
       if (!remaining()) throw new CommandTimeoutError('', '');
@@ -155,18 +156,30 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
       if (problem) { evidence.reasons.push(`${side}: ${problem}`); continue; }
       const deps = await prepareDependencies(tree.path, config.reproduce, invoke, args => runContainer(args), network, { image, user: '1001:1001', warn });
       if (!('root' in deps)) {
-        evidence.reasons.push(`${side}: ${deps.timedOut ? 'timeout' : 'app dependency preparation failed'}`); continue;
+        evidence.reasons.push(`${side}: ${deps.timedOut ? 'timeout' : deps.reason === 'preparation failed: dependency volume in use' ? 'dependency volume in use' : 'app dependency preparation failed'}`); continue;
+      }
+      let dependencyMount = deps.dependencyMount;
+      if (config.setup?.length) {
+        runVolume = `quorum-runtime-run-${randomUUID()}`;
+        if ((await invoke(['volume', 'create', runVolume])).exitCode !== 0) throw new Error('dependency copy volume failed');
+        dependencyMount = `type=volume,src=${runVolume},dst=/work/node_modules`;
+        // The prepared image owns this mount point as UID 1001. Docker populates
+        // the new volume from it before cp runs; cp preserves symlinks and modes.
+        const copied = await runContainer(['--rm', '--network', 'none', '--user', '1001:1001', ...PREPARATION_LIMITS,
+          '--mount', deps.dependencyMount.replace('dst=/work/node_modules', 'dst=/quorum/source') + ',readonly',
+          '--mount', dependencyMount, deps.image, 'cp', '-a', '/quorum/source/.', '/work/node_modules/']);
+        if (copied.exitCode !== 0) throw new Error('dependency copy failed');
       }
       // Setup can write only to this disposable worktree and its dependency volume, offline.
       for (const command of config.setup ?? []) {
         const setup = await runContainer(['--rm', '--network', 'none', '--user', '1001:1001', ...PREPARATION_LIMITS,
           '--workdir', '/work', '--env', 'HOME=/tmp', '--env', 'TMPDIR=/tmp', '--env', 'XDG_CACHE_HOME=/tmp',
-          '--mount', `type=bind,src=${deps.root},dst=/work`, '--mount', deps.dependencyMount, deps.image, ...command]);
+          '--mount', `type=bind,src=${deps.root},dst=/work`, '--mount', dependencyMount, deps.image, ...command]);
         if (setup.exitCode !== 0) throw new Error('setup failure');
       }
       directory = await mkdtemp(path.join(os.tmpdir(), 'quorum-runtime-'));
       if (directory.includes(',') || /[\r\n\0]/.test(directory)) throw new Error('invalid script mount');
-      for (const file of ['collector.cjs', 'runner.cjs']) await copyFile(new URL(`../../src/runtime/${file}`, import.meta.url), path.join(directory, file));
+      for (const file of ['collector.cjs', 'runner.cjs', 'scrub.cjs']) await copyFile(new URL(`../../src/runtime/${file}`, import.meta.url), path.join(directory, file));
       const plan = { readyUrl: runtime.readyUrl, readyTimeoutSeconds: runtime.readyTimeoutSeconds,
         flowTimeoutSeconds: runtime.flowTimeoutSeconds, stepTimeoutSeconds: runtime.stepTimeoutSeconds,
         screenshots: runtime.screenshots, flows: runtime.flows };
@@ -176,7 +189,7 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
       const result = await runContainer(['--rm', '--network', 'none', '--user', '1001:1001', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/dev/shm:rw,size=512m',
         '--memory', `${runtime.memoryMiB}m`, '--pids-limit', String(runtime.pids), '--cpus', '2', '--workdir', '/work', '--env', 'HOME=/tmp',
-        '--mount', `type=bind,src=${deps.root},dst=/work,readonly`, '--mount', deps.dependencyMount + ',readonly',
+        '--mount', `type=bind,src=${deps.root},dst=/work,readonly`, '--mount', dependencyMount + ',readonly',
         ...RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1001,gid=1001,mode=0700`]),
         '--mount', pwMount + ',readonly', '--mount', `type=bind,src=${directory},dst=/quorum/bin,readonly`,
         deps.image, 'node', '/quorum/bin/runner.cjs', '/quorum/bin/plan.json', marker, JSON.stringify(runtime.start)], limit);
@@ -189,6 +202,10 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
     } catch (error) {
       evidence.reasons.push(`${side}: ${error instanceof CommandTimeoutError ? 'timeout' : 'runtime execution failed'}`);
     } finally {
+      if (runVolume) {
+        try { if ((await invoke(['volume', 'rm', runVolume], 5000)).exitCode !== 0) evidence.reasons.push(`${side}: dependency volume cleanup failed`); }
+        catch { evidence.reasons.push(`${side}: dependency volume cleanup failed`); }
+      }
       if (directory) await rm(directory, { recursive: true, force: true }).catch(() => { evidence.reasons.push(`${side}: script cleanup failed`); });
       if (tree) await tree.cleanup().catch(() => { evidence.reasons.push(`${side}: worktree cleanup failed`); });
     }

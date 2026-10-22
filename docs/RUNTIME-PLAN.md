@@ -47,7 +47,19 @@ A Quorum-owned script (`src/runtime/collector.cjs`, plain JS, copied into the co
 - `technicalText`: visible text matching a fixed list of patterns, each with word boundaries so `Banana` or `Finance` never match (stack-trace lines `at x (file:line:col)`, `TypeError:`, `ReferenceError:`, whole-word `undefined`, `[object Object]`, whole-word `NaN`, `Internal Server Error`, `ECONNREFUSED`, raw JSON error bodies);
 - `blocked-external` counts.
 
-Each flow runs **twice** per revision, each run in a **fresh `BrowserContext`** (no cookies or storage shared). An observation counts only if it appears in both runs of that revision (flake filter). The filter must not hide real failures: if a flow times out or fails a step in one run but not the other, the flow is reported as `flaky` and the verdict is at most SUSPECT, never silently clean. v1 flows must be idempotent (they must not depend on state left by an earlier run); the docs say so. Screenshots are off by default (`runtime.screenshots: true` keeps one per step in the report directory, for the existing visual review in redesign mode).
+Each flow runs **twice** per revision, each run in a **fresh `BrowserContext`** (no cookies or storage shared). An observation counts only if it appears in both runs of that revision (flake filter). The filter must not hide real failures: if a flow times out or fails a step in one run but not the other, the flow is reported as `flaky` and the verdict is at most SUSPECT, never silently clean. v1 flows must be idempotent (they must not depend on state left by an earlier run). `runtime.screenshots` is reserved for the R5 model layer: absent/false are valid; true is rejected until capture and transport exist.
+
+Inspection follows `goto`, `click`, `press`, `waitForUrl` and `waitForSelector`,
+with the same bounded settling logic. `fill` and `wait` do not trigger inspection.
+Launch, context, routing, page creation and close failures are infrastructure
+failures and make coverage incomplete on either side, never pre-existing step
+failures. Messages retain up to 2000 characters for signatures; display messages
+remain capped at 300. Any evidence truncation makes the flow incomplete, and
+notes are carried into Markdown/JSON, deduplicated by flow and text. The 2 MiB
+serialized report limit may reduce the observation count with a visible note.
+Fill values are redacted and display text is scrubbed before truncation in the
+collector, and again on the host. Queries/fragments, URL credentials, absolute
+filesystem directories and long token-like strings are not published.
 
 ## Signatures and comparison
 
@@ -114,5 +126,15 @@ Each milestone: Codex implements from a brief, Claude verifies by execution, Gem
 - **Image pull:** the 3.6 GB image and index digest were verified before R2. The R2 opt-in fixture test is authorized to prepare its dependency volumes with network access; ordinary unit tests use fake runners.
 
 ## Runtime execution
+
+When `setup` is non-empty, each side copies the ready shared dependency volume
+into a unique `quorum-runtime-run-<uuid>` volume offline as UID 1001, preserving
+symlinks and modes. Setup writes only to that copy; collection mounts it
+read-only, and teardown removes it even after failure or timeout. The copy cost
+is paid only when setup exists. Without setup, all execution mounts the shared
+volume read-only. Shared preparation uses a per-volume promise queue in one
+process and an atomic named-container lease across processes; a conflicting or
+stale lease reports "dependency volume in use" without stealing it or writing
+the volume. Known limit: `budget.maxMinutes` does not bound Git/worktree prep.
 
 `--mode runtime` runs the merge-base and head in disposable worktrees with no provider calls. `--format json` (or `--json`) prints the full review result, including comparison, verdict and summary. Markdown and optional SARIF reuse the review report paths (`--out`, `--sarif`). `--strict-flows` is runtime-only; `--no-checks` is refused. Run `QUORUM_CONTAINER_TESTS=1 pnpm exec vitest run tests/container/runtime.test.ts` for the opt-in test (set the environment variable using the current shell's syntax).

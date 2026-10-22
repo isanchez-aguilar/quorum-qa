@@ -240,7 +240,23 @@ reasons and a bounded JSON model summary. Fill values are redacted from evidence
 The app must work offline with loopback services; flows must be idempotent.
 `--no-checks` is incompatible because runtime mode must run the app.
 `--spec`, `--inventory`, `--images`, `--rules`, `--deterministic-only`,
-`--allow-api-change` and `--mutation` are rejected in runtime mode.
+`--allow-api-change` and `--mutation` are rejected in runtime mode. Provider/cache/
+reproduction options (`--author`, `--probe`, `--no-cache`, `--reproduce`,
+`--allow-unproven`, `--no-host-prompt`) are also rejected.
+
+`runtime.screenshots` is reserved for the R5 model layer: omit it or set `false`;
+`true` is rejected until capture and transport are implemented. Infrastructure
+failures and truncated evidence make a flow incomplete. Run notes appear in the
+comparison and report. Published text removes URL queries, fragments, userinfo,
+absolute filesystem directories and long token-like values before display caps.
+HTTP resource paths retain their route identity.
+
+With `setup`, each side pays for a private copy of the ready dependency volume;
+setup can modify only that copy, and the app mounts it read-only. Without setup,
+the shared ready volume is mounted read-only without copying. Preparation is
+serialized per volume within the process; a cross-process preparation conflict
+reports the volume as in use. Known limit: `budget.maxMinutes` does not bound
+Git/worktree preparation.
 
 ## Your logins, not ours
 

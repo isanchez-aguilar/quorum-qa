@@ -7,6 +7,14 @@ import type { CommandRunner } from '../types/index.js';
 export async function createReviewWorktree(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn): Promise<{ path: string; cleanup: () => Promise<void> }> {
   validateRef(sha, false);
   await requireWorktreeRoot(repoRoot, runner);
+  // Check the link first: on Linux `git check-ignore` fails for a path beyond a symlink, which would
+  // otherwise hide the real reason behind a misleading "not git-ignored" message.
+  try {
+    const quorum = await lstat(path.join(repoRoot, '.quorum'));
+    if (quorum.isSymbolicLink() || !quorum.isDirectory()) throw new Error('Review worktree parent must be a real directory inside the repository.');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   const ignored = await git(['check-ignore', '--quiet', '--', '.quorum/'], repoRoot, runner);
   if (ignored.exitCode !== 0) throw new Error('Review worktrees require .quorum/ to be git-ignored. Add .quorum/ to .gitignore.');
   const parent = path.join(repoRoot, '.quorum', 'worktrees');

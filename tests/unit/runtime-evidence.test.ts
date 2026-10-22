@@ -58,9 +58,9 @@ it.each(['kind', 'flow', 'run', 'duplicate', 'version', 'types', '__proto__', 'c
   expect(parseRuntimeReport(raw, plan)).toHaveProperty('error');
 });
 it('truncates messages again', () => {
-  const value = report(); value.runs[0]!.observations[0]!.message = 'x'.repeat(900);
+  const value = report(); value.runs[0]!.observations[0]!.message = 'word '.repeat(500);
   const parsed = parseRuntimeReport(JSON.stringify(value), plan);
-  expect('runs' in parsed && parsed.runs[0]!.observations[0]!.message.length).toBe(500);
+  expect('runs' in parsed && parsed.runs[0]!.observations[0]!.message.length).toBe(2000);
 });
 it('normalizes pathological 500 KB in under 50 ms', () => {
   const input = ('9'.repeat(125000) + ':'.repeat(125000) + '/'.repeat(125000) + 'a'.repeat(137000)).slice(0, 512000);
@@ -106,13 +106,13 @@ it('rejects deeply nested observation values without recursion', () => {
   const raw = JSON.stringify(report()).replace('"message":"boom"', '"message":' + '['.repeat(20000) + '0' + ']'.repeat(20000));
   expect(parseRuntimeReport(raw, plan)).toHaveProperty('error');
 });
-it('bounds technical text and failure messages independently', () => {
+it('bounds technical text and failure messages at the evidence cap', () => {
   const value = report(); value.runs[0]!.observations = [
-    { kind: 'technicalText', step: 0, message: 'x'.repeat(900) },
-    { kind: 'flow-failure', step: 0, errorClass: 'other', message: 'x'.repeat(900) },
+    { kind: 'technicalText', step: 0, message: 'word '.repeat(500) },
+    { kind: 'flow-failure', step: 0, errorClass: 'other', message: 'word '.repeat(500) },
   ];
   const parsed = parseRuntimeReport(JSON.stringify(value), plan);
-  expect('runs' in parsed && parsed.runs[0]!.observations.map(item => item.message.length)).toEqual([200, 300]);
+  expect('runs' in parsed && parsed.runs[0]!.observations.map(item => item.message.length)).toEqual([2000, 2000]);
 });
 it.each(['console', 'pageerror', 'requestfailed'] as const)('omits steps for %s signatures', kind => {
   expect(signature({ kind, step: 0, message: 'boom' }, 'home')).toBe(`${kind}|home|boom`);
@@ -132,17 +132,17 @@ it('strips ports from parenthesised V8 stack-frame URLs', () => {
   expect(normalizeMessage('at f (http://127.0.0.1:4173/assets/app.js:12:34)')).toBe('at f (http://127.0.0.1/assets/app.js)');
   expect(normalizeMessage('at f (http://localhost:80/app.js:1:2)')).toBe(normalizeMessage('at f (http://localhost:5173/app.js:9:9)'));
 });
-it('matches a stable failure by step even when its message varies, and keeps truncation-only notes complete', () => {
+it('matches a stable failure by step even when its message varies, and marks truncation-only notes incomplete', () => {
   const value = report();
   for (const [index, message] of ['net::ERR_A', 'net::ERR_B'].entries()) {
     value.runs[index]!.completed = false;
     value.runs[index]!.observations.push({ kind: 'flow-failure', step: 0, message, errorClass: 'navigation' });
   }
   value.runs[0]!.notes.push('cap: message');
-  expect(stableObservations(value)).toMatchObject({ flaky: [], incomplete: [] });
+  expect(stableObservations(value)).toMatchObject({ flaky: [], incomplete: ['home'] });
   value.runs[1]!.observations[1]!.step = undefined as never;
   value.runs[1]!.observations.push({ kind: 'flow-failure', step: 0, message: 'x', errorClass: 'other' });
-  expect(stableObservations(value).incomplete).toEqual([]);
+  expect(stableObservations(value).incomplete).toEqual(['home']);
 });
 it('accepts reports whose observations carry no path (about:blank)', () => {
   const value = report(); value.runs[0]!.observations[0]!.path = '';

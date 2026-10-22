@@ -76,6 +76,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (flags.strictFlows && mode !== 'runtime') throw new UsageError('--strict-flows requires runtime mode.');
   if (flags.format && mode !== 'runtime') throw new UsageError('--format requires runtime mode.');
   if (mode === 'runtime') {
+    for (const [key, flag] of Object.entries({ reproduce: 'reproduce', allowUnproven: 'allow-unproven',
+      noHostPrompt: 'no-host-prompt', author: 'author', noCache: 'no-cache', probe: 'probe' })) {
+      if (flags[key as keyof ParsedFlags] !== undefined) throw new UsageError(`--${flag} is not supported: runtime is deterministic and makes no provider calls.`);
+    }
     if (flags.noChecks) throw new UsageError('runtime mode must run the app; --no-checks is not supported.');
     for (const flag of ['spec', 'inventory', 'images', 'rules'] as const) {
       if (flags[flag] !== undefined) throw new UsageError(`--${flag} is not supported in runtime mode.`);
