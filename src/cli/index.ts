@@ -109,6 +109,9 @@ export async function main(
   try {
     const { command, flags, positionals } = parseArgs(argv);
 
+    if (command === 'doctor' && flags.dryRun && flags.probe) throw new UsageError('--dry-run cannot be combined with --probe: a dry run never calls a provider');
+    if (flags.dryRun && (command !== 'review' || flags.help || flags.version)) throw new UsageError('--dry-run is only supported by review.');
+
     if (flags.help || command === 'help') {
       io.out(USAGE);
       return EXIT_OK;

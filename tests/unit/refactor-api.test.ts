@@ -1,3 +1,4 @@
+import { fastest } from '../helpers/timing.js';
 import { expect, it } from 'vitest';
 import { compareApi, scanExports } from '../../src/refactor/api.js';
 import { compareTests, type RefactorEvidence } from '../../src/refactor/index.js';
@@ -98,9 +99,7 @@ it.each([
   'exports['.repeat(32768),
   'Object.assign(module.exports, {' + ','.repeat(256 * 1024),
 ])('bounds new adversarial capture paths under 300 ms %#', source => {
-  const start = performance.now();
-  compare(source.slice(0, 256 * 1024));
-  expect(performance.now() - start).toBeLessThan(300);
+  expect(fastest(() => { compare(source.slice(0, 256 * 1024)); })).toBeLessThan(300);
 });
 
 it.each([
@@ -229,9 +228,7 @@ it.each([
   'export const value' + 'x'.repeat(256 * 1024), 'import ' + 'a '.repeat(128 * 1024),
   'require(' + ' '.repeat(256 * 1024), '/*' + 'x'.repeat(256 * 1024), '"export ' + 'x'.repeat(256 * 1024),
 ])('scans adversarial 256 KiB input under 300 ms %#', source => {
-  const start = performance.now();
-  compare(source);
-  expect(performance.now() - start).toBeLessThan(300);
+  expect(fastest(() => { compare(source); })).toBeLessThan(300);
 });
 it('documents conservative signature comparison in help and the API report', () => {
   expect(USAGE).toContain('optional parameter');

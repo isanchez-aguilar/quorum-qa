@@ -2,13 +2,13 @@ export function acceptanceCriteria(spec: string): string[] {
   const criteria: string[] = [];
   let acceptanceLevel = 0;
   for (const line of spec.split(/\r?\n/)) {
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    const heading = /^(#{1,6})\s+(\S[^\r\n\u2028\u2029]*|[^\S\r\n\u2028\u2029])$/.exec(line);
     if (heading) {
       if (/acceptance/i.test(heading[2]!)) acceptanceLevel = heading[1]!.length;
       else if (heading[1]!.length <= acceptanceLevel) acceptanceLevel = 0;
     }
-    const checkbox = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+(.+)$/.exec(line);
-    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.+)$/.exec(line);
+    const checkbox = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+(\S[^\r\n\u2028\u2029]*|[^\S\r\n\u2028\u2029])$/.exec(line);
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(\S[^\r\n\u2028\u2029]*|[^\S\r\n\u2028\u2029])$/.exec(line);
     const text = checkbox?.[1] ?? (acceptanceLevel ? item?.[1] : undefined);
     if (text) criteria.push(text.trim());
   }
@@ -40,7 +40,7 @@ export function contractClauses(text: string): string[] {
     if (/^\s*(```|~~~)/.test(line)) { flush(); fenced = !fenced; continue; }
     if (fenced) continue;
     if (/^#{1,6}\s/.test(line)) { flush(); heading = true; continue; }
-    const item = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$/.exec(line);
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(\S[^\r\n\u2028\u2029]*|[^\S\r\n\u2028\u2029])$/.exec(line);
     if (item) { flush(); paragraph.push(item[1]!.trim()); continue; }
     if (!line.trim()) { flush(); continue; }
     if (paragraph.length || heading) paragraph.push(line.trim());

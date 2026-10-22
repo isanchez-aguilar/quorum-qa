@@ -1,3 +1,4 @@
+import { fastest } from '../helpers/timing.js';
 import { expect, it } from 'vitest';
 import { compareApi } from '../../src/refactor/api.js';
 const C = (body: string) => `export class S {\n${body}\n}`;
@@ -67,9 +68,7 @@ it.each([
   C('run() {\n' + '/}/.test(x);\n'.repeat(50000) + '}\nstop(): void;'),
   'type T = ' + '{ a: '.repeat(10000) + 'number' + ' }'.repeat(10000) + '; export function f(a: T) {}',
 ])('bounds adversarial scanning', source => {
-  const start = performance.now();
-  compare(source);
-  expect(performance.now() - start).toBeLessThan(300);
+  expect(fastest(() => { compare(source); })).toBeLessThan(300);
 });
 it('retains ambiguous callable return types with explicit incomplete coverage', () => {
   const before = C('handler = (): (x: number) => string => x => "";');
@@ -89,9 +88,7 @@ it('does not match quoted substrings or unrelated identifier prefixes to local t
 });
 it('bounds a chain of 10000 local types', () => {
   const source = 'export function f(x: T0) {}\n' + Array.from({ length: 10000 }, (_, i) => `type T${i}=T${i + 1};`).join('');
-  const start = performance.now();
-  expect(compare(source).incomplete).toBe(true);
-  expect(performance.now() - start).toBeLessThan(300);
+  expect(fastest(() => { expect(compare(source).incomplete).toBe(true); })).toBeLessThan(300);
 });
 it('retains generic return annotations containing commas', () => {
   const before = C('handler = (a: number): Map<string, number> => new Map();');

@@ -365,7 +365,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
     const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
       .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
-    const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true) : undefined;
+    const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true, ruleChecks) : undefined;
     if (evidence && !evidence.available) cascade.coverage.complete = false;
     const exitCode = verdict ? verdict.exitCode : failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
     result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,

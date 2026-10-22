@@ -14,11 +14,31 @@ export interface CodeGraphCaller { name: string; kind?: string; filePath?: strin
 export function parseSymbols(output: string): CodeGraphSymbol[] {
   const symbols: CodeGraphSymbol[] = [];
   for (const line of output.split(/\r?\n/)) {
-    const match = /^\s*-\s*`([^`\r\n]+)`\s*\(\s*([^()\r\n]+?)\s*\)\s*(?:.*?)\s*[—–-]\s*:\s*(\d+)\s*$/.exec(line);
-    const startLine = Number(match?.[3]);
-    if (match && Number.isSafeInteger(startLine) && startLine > 0) {
-      symbols.push({ name: match[1]!.trim(), kind: match[2]!.trim(), startLine });
-    }
+    let rest = line.trimStart();
+    if (!rest.startsWith('-')) continue;
+    rest = rest.slice(1).trimStart();
+    if (!rest.startsWith('`')) continue;
+    const nameEnd = rest.indexOf('`', 1);
+    if (nameEnd <= 1) continue;
+    const name = rest.slice(1, nameEnd);
+    if (name.includes('\r')) continue;
+    rest = rest.slice(nameEnd + 1).trimStart();
+    if (!rest.startsWith('(')) continue;
+    const kindEnd = rest.indexOf(')', 1);
+    if (kindEnd <= 1) continue;
+    const kind = rest.slice(1, kindEnd);
+    if (kind.includes('(') || kind.trim().includes('\r') || !/[^\r]/.test(kind)) continue;
+    rest = rest.slice(kindEnd + 1).trimEnd();
+    const colon = rest.lastIndexOf(':');
+    if (colon < 0) continue;
+    const digits = rest.slice(colon + 1).trimStart();
+    if (!/^\d+$/.test(digits)) continue;
+    const prefix = rest.slice(0, colon).trimEnd();
+    if (!['—', '–', '-'].includes(prefix.slice(-1))) continue;
+    // Dot in the original format cannot span an interior line separator.
+    if (/[\r\u2028\u2029]/.test(prefix.slice(0, -1).trim())) continue;
+    const startLine = Number(digits);
+    if (Number.isSafeInteger(startLine) && startLine > 0) symbols.push({ name: name.trim(), kind: kind.trim(), startLine });
   }
   return symbols;
 }
