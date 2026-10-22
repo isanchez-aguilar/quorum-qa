@@ -39,6 +39,18 @@ Dry-run shows the resolved limit and source. Real runs announce automatic limits
 above 12 on stderr; Markdown/JSON metadata records the number and whether it was
 automatic. Time limits, confirmation reserve and provider quota floors still apply.
 
+`budget.concurrency` defaults to 3 (integer 1–6). Only first-pass chunk triage
+overlaps; results are merged in chunk order and later passes stay sequential.
+Set it to 1 to restore sequential triage. Setup and checks run in their own
+worktree alongside triage; escalation and confirmation wait for their summary.
+Use `--sequential-checks` or `budget.sequentialChecks: true` when triage must see
+check results first. Refactor remains sequential with respect to its evidence;
+runtime and `--no-checks` are unchanged. Parallel triage omits check output and
+failed checks add an explicit warning; report status and exit rules are unchanged.
+Prompts change in the default mode, so the prompt-keyed cache is cold after an
+upgrade. Markdown/JSON include phase durations (JSON milliseconds), and stderr
+prints total elapsed time and checks/triage overlap.
+
 ## 4. Run it safely
 
 - The configured checks run the change's own code in a disposable worktree. For a change from someone the user doesn't trust, add `--no-checks`.

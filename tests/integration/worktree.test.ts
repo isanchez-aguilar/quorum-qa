@@ -29,6 +29,19 @@ async function repository(ignore: boolean) {
   return { root, sha: await git('rev-parse', 'HEAD'), git };
 }
 describe.skipIf(!gitPath)('disposable review worktrees', () => {
+  it('creates six concurrent worktrees without pruning an in-progress registration', async () => {
+    const { root, sha, git } = await repository(true);
+    const trees = await Promise.all(Array.from({ length: 6 }, () => createReviewWorktree(root, sha, runner)));
+    try {
+      expect(new Set(trees.map(tree => tree.path)).size).toBe(6);
+      for (const tree of trees) expect(await isClean(tree.path, runner)).toBe(true);
+    } finally { await Promise.all(trees.map(tree => tree.cleanup())); }
+    const listed = await git('worktree', 'list', '--porcelain');
+    for (const tree of trees) {
+      await expect(access(tree.path)).rejects.toThrow();
+      expect(listed).not.toContain(tree.path.replaceAll('\\', '/'));
+    }
+  });
   it('creates detached head, detects tracked/untracked writes and cleans idempotently', async () => {
     const { root, sha, git } = await repository(true);
     const tree = await createReviewWorktree(root, sha, runner);

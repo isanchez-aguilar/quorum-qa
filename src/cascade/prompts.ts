@@ -8,6 +8,9 @@ import { createHash } from 'node:crypto';
 export const MAX_PROMPT_CHARACTERS = 24_000;
 export const TRUNCATION_MARKER = '[... truncated ...]';
 export const CONFIRM_BATCH_SIZE = 5;
+export const CONCURRENT_CHECKS_CONTEXT = 'Deterministic checks: running concurrently; their result is not part of this prompt.';
+const checksPrefix = (context: ReviewContext) => context.checksContext === CONCURRENT_CHECKS_CONTEXT ? CONCURRENT_CHECKS_CONTEXT + '\n' : '';
+const checksEvidence = (context: ReviewContext) => context.checksContext === CONCURRENT_CHECKS_CONTEXT ? undefined : context.checksContext;
 
 export function refactorPrefix(context: ReviewContext): string {
   if (context.mode !== 'refactor') return '';
@@ -123,11 +126,11 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; n
   const skipped = new Set<string>();
   const seen = new Set<string>();
   const truncatedHunks: ReviewCoverage['truncatedHunks'] = [];
-  const render = (diff: string, files: string[], providerContext?: Array<{ file: string; content: string }>) => REVIEW_INSTRUCTIONS
+  const render = (diff: string, files: string[], providerContext?: Array<{ file: string; content: string }>) => REVIEW_INSTRUCTIONS + checksPrefix(context)
     + (context.mode === 'refactor' ? refactorPrefix(context) : modeInstructions(context.mode)) + JSON.stringify({
     mode: context.mode, diff, touchedFiles: files,
     criteria: context.mode === 'feature' ? acceptanceCriteria(context.specContent ?? '').map((criterion, index) => `AC${index + 1}: ${criterion}`) : undefined,
-    checks: context.checksContext, spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent,
+    checks: checksEvidence(context), spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent,
     providerContext,
   });
   const fits = (diff: string, files: string[]) => render(diff, files).length <= MAX_PROMPT_CHARACTERS;
@@ -210,9 +213,9 @@ function bughuntChunks(context: ReviewContext) {
   }
   let pending: BughuntWindow[] = [];
   const render = (windows: BughuntWindow[], providerContext?: Array<{ file: string; content: string }>) =>
-    REVIEW_INSTRUCTIONS + modeInstructions('bughunt') + JSON.stringify({ mode: 'bughunt', radius: context.radius ?? 40,
+    REVIEW_INSTRUCTIONS + checksPrefix(context) + modeInstructions('bughunt') + JSON.stringify({ mode: 'bughunt', radius: context.radius ?? 40,
       windows: windows.map(({ file, start, end, content, orientation }) => ({ file, start, end, unchanged: content,
-        'the change, for orientation only': orientation })), checks: context.checksContext, rules: context.rulesContent, providerContext });
+        'the change, for orientation only': orientation })), checks: checksEvidence(context), rules: context.rulesContent, providerContext });
   const flush = () => {
     if (!pending.length) return;
     const files = [...new Set(pending.map(window => window.file))];
@@ -277,7 +280,7 @@ function contractChunks(context: ReviewContext) {
   const notes = [...(selection?.notes ?? ['Contract HEAD files were not loaded.'])];
   const skipped = new Set(selection?.skippedFiles ?? context.touchedFiles);
   const truncatedHunks: ReviewCoverage['truncatedHunks'] = [];
-  const prefix = REVIEW_INSTRUCTIONS + modeInstructions('contract') + 'UNTRUSTED RULES (JSON):\n' + JSON.stringify({
+  const prefix = REVIEW_INSTRUCTIONS + checksPrefix(context) + modeInstructions('contract') + 'UNTRUSTED RULES (JSON):\n' + JSON.stringify({
     mode: 'contract', rulesHash: contractHash(context.rulesContent ?? ''),
     copyHash: contractHash(JSON.stringify(selection?.copy ?? [])),
     clauses: contractClauses(context.rulesContent ?? '').map((text, index) => ({ clause: `R${index + 1}`, text })),

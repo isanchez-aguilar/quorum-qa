@@ -8,6 +8,7 @@ export class UsageError extends Error {
 export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'] as const;
 
 export interface ParsedFlags {
+  verbose?: boolean;
   visual?: boolean;
   help?: boolean;
   version?: boolean;
@@ -34,6 +35,7 @@ export interface ParsedFlags {
   sarif?: string;
   noCache?: boolean;
   noChecks?: boolean;
+  sequentialChecks?: boolean;
   trustHeadConfig?: boolean;
   mutation?: boolean;
   deterministicOnly?: boolean;
@@ -48,10 +50,11 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'visual' | 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
+type BooleanFlag = 'verbose' | 'sequentialChecks' | 'visual' | 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
 type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
+  verbose: 'verbose',
   visual: 'visual',
   'strict-flows': 'strictFlows',
   mutation: 'mutation',
@@ -67,6 +70,7 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
   json: 'json',
   'no-cache': 'noCache',
   'no-checks': 'noChecks',
+  'sequential-checks': 'sequentialChecks',
   'trust-head-config': 'trustHeadConfig',
 };
 

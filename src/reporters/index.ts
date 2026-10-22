@@ -1,3 +1,4 @@
+import { formatDuration } from '../cascade/timing.js';
 import { createHash } from 'node:crypto';
 import type { CascadeResult } from '../cascade/index.js';
 import type { runDeterministicChecks } from '../checks/index.js';
@@ -62,6 +63,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     ...budget,
     ...(result.refactor ? [`**Verdict:** ${result.refactor.verdict}`] : []),
     `**Time:** ${cell(result.timestamp)} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
+    ...(result.durations ? ['**Durations:** ' + Object.entries(result.durations).map(([phase, ms]) => `${phase} ${formatDuration(ms)}`).join(' · ')] : []),
     `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 || check.timedOut).length ?? 0} failed deterministic checks · Cache hits: ${result.cacheHits}`,
     '## Executive Summary', ...(refactor ? ['| Category | Suspected behaviour changes |', '|---|---:|',
       ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => `| ${severity} | ${all.filter(f => f.severity === severity).length} |`)] : [
