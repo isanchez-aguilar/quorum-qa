@@ -31,6 +31,14 @@ The default range is the config's base `...HEAD`; pass `--diff <range>` or `--si
 
 Always run the same command with `--dry-run` first and show the user the plan: models, calls, budget and quota. **A real review spends the user's provider quota. Run it only after the user says yes.**
 
+The call budget defaults to `clamp(3 x review chunks, 12, 40)`. Explicit
+`budget.maxCalls` in the trusted config pins it (1–200), even when set to 12.
+A `budget` section without `maxCalls` remains automatic. Runtime and refactor
+`--deterministic-only` keep the default of 12; `--no-cache` does not affect scaling.
+Dry-run shows the resolved limit and source. Real runs announce automatic limits
+above 12 on stderr; Markdown/JSON metadata records the number and whether it was
+automatic. Time limits, confirmation reserve and provider quota floors still apply.
+
 ## 4. Run it safely
 
 - The configured checks run the change's own code in a disposable worktree. For a change from someone the user doesn't trust, add `--no-checks`.

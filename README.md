@@ -67,6 +67,15 @@ Add `quorum.config.json` to the repository root:
 
 Optional `setup` argv commands install dependencies in the fresh HEAD worktree before checks. A failed setup fails the checks phase and still permits review. Setup executes install scripts unless the command disables them; `--no-checks` skips both setup and checks. `budget.maxCallSeconds` defaults to 300 (30–1800), capped further by remaining run time.
 
+The default call budget is `clamp(3 x review chunks, 12, 40)`. An explicit
+`budget.maxCalls` in the trusted config always pins the limit (1–200), including
+an explicit 12; a `budget` section without `maxCalls` still scales automatically.
+Runtime and refactor `--deterministic-only` keep the plain default of 12.
+`--dry-run` shows the resolved limit and its source; real runs announce auto limits
+above 12 on stderr, and Markdown/JSON reports include the resolved number and
+whether it was automatic. `--no-cache` does not affect scaling. Time limits,
+the confirmation reserve and provider quota-floor skipping are unchanged.
+
 `context.provider` defaults to `"git"`; set it to `"codegraph"` to add bounded, possibly stale symbol/caller context from an existing `.codegraph/` index and a shell-free CodeGraph executable on PATH (Quorum never creates or updates the index and falls back to git when unavailable).
 
 Check provider and model availability:

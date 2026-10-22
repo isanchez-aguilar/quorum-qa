@@ -85,6 +85,8 @@ General:
   --version                  Print the version
 
 --diff <sha>...HEAD trusts config at the merge-base of the range you chose.
+Call budget defaults to clamp(3 x review chunks, 12, 40); budget.maxCalls pins it (1–200).
+Runtime and refactor --deterministic-only keep the default of 12. Quota floors still apply.
 Checks execute the reviewed change's code in a disposable worktree.
 --spec, --inventory and --rules require regular non-symlink files, at most 256 KiB each.
 Feature specs accept Markdown checkboxes or a list under a heading containing "acceptance".

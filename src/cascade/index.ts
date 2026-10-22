@@ -16,7 +16,7 @@ import { verifyFinding } from '../verifier/index.js';
 import { dedupeFindings } from '../dedupe/index.js';
 import { clusterByProximity, combinedConfidence, mergeCluster, relatedAnnotations } from '../dedupe/cluster.js';
 import { ProviderError, type ProviderAdapter, type RawProviderResult } from '../providers/types.js';
-import { BUDGET_WARNING, RunBudget, type Clock } from './budget.js';
+import { BUDGET_WARNING, callBudgetMetadata, resolveBudget, RunBudget, type Clock } from './budget.js';
 import { extractJson, isRecord, parseFindings, parseReproductionProposal } from './parse.js';
 import { runCommand } from '../process/runner.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
@@ -36,6 +36,7 @@ export interface CascadeCall {
 export type LedgerDraft = Omit<LedgerEntry, 'runId' | 'timestamp'> & { rejectionReasons: Record<string, number> };
 
 export interface CascadeResult {
+  callBudget?: { maxCalls: number; auto: boolean };
   rejectedOnConfirmation?: Array<{ finding: Finding; sources: Array<Pick<Finding, 'provider' | 'model' | 'family'>>; confirmer: Pick<Finding, 'provider' | 'model' | 'family'> }>;
   pointsAtChange?: Finding[];
   reviewedFamilies: import('../types/index.js').Family[];
@@ -111,7 +112,12 @@ export async function runCascade(
   if (config.author !== undefined) resolveAuthorFamily(config.author);
   const gitRunner = options.gitRunner ?? runCommand;
   const snapshot = options.quotaSnapshot ?? {};
-  const budget = options.budget ?? new RunBudget(config.budget, options.clock);
+  const payload = reviewChunks(context);
+  const resolvedBudget = resolveBudget(config.budget, payload.chunks.length);
+  const budget = options.budget ?? new RunBudget(resolvedBudget, options.clock);
+  Object.assign(budget.limits, { maxCalls: resolvedBudget.maxCalls, maxCallsExplicit: resolvedBudget.maxCallsExplicit });
+  config = { ...config, budget: budget.limits };
+  const callBudget = callBudgetMetadata(config.budget);
   const warnings: string[] = [];
   const pointsAtChange: Finding[] = [];
   const errors: string[] = [];
@@ -356,7 +362,6 @@ export async function runCascade(
     return verified;
   }
 
-  const payload = reviewChunks(context);
   [...(context.contextNotes ?? []), ...payload.notes].forEach(warn);
   const coverage: ReviewCoverage = { reviewedFiles: [], skippedFiles: [...payload.skippedFiles], truncatedHunks: payload.truncatedHunks, binaryFiles: payload.binaryFiles, lostFindings: [], complete: false };
   if (context.mode === 'bughunt') { coverage.reviewedWindows = []; coverage.skippedWindows = []; }
@@ -735,9 +740,9 @@ export async function runCascade(
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
   if (errors.length) {
     coverage.complete = false;
-    return { ...(context.mode === 'bughunt' ? { pointsAtChange: [] } : {}), reviewedFamilies, cacheHits, findings: [], unconfirmed: [], related: [], warnings, errors, calls, ledgerDraft, coverage };
+    return { callBudget, ...(context.mode === 'bughunt' ? { pointsAtChange: [] } : {}), reviewedFamilies, cacheHits, findings: [], unconfirmed: [], related: [], warnings, errors, calls, ledgerDraft, coverage };
   }
-  return { ...(context.mode === 'bughunt' ? { pointsAtChange: dedupeFindings(pointsAtChange) } : {}), rejectedOnConfirmation, reviewedFamilies, cacheHits, findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
+  return { callBudget, ...(context.mode === 'bughunt' ? { pointsAtChange: dedupeFindings(pointsAtChange) } : {}), rejectedOnConfirmation, reviewedFamilies, cacheHits, findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
 }
 
 export { createExecutionPlan, formatDryRun } from './planner.js';

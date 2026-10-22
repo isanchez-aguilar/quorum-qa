@@ -14,6 +14,17 @@ export const systemClock: Clock = {
 };
 
 export const BUDGET_WARNING = 'Run terminated early: review budget ceiling reached.';
+export const AUTO_MAX_CALLS_CEILING = 40;
+
+export function resolveBudget(budget: QuorumConfig['budget'], chunkCount = 0): QuorumConfig['budget'] {
+  // Only validated absence opts into scaling. Programmatic limits stay pinned.
+  return { ...budget, maxCalls: budget.maxCallsExplicit === false
+    ? Math.min(AUTO_MAX_CALLS_CEILING, Math.max(12, 3 * chunkCount)) : budget.maxCalls };
+}
+
+export function callBudgetMetadata(budget: QuorumConfig['budget']): { maxCalls: number; auto: boolean } {
+  return { maxCalls: budget.maxCalls, auto: budget.maxCallsExplicit === false };
+}
 
 export function checkBudget(budget: QuorumConfig['budget'], currentCalls: number, startTimeMs: number, nowMs = Date.now()): { allowed: boolean; reason?: string } {
   return currentCalls >= budget.maxCalls || nowMs - startTimeMs >= budget.maxMinutes * 60_000
@@ -28,6 +39,7 @@ export class RunBudget {
   readonly unavailableGroups = new Set<string>();
 
   constructor(readonly limits: QuorumConfig['budget'], readonly clock: Clock = systemClock) {
+    this.limits = { ...limits };
     this.startTimeMs = clock.now();
   }
 
