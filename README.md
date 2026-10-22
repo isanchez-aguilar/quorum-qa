@@ -67,6 +67,28 @@ Add `quorum.config.json` to the repository root:
 
 Optional `setup` argv commands install dependencies in the fresh HEAD worktree before checks. A failed setup fails the checks phase and still permits review. Setup executes install scripts unless the command disables them; `--no-checks` skips both setup and checks. `budget.maxCallSeconds` defaults to 300 (30–1800), capped further by remaining run time.
 
+Review speed: `budget.concurrency` is an integer from 1 to 6 (default 3).
+Independent chunks' first triage passes overlap; results are merged in chunk
+order. Fallbacks, local-model second passes and confirmation remain sequential.
+Each wave reserves the worst-case triage, retry and review-fallback calls for
+every chunk. When the remaining triage budget cannot cover at least two chunks,
+the next chunk runs sequentially with its usual retries and fallbacks.
+Set `budget.concurrency: 1` for the previous triage schedule.
+
+Setup and checks run sequentially in their own disposable worktree, concurrently
+with triage by default. Triage prompts say that checks are running and omit their
+output; escalation and confirmation wait for the failed-check summary. Failed
+checks add a warning that triage ran without that context; report status and exit
+rules are unchanged. `--sequential-checks` (or `budget.sequentialChecks: true`)
+restores checks before triage and the previous prompt text. Refactor still waits
+for its evidence; runtime and `--no-checks` retain their existing behavior.
+
+Markdown and JSON include `durations` for checks, triage, escalation,
+confirmation and total (milliseconds in JSON). The CLI prints elapsed time on
+stderr only when stderr is an interactive terminal or `--verbose` is passed.
+Overlapping phases are not added to calculate total. The new prompt text
+makes the prompt-keyed cache cold after upgrading in parallel-checks mode.
+
 The default call budget is `clamp(3 x review chunks, 12, 40)`. An explicit
 `budget.maxCalls` in the trusted config always pins the limit (1–200), including
 an explicit 12; a `budget` section without `maxCalls` still scales automatically.
@@ -168,7 +190,7 @@ skips and budget exhaustion are notes only. This is lexical sampling, not proof
 of equivalence; ambiguous syntax, interpolated templates and long lines may be
 omitted.
 
-- **Deterministic checks:** Configured linters, typecheckers, and test suites run first in a disposable worktree before calling any model.
+- **Deterministic checks:** Configured linters, typecheckers, and test suites run in a separate disposable worktree alongside triage; escalation and confirmation wait for their evidence. Use `--sequential-checks` to run them first.
 - **Cascade:** Diff chunks go to a cheap triage model first. A finding escalates to the confirm tier when it is a BLOCKER, touches a focus area (money, auth, permissions), has low confidence, or comes only from a local model; unparseable answers go to the review tier.
 - **Verifier:** Every finding must point at a real file inside the repo, and its quote must match the code (exactly, or near-exactly with the same operators, literals and identifiers). Anything else is dropped.
 - **Dedupe:** Findings merge only on a strong textual match a few lines apart. Similar-looking findings are kept separate and marked as possibly related, and the confirm tier decides whether they are the same defect. Only independent agreement across model families raises confidence.
@@ -218,6 +240,8 @@ omitted.
 | `review` | `--json` | Print the full review result |
 | `review` | `--no-cache` | Bypass cache reads and writes |
 | `review` | `--no-checks` | Skip deterministic checks; use with untrusted changes |
+| `review` | `--verbose` | Print completion timing on non-interactive stderr; durations always remain in Markdown/JSON metadata |
+| `review` | `--sequential-checks` | Finish setup and checks before triage; also configurable as `budget.sequentialChecks: true` |
 | `review` | `--trust-head-config` | Use committed HEAD config (own repos only) |
 | `doctor` | `--probe` | Run one read probe per provider (spends quota) |
 | `doctor` | `--json` | Print the diagnostic check list as JSON |

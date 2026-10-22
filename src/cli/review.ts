@@ -1,3 +1,4 @@
+import { completionTiming } from '../cascade/timing.js';
 import { randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -11,7 +12,7 @@ import { assertNoLinks, buildContractContext, loadCopy } from '../context/contra
 import { buildBughuntContext } from '../context/bughunt.js';
 import { selectContextProvider, type ContextProvider } from '../context/providers.js';
 import { CodeGraphContextProvider } from '../context/codegraph.js';
-import { reviewChunks } from '../cascade/prompts.js';
+import { CONCURRENT_CHECKS_CONTEXT, reviewChunks } from '../cascade/prompts.js';
 import { callBudgetMetadata, resolveBudget, RunBudget, systemClock } from '../cascade/budget.js';
 import { git, mergeBase, revParse } from '../context/git.js';
 import { acceptanceCriteria, contractClauses, inventoryFeatures } from '../modes/index.js';
@@ -127,6 +128,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const root = path.resolve(dependencies.repoRoot ?? process.cwd());
   const runner = dependencies.gitRunner ?? runCommand;
   const now = dependencies.now ?? Date.now;
+  const reviewStarted = now();
   let baseline = await checkoutSnapshot(root, runner);
   const head = await revParse('HEAD', root, runner);
   let headConfig: QuorumConfig | undefined;
@@ -290,116 +292,146 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     warn(message); io.err(`quorum: ${message}\n`);
   }
   plan?.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
-  const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);
-  ruleChecks?.notes.forEach(warn);
-  const evidence = mode === 'refactor' ? await runRefactorEvidence(context, config, {
-    root, mutation: flags.mutation === true, gitRunner: runner, checkRunner: dependencies.checkRunner ?? runCommand, warn,
-    announce: message => io.err(message.endsWith('\n') ? message : message + '\n'),
-    ...(deterministicOnly ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
-  }) : undefined;
-  if (evidence) context.refactorSummary = evidence.summary;
-  const providers = reviewProviders(config, dependencies);
-  snapshot = await refreshQuota(providers, catalog, snapshot,
-    deterministicOnly ? [] : [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()], now);
   let checks: ReviewResult['checks'] = null;
-  if (!flags.noChecks && mode !== 'refactor') {
-    if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
-    const checksTree = await createReviewWorktree(root, head, runner, warn);
+  let checksMs = 0;
+  const parallelChecks = !flags.noChecks && mode !== 'refactor' && !flags.sequentialChecks && !config.budget.sequentialChecks;
+  const runChecks = async () => {
+    const started = now();
     try {
-      const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand);
-      if (!setup.passed) checks = setup;
-      else {
-        const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand);
-        checks = { passed: checked.passed, results: [...setup.results, ...checked.results] };
+      if (!flags.noChecks && mode !== 'refactor') {
+        if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
+        const checksTree = await createReviewWorktree(root, head, runner, warn);
+        try {
+          const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand);
+          if (!setup.passed) checks = setup;
+          else {
+            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand);
+            checks = { passed: checked.passed, results: [...setup.results, ...checked.results] };
+          }
+        }
+        finally { try { await checksTree.cleanup(); } catch (error) { warn(`Checks worktree cleanup failed: ${String(error)}`); } }
       }
-    }
-    finally { try { await checksTree.cleanup(); } catch (error) { warn(`Checks worktree cleanup failed: ${String(error)}`); } }
-  }
-  context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)
-    .map(check => ({ name: check.argv.join(' '), stdout: check.stdoutTail, stderr: check.stderrTail })) ?? []).slice(0, 8192);
-  const budget = new RunBudget(config.budget, { ...systemClock, now });
-  // Refactor already queried bounded callers for its blast radius; do not spend that cap twice.
-  const enrichment = mode === 'refactor' ? { perFile: new Map<string, string>(), notes: [] } : await selected.provider.enrich(context, reviewChunks(context).chunks, {
-    runner: dependencies.contextRunner ?? runCommand, deadlineMs: budget.remainingMs,
-  });
-  context.providerContext = enrichment.perFile;
-  for (const note of enrichment.notes) context.contextNotes.push(note);
-  const chunkCount = deterministicOnly ? 0 : reviewChunks(context).chunks.length;
-  config.budget = resolveBudget(config.budget, chunkCount);
-  Object.assign(budget.limits, config.budget);
-  if (config.budget.maxCallsExplicit === false && config.budget.maxCalls > 12) {
-    io.err(`quorum: call budget ${config.budget.maxCalls} (auto-scaled from ${chunkCount} chunks; set budget.maxCalls to pin it)\n`);
-  }
-  // Establish the review baseline after context, while retaining the earlier write check.
-  const afterContext = await checkoutSnapshot(root, runner);
-  const contextChange = checkoutDifference(baseline, afterContext);
-  if (contextChange) throw new Error(contextChange);
-  baseline = afterContext;
-  const runId = `qrm-${randomUUID()}`;
-  const timestamp = new Date(now()).toISOString();
-  const verificationTree = deterministicOnly ? undefined : await createReviewWorktree(root, head, runner, warn);
-  const attachmentRoot = verificationTree?.path ?? path.join(root, '.quorum', runId);
-  const imageDirectory = `${attachmentRoot}-images`;
-  const copyDirectory = `${attachmentRoot}-copy`;
-  const cache = flags.noCache || deterministicOnly ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root, dependencies.cacheHome);
-  let result: ReviewResult;
+    } finally { checksMs = Math.max(0, now() - started); }
+  };
+  // Observe rejection immediately, including failures before the cascade is entered.
+  const startChecks = () => runChecks().then(() => ({ ok: true as const }), error => ({ ok: false as const, error }));
+  let checksPending = parallelChecks ? startChecks() : undefined;
+  const joinChecks = async () => {
+    const settled = await checksPending!;
+    if (!settled.ok) throw settled.error;
+    context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)
+      .map(check => ({ name: check.argv.join(' '), stdout: check.stdoutTail, stderr: check.stderrTail })) ?? []).slice(0, 8192);
+    if (parallelChecks && checks?.passed === false) warn('Deterministic checks failed after triage had started; triage ran without that context.');
+  };
   try {
-    if (!deterministicOnly) try { await atomicWrite(quotaFile, JSON.stringify(snapshot), root); } catch (error) { warn(`Quota write failed: ${String(error)}`); }
-    for (const file of context.contract?.copy ?? []) {
-      const destination = path.join(copyDirectory, file.file);
-      await mkdir(path.dirname(destination), { recursive: true });
-      await writeFile(destination, file.content);
+    const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);
+    ruleChecks?.notes.forEach(warn);
+    const evidence = mode === 'refactor' ? await runRefactorEvidence(context, config, {
+      root, mutation: flags.mutation === true, gitRunner: runner, checkRunner: dependencies.checkRunner ?? runCommand, warn,
+      announce: message => io.err(message.endsWith('\n') ? message : message + '\n'),
+      ...(deterministicOnly ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
+    }) : undefined;
+    if (evidence) context.refactorSummary = evidence.summary;
+    const providers = reviewProviders(config, dependencies);
+    snapshot = await refreshQuota(providers, catalog, snapshot,
+      deterministicOnly ? [] : [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()], now);
+    checksPending ??= startChecks();
+    if (parallelChecks) context.checksContext = CONCURRENT_CHECKS_CONTEXT;
+    else await joinChecks();
+    const budget = new RunBudget(config.budget, { ...systemClock, now });
+    // Refactor already queried bounded callers for its blast radius; do not spend that cap twice.
+    const enrichment = mode === 'refactor' ? { perFile: new Map<string, string>(), notes: [] } : await selected.provider.enrich(context, reviewChunks(context).chunks, {
+      runner: dependencies.contextRunner ?? runCommand, deadlineMs: budget.remainingMs,
+    });
+    context.providerContext = enrichment.perFile;
+    for (const note of enrichment.notes) context.contextNotes.push(note);
+    const chunkCount = deterministicOnly ? 0 : reviewChunks(context).chunks.length;
+    config.budget = resolveBudget(config.budget, chunkCount);
+    Object.assign(budget.limits, config.budget);
+    if (config.budget.maxCallsExplicit === false && config.budget.maxCalls > 12) {
+      io.err(`quorum: call budget ${config.budget.maxCalls} (auto-scaled from ${chunkCount} chunks; set budget.maxCalls to pin it)\n`);
     }
-    if (flags.images) context.images = await copyImages(path.resolve(root, flags.images), imageDirectory);
-    const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
-    if (changedBefore) throw new Error(changedBefore);
-    if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
-    const cascade: CascadeResult = deterministicOnly ? {
-      callBudget: callBudgetMetadata(config.budget),
-      reviewedFamilies: [], cacheHits: 0, findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [],
-      coverage: { reviewedFiles: [...context.touchedFiles], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: evidence?.available === true },
-    } : await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree?.path, copyVerificationRoot: copyDirectory, cache,
-      ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
-        dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
-          noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
-    const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
-    if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
-    const clean = !verificationTree || await isClean(verificationTree.path, runner);
-    if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
-    const families = [...cascade.reviewedFamilies];
-    // Cached reviews are still independent reviews by the original model family.
-    // Confirming families count too: a finding confirmed by another family was reviewed by it.
-    for (const f of [...cascade.findings, ...cascade.unconfirmed]) {
-      for (const family of [f.family, ...(f.confirmationFamilies ?? [])]) if (!families.includes(family)) families.push(family);
-    }
-    if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
-    const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
-      .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
-    const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true, ruleChecks) : undefined;
-    if (evidence && !evidence.available) cascade.coverage.complete = false;
-    const exitCode = verdict ? verdict.exitCode : failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
-    result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
-      ...(evidence && verdict ? { refactor: { ...evidence, ...verdict, allowApiChange: flags.allowApiChange === true, modelReview: !deterministicOnly } } : {}),
-      ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
-      criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
-    if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();
-    const entries = cascade.ledgerDraft.flatMap(draft => Array.from({ length: draft.callsUsed }, (_, index) => ({ ...draft,
-      ...(index < draft.callsUsed - 1 ? { rawFindingsCount: 0, verifiedFindingsCount: 0, rejectedFindingsCount: 0, tokensReported: undefined, durationMs: 0, timedOutCalls: 0, rejectionReasons: {} } : {}),
-      callsUsed: 1, runId, timestamp, coverageComplete: cascade.coverage.complete })));
-    try { await (dependencies.appendLedger ?? appendLedger)(entries, path.join(root, '.quorum', 'ledger.jsonl'), root); }
-    catch (error) { warn(`Ledger write failed: ${String(error)}`); }
+    // Establish the review baseline after context, while retaining the earlier write check.
+    const afterContext = await checkoutSnapshot(root, runner);
+    const contextChange = checkoutDifference(baseline, afterContext);
+    if (contextChange) throw new Error(contextChange);
+    baseline = afterContext;
+    const runId = `qrm-${randomUUID()}`;
+    const timestamp = new Date(now()).toISOString();
+    const verificationTree = deterministicOnly ? undefined : await createReviewWorktree(root, head, runner, warn);
+    const attachmentRoot = verificationTree?.path ?? path.join(root, '.quorum', runId);
+    const imageDirectory = `${attachmentRoot}-images`;
+    const copyDirectory = `${attachmentRoot}-copy`;
+    const cache = flags.noCache || deterministicOnly ? undefined : diskCache(path.join(root, '.quorum', 'cache'), warn, root, dependencies.cacheHome);
+    let result: ReviewResult;
     try {
-      await (dependencies.appendFindings ?? appendFindings)(
-        historyEntries([...result.findings, ...result.unconfirmed, ...(result.pointsAtChange ?? [])], { runId, timestamp, mode }),
-        path.join(root, '.quorum', 'findings.jsonl'), root);
-    } catch (error) { warn(`Findings history write failed: ${String(error)}`); }
-  } finally {
-    try { await rm(copyDirectory, { recursive: true, force: true }); } catch (error) { warn(`Copy cleanup failed: ${String(error)}`); }
-    try { await rm(imageDirectory, { recursive: true, force: true }); } catch (error) { warn(`Image cleanup failed: ${String(error)}`); }
-    try { await verificationTree?.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
-  }
-  for (const warning of warnings) if (!result.warnings.includes(warning)) result.warnings.push(warning);
-  return outputReview(result, flags, root, io);
+      if (!deterministicOnly) try { await atomicWrite(quotaFile, JSON.stringify(snapshot), root); } catch (error) { warn(`Quota write failed: ${String(error)}`); }
+      for (const file of context.contract?.copy ?? []) {
+        const destination = path.join(copyDirectory, file.file);
+        await mkdir(path.dirname(destination), { recursive: true });
+        await writeFile(destination, file.content);
+      }
+      if (flags.images) context.images = await copyImages(path.resolve(root, flags.images), imageDirectory);
+      const changedBefore = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
+      if (changedBefore) throw new Error(changedBefore);
+      if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
+      const cascade: CascadeResult = deterministicOnly ? {
+        callBudget: callBudgetMetadata(config.budget),
+        reviewedFamilies: [], cacheHits: 0, findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [],
+        coverage: { reviewedFiles: [...context.touchedFiles], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: evidence?.available === true },
+      } : await runCascade(context, config, providers, { ...(parallelChecks ? { beforeConfirmation: joinChecks } : {}), budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree?.path, copyVerificationRoot: copyDirectory, cache,
+        ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
+          dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
+            noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
+      const changed = checkoutDifference(baseline, await checkoutSnapshot(root, runner));
+      if (changed) { cascade.errors.push(changed); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
+      const clean = !verificationTree || await isClean(verificationTree.path, runner);
+      if (!clean) { cascade.errors.push('Verification worktree changed; run aborted.'); cascade.findings = []; cascade.unconfirmed = []; cascade.pointsAtChange = []; cascade.rejectedOnConfirmation = []; cascade.coverage.complete = false; }
+      const families = [...cascade.reviewedFamilies];
+      // Cached reviews are still independent reviews by the original model family.
+      // Confirming families count too: a finding confirmed by another family was reviewed by it.
+      for (const f of [...cascade.findings, ...cascade.unconfirmed]) {
+        for (const family of [f.family, ...(f.confirmationFamilies ?? [])]) if (!families.includes(family)) families.push(family);
+      }
+      if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
+      const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
+        .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
+      const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true, ruleChecks) : undefined;
+      if (evidence && !evidence.available) cascade.coverage.complete = false;
+      const exitCode = verdict ? verdict.exitCode : failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
+      result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
+        ...(evidence && verdict ? { refactor: { ...evidence, ...verdict, allowApiChange: flags.allowApiChange === true, modelReview: !deterministicOnly } } : {}),
+        ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
+        criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
+      if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();
+      const entries = cascade.ledgerDraft.flatMap(draft => Array.from({ length: draft.callsUsed }, (_, index) => ({ ...draft,
+        ...(index < draft.callsUsed - 1 ? { rawFindingsCount: 0, verifiedFindingsCount: 0, rejectedFindingsCount: 0, tokensReported: undefined, durationMs: 0, timedOutCalls: 0, rejectionReasons: {} } : {}),
+        callsUsed: 1, runId, timestamp, coverageComplete: cascade.coverage.complete })));
+      try { await (dependencies.appendLedger ?? appendLedger)(entries, path.join(root, '.quorum', 'ledger.jsonl'), root); }
+      catch (error) { warn(`Ledger write failed: ${String(error)}`); }
+      try {
+        await (dependencies.appendFindings ?? appendFindings)(
+          historyEntries([...result.findings, ...result.unconfirmed, ...(result.pointsAtChange ?? [])], { runId, timestamp, mode }),
+          path.join(root, '.quorum', 'findings.jsonl'), root);
+      } catch (error) { warn(`Findings history write failed: ${String(error)}`); }
+    } finally {
+      try { await rm(copyDirectory, { recursive: true, force: true }); } catch (error) { warn(`Copy cleanup failed: ${String(error)}`); }
+      try { await rm(imageDirectory, { recursive: true, force: true }); } catch (error) { warn(`Image cleanup failed: ${String(error)}`); }
+      try { await verificationTree?.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
+    }
+    for (const warning of warnings) if (!result.warnings.includes(warning)) result.warnings.push(warning);
+    result.durations = { checks: checksMs, triage: result.durations?.triage ?? 0, escalation: result.durations?.escalation ?? 0, confirmation: result.durations?.confirmation ?? 0, total: Math.max(0, now() - reviewStarted) };
+    result.checksParallel = parallelChecks;
+    const code = await outputReview(result, flags, root, io);
+    if (io.isTTY || flags.verbose) io.err(completionTiming(result.durations, parallelChecks) + '\n');
+    return code;
+  } catch (error) {
+    const settled = await checksPending;
+    if (settled && !settled.ok && settled.error !== error) {
+      throw new AggregateError([error, settled.error], `Review failed: ${String(error)}; deterministic checks failed: ${String(settled.error)}`);
+    }
+    throw error;
+  } finally { await checksPending; }
 }
 
 async function outputReview(result: ReviewResult, flags: ParsedFlags, root: string, io: CliIo): Promise<number> {

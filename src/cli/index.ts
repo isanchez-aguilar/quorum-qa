@@ -12,6 +12,7 @@ export const EXIT_BLOCKERS = 1;
 export const EXIT_ERROR = 2;
 
 export interface CliIo {
+  isTTY?: boolean;
   out: (text: string) => void;
   err: (text: string) => void;
 }
@@ -23,6 +24,7 @@ export interface CliDependencies extends ReviewDependencies {
 }
 
 const defaultIo: CliIo = {
+  isTTY: process.stderr.isTTY === true,
   out: (text) => void process.stdout.write(text),
   err: (text) => void process.stderr.write(text),
 };
@@ -35,6 +37,7 @@ Commands:
   rules propose  Propose deterministic rules from recurring verified findings (no model calls)
 
 Options for review:
+  --verbose                Print completion timing even when stderr is not a terminal
   --mode <feature|redesign|bughunt|contract|refactor|runtime>  Review mode
   --deterministic-only      Refactor evidence only; no provider calls or logins
   --mutation               Refactor only: sample changed lines; up to maxMutants extra suite runs (default 8)
@@ -64,6 +67,7 @@ Options for review:
   --json                    Print the full review result
   --no-cache                Bypass cache reads and writes
   --no-checks               Skip deterministic checks; use with untrusted changes
+  --sequential-checks       Finish checks before triage (budget.sequentialChecks: true)
   --trust-head-config       Use committed HEAD config (own repos only)
 
 Options for doctor:
@@ -87,6 +91,8 @@ General:
 --diff <sha>...HEAD trusts config at the merge-base of the range you chose.
 Call budget defaults to clamp(3 x review chunks, 12, 40); budget.maxCalls pins it (1–200).
 Runtime and refactor --deterministic-only keep the default of 12. Quota floors still apply.
+Triage concurrency: budget.concurrency (1–6, default 3; 1 restores sequential triage).
+Checks overlap triage by default; confirmation waits for their evidence.
 Checks execute the reviewed change's code in a disposable worktree.
 --spec, --inventory and --rules require regular non-symlink files, at most 256 KiB each.
 Feature specs accept Markdown checkboxes or a list under a heading containing "acceptance".

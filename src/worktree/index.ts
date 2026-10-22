@@ -4,7 +4,28 @@ import path from 'node:path';
 import { git, requireWorktreeRoot, validateRef } from '../context/git.js';
 import type { CommandRunner } from '../types/index.js';
 
+const creations = new Map<string, Promise<void>>();
+
+async function serializeCreation<T>(repoRoot: string, action: () => Promise<T>): Promise<T> {
+  const actual = await realpath(repoRoot);
+  const key = process.platform === 'win32' ? actual.toLowerCase() : actual;
+  const previous = creations.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  creations.set(key, pending);
+  await previous;
+  try { return await action(); }
+  finally {
+    release();
+    if (creations.get(key) === pending) creations.delete(key);
+  }
+}
+
 export async function createReviewWorktree(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  return serializeCreation(repoRoot, () => createUnlocked(repoRoot, sha, runner, warn));
+}
+
+async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn): Promise<{ path: string; cleanup: () => Promise<void> }> {
   validateRef(sha, false);
   await requireWorktreeRoot(repoRoot, runner);
   // Check the link first: on Linux `git check-ignore` fails for a path beyond a symlink, which would
@@ -64,7 +85,7 @@ export async function createReviewWorktree(repoRoot: string, sha: string, runner
         if (result.exitCode !== 0) throw new Error(`git worktree remove failed: ${result.stderr}`);
         removed = true;
       }
-      const result = await git(['worktree', 'prune'], repoRoot, runner);
+      const result = await serializeCreation(repoRoot, () => git(['worktree', 'prune'], repoRoot, runner));
       if (result.exitCode !== 0) throw new Error(`git worktree prune failed: ${result.stderr}`);
       cleaned = true;
     })().finally(() => { pending = undefined; });

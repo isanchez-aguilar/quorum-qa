@@ -62,7 +62,7 @@ describe('M5 zero-quota review CLI', () => {
     const ledger = await readFile(path.join(root, '.quorum/ledger.jsonl'), 'utf8');
     expect(ledger).toContain('rejected by confirmation');
   });
-  it.each(['success', 'failure', 'timeout', 'skip', 'dry-skip'])('runs setup before checks in the head worktree: %s', async state => {
+  it.each(['success', 'failure', 'timeout', 'skip', 'dry-skip'].flatMap(state => [true, false].map(sequential => ({ state, sequential }))))('runs setup before checks in the head worktree: $state, sequential=$sequential', async ({ state, sequential }) => {
     await commitConfig({ ...config([[process.execPath, '--version']]), ...{ setup: [[process.execPath, '--help']] } });
     await git('add', '.'); await git('commit', '-m', 'synthetic setup config');
     const checkRunner = vi.fn<CommandRunner>(async (_file, args, opts) => {
@@ -71,8 +71,9 @@ describe('M5 zero-quota review CLI', () => {
       if (state === 'timeout') throw new CommandTimeoutError('', 'synthetic setup timeout');
       return { exitCode: state === 'failure' && args.includes('--help') ? 1 : 0, stdout: '', stderr: 'synthetic setup output' };
     });
-    const provider = fake();
-    const result = await review(provider, ['--trust-head-config', ...(state.includes('skip') ? ['--no-checks'] : []), ...(state === 'dry-skip' ? ['--dry-run'] : [])], { checkRunner });
+    const provider = fake(state === 'failure' ? [JSON.stringify([finding({ confidence: 0.2 })])] : ['[]']);
+    const confirmer = new FakeProvider('codex', 'openai', runner, { codex: ['{"decision":"reject"}'] });
+    const result = await review(provider, ['--trust-head-config', ...(sequential ? ['--sequential-checks'] : []), ...(state.includes('skip') ? ['--no-checks'] : []), ...(state === 'dry-skip' ? ['--dry-run'] : [])], { checkRunner, providers: new Map([['agy', provider], ['codex', confirmer]]) });
     expect(result.code).toBe(0);
     if (state.includes('skip')) {
       expect(checkRunner).not.toHaveBeenCalled();
@@ -83,7 +84,17 @@ describe('M5 zero-quota review CLI', () => {
       expect(result.result?.checks?.passed).toBe(state === 'success');
       expect(result.err).toContain('install scripts');
       expect(provider.calls.length).toBeGreaterThan(0);
-      if (state === 'failure') expect(provider.calls[0]?.prompt).toContain('synthetic setup output');
+      if (state === 'failure') {
+        if (sequential) expect(provider.calls[0]?.prompt).toContain('synthetic setup output');
+        else {
+          expect(provider.calls[0]?.prompt).not.toContain('synthetic setup output');
+          expect(confirmer.calls[0]?.prompt).toContain('synthetic setup output');
+          expect(result.result?.warnings).toContain('Deterministic checks failed after triage had started; triage ran without that context.');
+        }
+        const markdown = await readFile(path.join(root, '.quorum/report.md'), 'utf8');
+        expect(markdown).toContain('1 failed deterministic checks');
+        expect(markdown).toContain('synthetic setup output');
+      }
       if (state === 'timeout') expect(result.result?.checks?.results[0]?.timedOut).toBe(true);
     }
   });
@@ -268,7 +279,7 @@ describe('M5 zero-quota review CLI', () => {
   it('recovers an invalid triage response through review fallback', async () => {
     expect((await review(fake(['not json']))).code).toBe(0);
   });
-  it('uses only base checks unless --trust-head-config selects the committed head config', async () => {
+  it.each([true, false])('uses only base checks unless --trust-head-config selects the committed head config: sequential=%s', async sequential => {
     await git('checkout', 'base'); await commitConfig(config([[process.execPath, '-e', 'base-check']])); await git('add', '.'); await git('commit', '-m', 'base checks');
     await writeFile(path.join(root, 'sample.ts'), source); await commitConfig(config([[process.execPath, '-e', 'head-check']]));
     await git('checkout', '-b', 'change'); await git('add', '.'); await git('commit', '-m', 'head checks');
@@ -277,11 +288,22 @@ describe('M5 zero-quota review CLI', () => {
       checks.push(args); expect(options?.cwd).toContain(path.join('.quorum', 'worktrees'));
       expect(options?.cwd).not.toBe(root); return { stdout: 'failure tail', stderr: '', exitCode: 1 };
     };
-    const provider = fake(); const first = await review(provider, [], { checkRunner });
+    const provider = fake([JSON.stringify([finding({ confidence: 0.2 })])]);
+    const confirmer = new FakeProvider('codex', 'openai', runner, { codex: ['{"decision":"reject"}'] });
+    const flags = sequential ? ['--sequential-checks'] : [];
+    const first = await review(provider, flags, { checkRunner, providers: new Map([['agy', provider], ['codex', confirmer]]) });
     expect(first.err).toContain("quorum: running 0 setup commands and 1 configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)");
     expect((await readFile(path.join(root, '.quorum/report.md'), 'utf8')).split('\n').find(line => line.startsWith('**Status:**'))).toContain('1 failed deterministic checks');
-    expect(first.code).toBe(0); expect(checks[0]).toContain('base-check'); expect(provider.calls[0]?.prompt).toContain('failure tail');
-    await review(fake(), ['--trust-head-config', '--no-cache'], { checkRunner }); expect(checks[1]).toContain('head-check');
+    expect(first.code).toBe(0); expect(checks[0]).toContain('base-check');
+    if (sequential) expect(provider.calls[0]?.prompt).toContain('failure tail');
+    else {
+      expect(provider.calls[0]?.prompt).not.toContain('failure tail');
+      expect(confirmer.calls[0]?.prompt).toContain('failure tail');
+      expect(first.result?.warnings).toContain('Deterministic checks failed after triage had started; triage ran without that context.');
+    }
+    expect(first.result?.checks?.passed).toBe(false);
+    expect(await readFile(path.join(root, '.quorum/report.md'), 'utf8')).toContain('failure tail');
+    await review(fake(), ['--trust-head-config', '--no-cache', ...flags], { checkRunner }); expect(checks[1]).toContain('head-check');
     await review(fake(), ['--no-checks'], { checkRunner }); expect(checks).toHaveLength(2);
     expect(await readFile(path.join(root, '.quorum/report.md'), 'utf8')).toContain('Skipped (--no-checks)');
   });

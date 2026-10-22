@@ -3576,3 +3576,105 @@ is `SUSPECT` by design (the verdict table). Compared with the first run (9 findi
 the larger budget let the confirmation stage do its job: the reports are shorter and every surviving
 item is a single-model finding that Codex had not yet been asked about. Practical rule: for a range
 split into N chunks, set `budget.maxCalls` to at least 3 x N.
+
+## Review speed
+
+**Open acceptance issue:** exact serial/parallel equivalence is not yet met at
+retry-budget boundaries. A synthetic three-chunk run with `maxCalls: 4` and one
+requested retry per chunk uses four calls and reviews two chunks serially; the
+current conservative parallel admission uses three calls and reviews all three
+chunks because it denies those speculative retries. Limits remain bounded, but
+coverage and ledger are different. Resolving this requires choosing between
+serial admission when worst-case retries/fallbacks cannot be funded and accepting
+different admitted work at an exhausted budget. Do not treat the feature as
+complete until that policy is settled and covered by a regression test.
+
+The two real runs above exposed two serial bottlenecks in a seven-chunk range.
+The supplied measurements report 13 model calls and 137 seconds of provider
+time: eight `agy:gemini-3.8-flash-low` triage calls took 86 seconds (about 11
+seconds each), and four Codex confirmations took 49 seconds, sequentially.
+The remaining confirmation attempt was unavailable, as recorded above. The
+repository's own `pnpm test` took 120 seconds before any model call. Total
+elapsed time was about 4.5 minutes; roughly half was waiting for repository
+checks. These are baseline measurements, not a measured post-change speedup.
+
+### Scheduling and compatibility
+
+- `budget.concurrency` is an integer from 1 through 6, default 3. Only the first
+  triage attempt for each chunk can overlap. A worker claims a chunk in input
+  order, stores its response and diagnostics in that chunk's slot, and claims
+  another when it finishes. `Promise.allSettled` observes every worker before
+  propagation of an unexpected error. A failed worker stops new claims.
+- Verification and merging happen in chunk order, including calls, ledger,
+  warnings, coverage, lost findings, local chunks and findings. Triage fallbacks,
+  review-tier fallbacks, non-local passes over locally reviewed chunks, visual
+  review, escalation, adjudication, reproduction and batch confirmation remain
+  sequential. A single chunk and `concurrency: 1` use the original invocation
+  path, including its retry behavior.
+- The checkout baseline is captured before starting workers. Each provider
+  still receives its deadline, abort signal and checkout assertion, and every
+  invocation checks the checkout on completion. Checks use a separate worktree;
+  their installs never belong to a review worktree or the user's checkout.
+- `RunBudget.execute` synchronously reserves a call before provider execution.
+  The final admission check, including shared unavailable quota groups, follows
+  asynchronous model discovery/cache reads. Adapter retry reservation also has
+  no await gap. Speculative first passes and their retries cannot consume the
+  confirmation reserve before ordered verification establishes whether it is
+  needed. Any deferred chunks continue through the ordered sequential path,
+  where unused reserve is released under the existing rule. Calls already in
+  flight finish after a quota error; not-yet-started calls see the unavailable
+  group. These admitted calls can differ from the calls made by a serial run
+  that learns of the same quota error earlier.
+- Worktree creation uses a promise-chain mutex keyed by the canonical repository
+  root (case-normalized on Windows). It covers validation, stale-directory
+  maintenance, prune/list and add, and releases immediately after creation.
+  Execution and removal are concurrent. Cleanup's prune acquires the same lock
+  so it cannot prune an in-progress creation either. Failures release the lock.
+
+Checks start as an observed promise after validated context exists. Inside that
+promise, setup runs first and configured checks retain their order. By default
+they overlap triage, whose prompts contain the fixed line:
+
+```text
+Deterministic checks: running concurrently; their result is not part of this prompt.
+```
+
+Before escalation or confirmation, the cascade joins the checks promise and
+builds prompts with the same bounded failed-check summary as before. A failed
+check adds `Deterministic checks failed after triage had started; triage ran
+without that context.` Final failed-check reporting, exit-code rules and the
+Status line are unchanged for the same outcomes. Infrastructure rejection is
+propagated; a simultaneous cascade/check failure reports both. All exits after
+checks start wait for settlement and cleanup, including context/cascade errors.
+
+`--sequential-checks` or `budget.sequentialChecks: true` restores the original
+checks-before-triage ordering and prompt text. Combine it with
+`budget.concurrency: 1` for the previous schedule. Refactor still gathers its
+evidence first; runtime and `--no-checks` keep their prior check behavior. The
+default triage and confirmation prompts change, so the prompt-keyed cache is
+cold after upgrading; cache schema and hashing are unchanged.
+
+### Durations and verification
+
+JSON metadata exposes `durations.checks`, `triage`, `escalation`, `confirmation`
+and `total` in milliseconds. The injected clock measures elapsed wall time, not
+the sum of overlapping calls. Checks include worktree creation, setup, checks
+and cleanup; triage includes ordered verification and fallback passes;
+escalation includes mandatory confirmation, adjudication and reproduction;
+confirmation measures the later IMPORTANT batch stage. Waiting at the checks
+barrier is included only in total, not in provider phases. Markdown formats
+durations as `1m 12s`. The final stderr line explains the overlap, for example:
+
+```text
+quorum: done in 2m 08s (checks 2m 00s ran in parallel with triage 28s)
+```
+
+Synthetic-provider tests compare full results at concurrency 1 and 3 with
+different completion orders, including invalid-output fallbacks and local
+passes; exercise quota, retry/call ceilings, confirmation reserve, dirty checkout
+and deadline/abort handling; and verify checks evidence, failures and cleanup.
+Clock tests cover phase accounting and report formatting. The scaled benchmark
+uses `tests/helpers/timing.ts`: six 50 ms chunks, best of three runs for each
+setting, with parallel elapsed time below 60% of serial time. A fake Git runner
+checks the mutex without Git writes, and the integration suite also creates and
+cleans six real temporary worktrees concurrently.
