@@ -35,19 +35,33 @@ it('is deterministic, changed-line only, excludes tests, and round-robins operat
 });
 it('bounds adversarial scanning without materializing every mutated file', () => {
   // A 300 ms wall-clock bound was flaky under full-suite load (317 ms seen; about 70 ms alone).
-  // Check the work deterministically instead: one candidate per operator, and mutated text built
-  // only on demand. The loose time ceiling still catches a quadratic scan, which takes minutes here.
+  // Counts and laziness are checked exactly here; growth is checked by the scaling test below.
+  // Mutated text is a getter: building every one eagerly (100k x 256 KiB) would exhaust memory.
   const cases: Array<[string, number]> = [[('a+').repeat(100000), 99999], ['"' + 'a+'.repeat(100000), 0], ['`' + 'a+'.repeat(100000), 0]];
   for (const [text, candidates] of cases) {
     const content = text.padEnd(256 * 1024);
-    const start = performance.now();
     const mutants = generateMutants('a.ts', content, new Set([1]));
-    expect(performance.now() - start).toBeLessThan(5000);
     expect(mutants).toHaveLength(candidates);
     expect(mutants.every(item => typeof Object.getOwnPropertyDescriptor(item, 'text')?.get === 'function')).toBe(true);
     expect(mutants.slice(0, 25).every(item => item.text.length <= 256 * 1024)).toBe(true);
   }
   expect(generateMutants('a.ts', 'a'.repeat(256 * 1024 + 1), new Set([1]))).toEqual([]);
+});
+it('scans in time proportional to the input, not to its square', () => {
+  // A ratio of the best of five runs cancels most machine load, unlike an absolute bound.
+  // Four times the input costs about 4x when linear and about 16x when quadratic.
+  const best = (pairs: number) => {
+    const content = ('a+').repeat(pairs);
+    let fastest = Infinity;
+    for (let run = 0; run < 5; run++) {
+      const start = performance.now(); generateMutants('a.ts', content, new Set([1]));
+      fastest = Math.min(fastest, performance.now() - start);
+    }
+    return fastest;
+  };
+  best(5000);
+  const small = best(25000); const large = best(100000);
+  expect(large / Math.max(small, 1)).toBeLessThan(8);
 });
 
 it('decodes Git octal UTF-8 paths and does not treat added headers as metadata', () => {
