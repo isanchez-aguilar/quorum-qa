@@ -14,7 +14,8 @@ records `timeoutMs` alongside `timedOut`. Markdown counts timeouts separately an
 prints `TIMED OUT after <N>s`; SARIF carries check results and timeout notifications.
 Timeouts make coverage INCOMPLETE (exit 2) and warn
 `check "<argv>" timed out after <N>s; raise budget.checkTimeoutSeconds`.
-Confirmation context says `timed out`. Real nonzero check exits, BLOCKERs and
+Confirmation context says `timed out`. A check that exits non-zero is shown in the
+report but never changes the exit code; BLOCKERs and
 error-severity rules take precedence with exit 1. Setup timeouts skip later checks.
 Refactor/runtime timeout policies are unchanged; this repo uses 600 seconds.
 The existing runner kills Windows trees with `taskkill /T /F /PID` and POSIX

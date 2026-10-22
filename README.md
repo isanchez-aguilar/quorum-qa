@@ -219,8 +219,8 @@ omitted.
 
 ## Exit codes
 
-- `0` = complete coverage with no failing BLOCKER, deterministic check or error-severity rule match
-- `1` = a BLOCKER, real failing deterministic check or error-severity rule match remains
+- `0` = complete coverage with no failing BLOCKER or error-severity rule match
+- `1` = a BLOCKER or error-severity rule match remains
 - `2` = incomplete coverage (including check timeouts) without an exit-1 condition, nothing to review, or tool/config/usage error
 
 ## Flags

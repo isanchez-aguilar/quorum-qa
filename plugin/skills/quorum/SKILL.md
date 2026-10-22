@@ -69,7 +69,7 @@ prompts say `timed out`. Refactor and runtime keep their separate timeouts.
 
 ## 5. Report what Quorum said
 
-- Exit code: `0` complete with no failing BLOCKER, check or error-severity rule match; `1` one of those failures remains; `2` incomplete coverage (including check timeouts) without an exit-1 condition, nothing to review, or a tool or config error.
+- Exit code: `0` complete with no failing BLOCKER or error-severity rule match; `1` a BLOCKER or error-severity rule match remains; `2` incomplete coverage (a timed-out check counts) without an exit-1 condition, nothing to review, or a tool or config error.
 - Read the Markdown report (the path is printed, by default under `.quorum/reports/`). Show BLOCKERs first with their file:line, evidence and reproduction status, then IMPORTANT findings.
 - Always mention the Coverage section when it says INCOMPLETE, and any "Unconfirmed" findings, as Quorum reports them. Don't upgrade, downgrade or invent findings, and don't present an incomplete run as clean.
 - Runtime visual findings are advisory and unverified. Two different families flagging the same pair can raise a clean verdict to SUSPECT, still exit 0. Never treat them as NEW RUNTIME PROBLEMS or override UNKNOWN. Report unpaired images, incomplete visual flows and both independent claims. Without `--visual`, the report says `Visual review: off`.

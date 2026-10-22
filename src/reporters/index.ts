@@ -78,7 +78,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     }),
     `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`]),
     ...(result.refactor ? refactorMarkdown(result.refactor) : []),
-    '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs, failed deterministic checks or error-severity rule matches exits 2.**',
+    '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs or error-severity rule matches exits 2.**',
     `- Reviewed: ${coverage.reviewedFiles.map(cell).join(', ') || 'none'}`,
     ...(result.mode === 'bughunt' ? [
       `- Windows reviewed: ${(coverage.reviewedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,
