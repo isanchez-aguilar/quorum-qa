@@ -121,6 +121,7 @@ export interface QuorumConfig {
   budget: {
     concurrency?: number;
     sequentialChecks?: boolean;
+    checkTimeoutSeconds?: number;
     maxCalls: number;
     // Set by validation from trusted config presence; absent for programmatic budgets.
     maxCallsExplicit?: boolean;

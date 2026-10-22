@@ -302,10 +302,11 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
         const checksTree = await createReviewWorktree(root, head, runner, warn);
         try {
-          const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand);
+          const options = { timeoutMs: (config.budget.checkTimeoutSeconds ?? 120) * 1000 };
+          const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand, options);
           if (!setup.passed) checks = setup;
           else {
-            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand);
+            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand, options);
             checks = { passed: checked.passed, results: [...setup.results, ...checked.results] };
           }
         }
@@ -320,8 +321,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const settled = await checksPending!;
     if (!settled.ok) throw settled.error;
     context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)
-      .map(check => ({ name: check.argv.join(' '), stdout: check.stdoutTail, stderr: check.stderrTail })) ?? []).slice(0, 8192);
-    if (parallelChecks && checks?.passed === false) warn('Deterministic checks failed after triage had started; triage ran without that context.');
+      .map(check => ({ name: check.argv.join(' '), ...(check.timedOut ? { status: `timed out after ${check.timeoutMs / 1000}s` } : {}), stdout: check.stdoutTail, stderr: check.stderrTail })) ?? []).slice(0, 8192);
+    if (parallelChecks && checks?.results.some(check => !check.timedOut && check.exitCode !== 0)) warn('Deterministic checks failed after triage had started; triage ran without that context.');
   };
   try {
     const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);
@@ -398,6 +399,15 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
       const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true, ruleChecks) : undefined;
       if (evidence && !evidence.available) cascade.coverage.complete = false;
+      // The awaited checks callback assigns this value; TypeScript cannot follow that assignment.
+      const completedChecks = checks as ReviewResult['checks'];
+      for (const check of completedChecks?.results ?? []) if (check.timedOut) {
+        cascade.coverage.complete = false;
+        const message = `check "${check.argv.join(' ')}" timed out after ${check.timeoutMs / 1000}s; raise budget.checkTimeoutSeconds`;
+        warn(message); io.err(`quorum: ${message}\n`);
+      }
+      // A check that exits non-zero is evidence shown in the report; it does not decide the exit code (the
+      // repository's own CI does). Only a timeout acts: it makes coverage incomplete above.
       const exitCode = verdict ? verdict.exitCode : failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
       result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
         ...(evidence && verdict ? { refactor: { ...evidence, ...verdict, allowApiChange: flags.allowApiChange === true, modelReview: !deterministicOnly } } : {}),

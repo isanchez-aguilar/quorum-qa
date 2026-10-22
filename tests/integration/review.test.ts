@@ -74,7 +74,7 @@ describe('M5 zero-quota review CLI', () => {
     const provider = fake(state === 'failure' ? [JSON.stringify([finding({ confidence: 0.2 })])] : ['[]']);
     const confirmer = new FakeProvider('codex', 'openai', runner, { codex: ['{"decision":"reject"}'] });
     const result = await review(provider, ['--trust-head-config', ...(sequential ? ['--sequential-checks'] : []), ...(state.includes('skip') ? ['--no-checks'] : []), ...(state === 'dry-skip' ? ['--dry-run'] : [])], { checkRunner, providers: new Map([['agy', provider], ['codex', confirmer]]) });
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(state === 'timeout' ? 2 : 0);
     if (state.includes('skip')) {
       expect(checkRunner).not.toHaveBeenCalled();
       if (state === 'dry-skip') expect(result.out).not.toContain('--help');

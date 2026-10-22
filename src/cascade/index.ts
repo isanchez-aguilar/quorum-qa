@@ -567,7 +567,7 @@ export async function runCascade(
 
   durations.triage = Math.max(0, budget.clock.now() - phaseStarted);
   await options.beforeConfirmation?.();
-  const confirmationContext = options.beforeConfirmation ? 'UNTRUSTED DETERMINISTIC CHECKS (JSON):\n' + JSON.stringify(context.checksContext) + '\n' : '';
+  const confirmationContext = context.checksContext ? 'UNTRUSTED DETERMINISTIC CHECKS (JSON):\n' + JSON.stringify(context.checksContext) + '\n' : '';
   const escalationStarted = budget.clock.now();
   const candidates: Candidate[] = [];
   for (const finding of initial ?? []) {

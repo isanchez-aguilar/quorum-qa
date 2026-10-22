@@ -13,6 +13,7 @@ it('records pass, failure and timeout and continues', async () => {
   expect(result.passed).toBe(false);
   expect(result.results.map(item => [item.exitCode, item.timedOut])).toEqual([[0, false], [124, false], [1, true]]);
   expect(result.results[2]?.stdoutTail).toBe('partial');
+  expect(result.results.every(item => 'timeoutMs' in item && item.timeoutMs === 50)).toBe(true);
   expect(result.results.map(item => item.argv)).toEqual(checks);
   expect(result.results.every(item => item.durationMs >= 0)).toBe(true);
   expect(runner).toHaveBeenCalledWith(process.execPath, ['a'], {

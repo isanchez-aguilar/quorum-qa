@@ -94,12 +94,15 @@ Runtime and refactor --deterministic-only keep the default of 12. Quota floors s
 Triage concurrency: budget.concurrency (1–6, default 3; 1 restores sequential triage).
 Checks overlap triage by default; confirmation waits for their evidence.
 Checks execute the reviewed change's code in a disposable worktree.
+Setup/check timeout: budget.checkTimeoutSeconds (integer 30–3600, default 120), per command.
+Timeouts report TIMED OUT, make coverage INCOMPLETE and suggest raising that limit.
+Refactor and runtime retain their own timeouts.
 --spec, --inventory and --rules require regular non-symlink files, at most 256 KiB each.
 Feature specs accept Markdown checkboxes or a list under a heading containing "acceptance".
 
 Exit codes: 0 = complete coverage with no failing BLOCKER or error-severity rule match;
 1 = a BLOCKER or error-severity rule match remains;
-2 = incomplete coverage with no BLOCKER or error-severity rule match, nothing to review,
+2 = incomplete coverage with no BLOCKER or error-severity rule match (a timed-out check counts), nothing to review,
 or tool/config/usage error.
 `;
 

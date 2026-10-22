@@ -54,7 +54,7 @@ export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' 
       visual: ['agy:gemini-4-argon-high'],
     },
     escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true },
-    budget: { concurrency: 3, sequentialChecks: false, maxCalls: 12, maxCallsExplicit: false, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
+    budget: { concurrency: 3, sequentialChecks: false, checkTimeoutSeconds: 120, maxCalls: 12, maxCallsExplicit: false, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
     reproduce: {
       allowInstallScripts: false,
       isolation: 'container',
@@ -255,7 +255,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   }
 
   const budgetRaw =
-    r.object(top.budget, 'budget', ['concurrency', 'sequentialChecks', 'maxCalls', 'maxCallsExplicit', 'maxMinutes', 'maxCallSeconds', 'quotaFloorPercent']) ?? {};
+    r.object(top.budget, 'budget', ['concurrency', 'sequentialChecks', 'checkTimeoutSeconds', 'maxCalls', 'maxCallsExplicit', 'maxMinutes', 'maxCallSeconds', 'quotaFloorPercent']) ?? {};
   // `maxCallsExplicit` is written by this validator, not by users. It is accepted on input only so that an
   // already validated config can be validated again without turning the default 12 into a pinned value.
   if (budgetRaw.maxCallsExplicit !== undefined && typeof budgetRaw.maxCallsExplicit !== 'boolean') {
@@ -267,6 +267,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
   const budget = {
     concurrency: r.number(budgetRaw.concurrency, 'budget.concurrency', 3, { min: 1, max: 6, integer: true }),
     sequentialChecks: budgetRaw.sequentialChecks === true,
+    checkTimeoutSeconds: r.number(budgetRaw.checkTimeoutSeconds, 'budget.checkTimeoutSeconds', defaults.budget.checkTimeoutSeconds!, { min: 30, max: 3600, integer: true }),
     maxCallsExplicit: typeof budgetRaw.maxCallsExplicit === 'boolean' ? budgetRaw.maxCallsExplicit : Object.hasOwn(budgetRaw, 'maxCalls'),
     maxCallSeconds: r.number(budgetRaw.maxCallSeconds, 'budget.maxCallSeconds', defaults.budget.maxCallSeconds!, { min: 30, max: 1800 }),
     maxCalls: r.number(budgetRaw.maxCalls, 'budget.maxCalls', defaults.budget.maxCalls, {
