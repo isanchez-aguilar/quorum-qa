@@ -21,7 +21,7 @@ export function runtimeReview(config: RuntimeConfig | undefined, dryRun: boolean
     + `  Timeouts: ready ${runtime.readyTimeoutSeconds}s; flow ${runtime.flowTimeoutSeconds}s; step ${runtime.stepTimeoutSeconds}s\n`
     + `  Image: ${runtime.image ?? DEFAULT_RUNTIME_IMAGE}\n`
     + `  Limits: ${runtime.memoryMiB} MiB; ${runtime.pids} pids\n`
-    + '  Screenshots: off\n');
+    + `  Screenshots: ${runtime.screenshots ? 'on (stored under .quorum/runtime-shots/, up to 10 per flow, 300 KB each)' : 'off'}\n`);
   return 0;
 }
 

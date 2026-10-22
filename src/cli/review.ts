@@ -125,12 +125,13 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const planned = runtimeReview(trusted.runtime, flags.dryRun === true, io);
     if (flags.dryRun) return planned;
     const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner });
-    const evidence = await runRuntimeEvidence(context, trusted, { root, gitRunner: runner,
+    const runId = `qrm-${randomUUID()}`;
+    const evidence = await runRuntimeEvidence(context, trusted, { root, runId, gitRunner: runner,
       containerRunner: dependencies.containerRunner ?? runCommand, now,
       warn: message => io.err(`quorum: ${message}\n`), announce: message => io.err(message) });
     const runtime = buildRuntimeReport(evidence, trusted.runtime!, { strictFlows: flags.strictFlows === true });
     const result: ReviewResult = {
-      runtime, runId: `qrm-${randomUUID()}`, timestamp: new Date(now()).toISOString(), mode, range,
+      runtime, runId, timestamp: new Date(now()).toISOString(), mode, range,
       headSha: head, baseSha: context.mergeBaseCommit ?? context.baseCommit, checks: null,
       criteria: [], inventory: [], families: [], reviewedFamilies: [], cacheHits: 0,
       findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [], exitCode: runtime.exitCode,

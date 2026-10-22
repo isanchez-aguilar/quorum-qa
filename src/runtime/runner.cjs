@@ -59,6 +59,11 @@ if (require.main === module) {
   (async () => {
     const plan = JSON.parse(require('node:fs').readFileSync(planPath, 'utf8'));
     const report = await run({ start: JSON.parse(encodedStart), plan });
+    for (const shot of report.shots ?? []) {
+      const line = '\n' + marker + 'IMG ' + JSON.stringify(shot) + '\n';
+      if (Buffer.byteLength(line) > 450 * 1024) throw new Error('Screenshot transport limit');
+      process.stdout.write(line);
+    }
     process.stdout.write('\n' + marker + JSON.stringify(report) + '\n');
   })().catch(() => { process.exitCode = 1; });
 }

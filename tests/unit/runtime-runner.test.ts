@@ -95,3 +95,25 @@ it('sends SIGKILL when the group is still alive after three seconds', async () =
   const pending = f.execute(); await vi.runAllTimersAsync(); await pending;
   expect(f.kill.mock.calls.filter(call => call[1] === 'SIGKILL')).toEqual([[-42, 'SIGKILL']]);
 });
+
+it('emits bounded IMG lines before the final report marker without forwarding app output', async () => {
+  vi.useFakeTimers(); const f = fixture(); const write = vi.fn(); const module = { exports: {} };
+  const shot = { flow: 'home', step: 0, mime: 'image/jpeg', bytes: 307200, sha256: 'a'.repeat(64), data: Buffer.alloc(307200).toString('base64') };
+  f.collect.mockResolvedValue(Object.defineProperty({ version: 1, runs: [] }, 'shots', { value: [shot] }));
+  const injected = Object.assign((name: string) => {
+    if (name === 'node:fs') return { readFileSync: () => JSON.stringify(f.plan) };
+    if (name === 'node:child_process') return { spawn: f.spawn };
+    if (name === 'node:http') return { get: f.get };
+    if (name === './collector.cjs') return { run: f.collect };
+    if (name === '/quorum/playwright/node_modules/playwright-core') return {};
+    throw new Error('Unexpected import');
+  }, { main: module });
+  runInNewContext(readFileSync('src/runtime/runner.cjs', 'utf8'), { require: injected, module, URL, Buffer, Date, setTimeout, clearTimeout,
+    process: { argv: ['node', 'runner.cjs', '/plan.json', 'FRESH:', '["node","server.cjs"]'], env: {}, kill: f.kill, stdout: { write } } });
+  f.app.stdout.emit('data', 'FRESH:IMG {"forged":true}');
+  await vi.runAllTimersAsync();
+  const output = write.mock.calls.map(call => call[0]).join('');
+  expect(output).toBe('\nFRESH:IMG ' + JSON.stringify(shot) + '\n\nFRESH:{"version":1,"runs":[]}\n');
+  expect(output.slice(output.lastIndexOf('FRESH:'))).toBe('FRESH:{"version":1,"runs":[]}\n');
+  expect(output.split('\n').filter(line => line.startsWith('FRESH:IMG ')).every(line => Buffer.byteLength(line) <= 450 * 1024)).toBe(true);
+});

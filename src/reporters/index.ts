@@ -128,7 +128,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
         lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
       unconfirmedCount: result?.unconfirmed.length ?? 0,
       ...(result?.refactor ? { refactor: result.refactor } : {}),
-      ...(result?.runtime ? { runtime: result.runtime } : {}),
+      ...(result?.runtime ? { runtime: Object.fromEntries(Object.entries(result.runtime).filter(([key]) => key !== 'shots')) } : {}),
     },
     results: [...findings.map(f => {
       const rule = rules[(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).indexOf(f.severity)]!;

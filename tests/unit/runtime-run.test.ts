@@ -7,7 +7,8 @@ import { DEFAULT_RUNTIME_IMAGE, PLAYWRIGHT_CORE } from '../../src/runtime/image.
 import { defaultConfig } from '../../src/config/schema.js';
 import { validateConfig } from '../../src/config/schema.js';
 import { createReviewWorktree } from '../../src/worktree/index.js';
-import { CommandTimeoutError } from '../../src/process/runner.js';
+import { CommandTimeoutError, CommandOutputLimitError } from '../../src/process/runner.js';
+import { createHash } from 'node:crypto';
 import { REPORT_BYTES } from '../../src/runtime/report.js';
 import { RUNNER_CACHE_DIRS } from '../../src/reproduce/isolation.js';
 import type { CommandRunner, ReviewContext } from '../../src/types/index.js';
@@ -97,7 +98,9 @@ it('runs merge-base then head with exact locked-down argv and only readonly run 
   expect(announce).toHaveBeenCalledOnce(); expect(announce.mock.calls[0]![0]).toMatch(/code and install scripts.*refuses --no-checks/);
   const runs = runner.mock.calls.filter(([, args]) => args.includes('/quorum/bin/runner.cjs'));
   expect(runs).toHaveLength(2);
+  expect(new Set(runs.map(([, args]) => args.at(-2))).size).toBe(2);
   for (const [, args, options] of runs) {
+    expect(args.at(-2)).toMatch(/^QUORUM_RUNTIME_[a-f0-9-]{36}:$/);
     const mount = args.find(arg => arg.includes('dst=/quorum/bin'))!;
     const image = args.find(arg => arg.startsWith('quorum-prep:'))!;
     const deps = args.find(arg => arg.startsWith('type=volume,src=quorum-deps-'))!;
@@ -281,4 +284,48 @@ it('kills by the wall-clock deadline even when the client has not reported a tim
   expect(result.reasons).toEqual(['base: timeout', 'head: timeout']);
   expect(runner.mock.calls.filter(([, args]) => args[0] === 'kill')).toHaveLength(1);
   expect(cleanups).toHaveLength(1); expect(cleanups[0]).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('raises output capture only on screenshot collection: %s', async screenshots => {
+  const runner = fake(); const value = config(); value.runtime!.screenshots = screenshots;
+  const result = await execute(runner, { runId: 'qrm-output', gitRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) }, value);
+  expect(result.available).toBe(true);
+  for (const [, args, options] of runner.mock.calls) {
+    if (args[0] === 'info') continue;
+    expect(options?.maxOutputBytes).toBe(screenshots && args.includes('/quorum/bin/runner.cjs') ? REPORT_BYTES + Math.ceil(6 * 1024 * 1024 * 4 / 3) + 64 * 1024 : REPORT_BYTES + 4096);
+    expect(options!.maxOutputBytes!).toBeLessThanOrEqual(16 * 1024 * 1024);
+  }
+  expect(result.base!.shots).toEqual([]);
+});
+
+it('reserves capture time in the container timeout while keeping the global budget', async () => {
+  const runner = fake(); const value = config(); value.runtime!.screenshots = true;
+  await execute(runner, { now: () => 1000 }, value);
+  expect(runner.mock.calls.filter(([, args]) => args.includes('/quorum/bin/runner.cjs')).map(call => call[2]?.timeoutMs)).toEqual([220000, 220000]);
+});
+it('stores verified IMG output under both sides and reports invalid images without losing coverage', async () => {
+  const runner = fake(); const original = runner.getMockImplementation()!; const value = config(); value.runtime!.screenshots = true;
+  const data = Buffer.from([255, 216, 255, 1]);
+  const shot = { flow: 'home', step: 0, mime: 'image/jpeg', bytes: 4, sha256: createHash('sha256').update(data).digest('hex'), data: data.toString('base64') };
+  runner.mockImplementation(async (command, args, options) => {
+    const result = await original(command, args, options);
+    if (args.includes('/quorum/bin/runner.cjs')) result.stdout = args.at(-2)! + 'IMG ' + JSON.stringify(shot) + '\n' + args.at(-2)! + 'IMG {}\n' + result.stdout;
+    return result;
+  });
+  const evidence = await execute(runner, { runId: 'qrm-capture', gitRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) }, value);
+  expect(evidence.available).toBe(true); expect(evidence.notes).toEqual(['base: dropped 1 invalid screenshots', 'head: dropped 1 invalid screenshots']);
+  for (const side of ['base', 'head'] as const) {
+    expect(evidence[side]!.shots[0]!.path).toBe(`.quorum/runtime-shots/qrm-capture/${side}/01-home-0.jpg`);
+    expect(await readFile(path.join(root, evidence[side]!.shots[0]!.path))).toEqual(data);
+    expect(evidence[side]!.shots[0]).not.toHaveProperty('data');
+  }
+});
+it('keeps output limit errors unavailable even if the captured tail has a valid report', async () => {
+  const runner = fake(); const original = runner.getMockImplementation()!; const value = config(); value.runtime!.screenshots = true;
+  runner.mockImplementation(async (command, args, options) => {
+    if (args.includes('/quorum/bin/runner.cjs')) throw new CommandOutputLimitError('', '', args.at(-2)! + JSON.stringify(report), '', 0);
+    return original(command, args, options);
+  });
+  const result = await execute(runner, {}, value);
+  expect(result.available).toBe(false); expect(result.base).toBeUndefined(); expect(result.head).toBeUndefined();
 });

@@ -244,9 +244,14 @@ The app must work offline with loopback services; flows must be idempotent.
 reproduction options (`--author`, `--probe`, `--no-cache`, `--reproduce`,
 `--allow-unproven`, `--no-host-prompt`) are also rejected.
 
-`runtime.screenshots` is reserved for the R5 model layer: omit it or set `false`;
-`true` is rejected until capture and transport are implemented. Infrastructure
-failures and truncated evidence make a flow incomplete. Run notes appear in the
+`runtime.screenshots: true` captures JPEGs locally; it calls no model. Images are
+kept under `.quorum/runtime-shots/<runId>/<base|head>/` (which must be git-ignored),
+with up to 10 per flow, 300 KiB each and a fair share of 6 MiB per side. Markdown
+and JSON list paths, sizes and hashes; unpaired images are flagged, never embedded.
+Both runs capture at 1280x800; only run 1 is stored. Capture failures and image
+caps add notes without changing deterministic coverage. Use test data only:
+pixel content is not redacted. Omit the flag or set `false` to disable capture.
+Infrastructure failures and truncated evidence make a flow incomplete. Run notes appear in the
 comparison and report. Published text removes URL queries, fragments, userinfo,
 absolute filesystem directories and long token-like values before display caps.
 HTTP resource paths retain their route identity.

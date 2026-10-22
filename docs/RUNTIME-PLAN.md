@@ -1,6 +1,6 @@
 # Plan: `--mode runtime`
 
-Status: R0–R3 built (config, collector, base/head container orchestration, stable comparison, coverage-aware verdicts, Markdown/SARIF/JSON and bounded model summary); R4 independent review and R5 optional model layer remain. Runtime is usable and deterministic, with no provider calls. Updated 2026-10-21. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
+Status: R0–R3 built (config, collector, base/head container orchestration, stable comparison, coverage-aware verdicts, Markdown/SARIF/JSON and bounded model summary); R5 V0 local screenshots are built; R4 independent review and R5 V1/V2 model layer remain. Runtime is usable and deterministic, with no provider calls. Updated 2026-10-21. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
 
 ## What it answers
 
@@ -47,7 +47,7 @@ A Quorum-owned script (`src/runtime/collector.cjs`, plain JS, copied into the co
 - `technicalText`: visible text matching a fixed list of patterns, each with word boundaries so `Banana` or `Finance` never match (stack-trace lines `at x (file:line:col)`, `TypeError:`, `ReferenceError:`, whole-word `undefined`, `[object Object]`, whole-word `NaN`, `Internal Server Error`, `ECONNREFUSED`, raw JSON error bodies);
 - `blocked-external` counts.
 
-Each flow runs **twice** per revision, each run in a **fresh `BrowserContext`** (no cookies or storage shared). An observation counts only if it appears in both runs of that revision (flake filter). The filter must not hide real failures: if a flow times out or fails a step in one run but not the other, the flow is reported as `flaky` and the verdict is at most SUSPECT, never silently clean. v1 flows must be idempotent (they must not depend on state left by an earlier run). `runtime.screenshots` is reserved for the R5 model layer: absent/false are valid; true is rejected until capture and transport exist.
+Each flow runs **twice** per revision, each run in a **fresh `BrowserContext`** (no cookies or storage shared). An observation counts only if it appears in both runs of that revision (flake filter). The filter must not hide real failures: if a flow times out or fails a step in one run but not the other, the flow is reported as `flaky` and the verdict is at most SUSPECT, never silently clean. v1 flows must be idempotent (they must not depend on state left by an earlier run). `runtime.screenshots: true` captures and stores local JPEGs without calling a model; absent/false disables capture. Every context uses a fixed 1280x800 viewport. Both runs capture after inspected steps, but only run 1 images travel before the JSON report and are kept under `.quorum/runtime-shots/<runId>/<base|head>/`. Capture time is excluded from flow and step deadlines (5 seconds maximum per capture). Screenshot failures/caps add notes without making deterministic coverage incomplete. Images are bounded to 10 per flow, 300 KiB each and `floor(6 MiB / flows)` per flow. Storage refuses linked parents and skips with a warning unless `.quorum/` is git-ignored. Reports list paths and pairing, never image bytes; no model is called.
 
 Inspection follows `goto`, `click`, `press`, `waitForUrl` and `waitForSelector`,
 with the same bounded settling logic. `fill` and `wait` do not trigger inspection.
@@ -107,7 +107,7 @@ The official Playwright image, **pinned by digest** (same discipline as `DEFAULT
 | R2 | Container orchestration (start app, readiness, run flows twice in fresh contexts, teardown, timeouts), base and head; argv tests for the forbidden privileges | fake runner tests; opt-in real container test against the fixture app |
 | R3 | Comparison, verdict, reporters (Markdown/SARIF/JSON), model-summary field | unit and end-to-end with the fake runner |
 | R4 | Docs, README, review by another provider | docs build |
-| R5 | Optional model layer | later |
+| R5 | V0 local screenshots built; V1/V2 optional model layer pending | fake capture/transport/storage tests; real container test opt-in |
 
 Each milestone: Codex implements from a brief, Claude verifies by execution, Gemini reviews read-only, then merge.
 

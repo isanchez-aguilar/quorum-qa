@@ -13,7 +13,7 @@ function report(strictFlows = false) {
         { kind: 'flow-failure' as const, step: 1, message: 'PRIVATE_VALUE missing', errorClass: 'selector' as const },
       ] : [])], blockedExternal: { 'PRIVATE_VALUE.test': 2 }, notes: [],
     })) };
-    return { report: data, stable: stableObservations(data), durationMs: 1 };
+    return { report: data, stable: stableObservations(data), durationMs: 1, shots: [] };
   };
   return buildRuntimeReport({ available: true, reasons: [], notes: ['PRIVATE_VALUE <script>'], base: make(false), head: make(true) }, config, { strictFlows });
 }
