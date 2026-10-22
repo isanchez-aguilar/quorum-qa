@@ -185,7 +185,7 @@ omitted.
 
 | Command | Flag | Description |
 |---|---|---|
-| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Review mode (runtime: deterministic base/head comparison, no provider calls) |
+| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Review mode (runtime: deterministic base/head comparison; optional advisory visual review) |
 | `review` | `--deterministic-only` | Refactor evidence without provider calls |
 | `review` | `--mutation` | Refactor only: up to maxMutants extra suite runs (default 8); survivors yield SUSPECT |
 | `review` | `--allow-api-change` | List refactor API breakage without failing for it |
@@ -203,6 +203,7 @@ omitted.
 | `review` | `--no-host-prompt` | Never authorizes host execution; automatic "no" (unproven) |
 | `review` | `--out <report.md>` | Markdown output (default .quorum/reports/<runId>.md) |
 | `review` | `--strict-flows` | Runtime only: newly broken stable steps fail with exit 1 |
+| `review` | `--visual` | Runtime only: capture and send screenshots to selected image-capable providers; advisory only |
 | `review` | `--format json` | Runtime only: full comparison and verdict as JSON (also `--json`) |
 | `review` | `--sarif <file>` | SARIF 2.1.0 output |
 | `review` | `--json` | Print the full review result |
@@ -214,7 +215,7 @@ omitted.
 | General | `--help` | Print this help |
 | General | `--version` | Print the version |
 
-## Runtime review (R0–R3)
+## Runtime review (R0–R3, R5 V0–V1)
 
 `quorum review --mode runtime --dry-run` validates the trusted config's `runtime`
 block and prints the start argv, readiness URL, flow/step counts, timeouts, image
@@ -250,11 +251,43 @@ with up to 10 per flow, 300 KiB each and a fair share of 6 MiB per side. Markdow
 and JSON list paths, sizes and hashes; unpaired images are flagged, never embedded.
 Both runs capture at 1280x800; only run 1 is stored. Capture failures and image
 caps add notes without changing deterministic coverage. Use test data only:
-pixel content is not redacted. Omit the flag or set `false` to disable capture.
+pixel content is not redacted. Omit this setting or set `false` to disable capture
+unless `--visual` is present.
 Infrastructure failures and truncated evidence make a flow incomplete. Run notes appear in the
 comparison and report. Published text removes URL queries, fragments, userinfo,
 absolute filesystem directories and long token-like values before display caps.
 HTTP resource paths retain their route identity.
+
+`--visual` is the only switch that sends runtime screenshots to models. It implies
+capture even with `runtime.screenshots: false`. Run
+`quorum review --mode runtime --diff main...HEAD --visual --dry-run` first: it
+prints the maximum calls and images, allowed families and screenshot recipients
+without running the app or providers. The live consent line names the providers
+and families that may receive screenshots. Use stable pages and synthetic data;
+screenshots can expose everything visible in the app.
+
+Optional configuration (the block alone enables nothing):
+
+```json
+"visual": { "maxCalls": 4, "allowedFamilies": ["google", "anthropic"] }
+```
+
+Place this block under `runtime`. `maxCalls` accepts 1–40, defaulting to
+`min(2 × flows, 40)`; the global call/deadline budget also applies. The default
+allows `anthropic`, `google`, `openai` and `local`; `['local']` excludes cloud
+families and requires an image-capable local entry in the visual tier.
+
+Each flow sends at most ten before/after pairs to the primary family. A second
+family receives the same prompt and images only if the primary found something.
+Providers read an isolated temporary directory containing only the paired JPEGs;
+the prompt contains actions and selectors, never fill values, diffs or code.
+Unpaired images are listed but never reviewed. The report keeps both claims and
+labels agreement on the same pair as corroborated. A corroborated visual claim
+can raise a clean verdict to **SUSPECT** (exit 0). It never creates **NEW RUNTIME
+PROBLEMS**, changes an exit code, or overrides **UNKNOWN**. Missing providers,
+errors and exhausted caps produce visual coverage notes only. Markdown and JSON
+include the advisory section; SARIF uses config/logical locations with warning
+or note severity, never invented source lines. Without the flag: `Visual review: off`.
 
 With `setup`, each side pays for a private copy of the ready dependency volume;
 setup can modify only that copy, and the app mounts it read-only. Without setup,

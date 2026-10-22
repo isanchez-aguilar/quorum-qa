@@ -9,6 +9,7 @@ export type Step = (
 ) & { timeoutSeconds?: number };
 export interface Flow { name: string; steps: Step[] }
 export interface RuntimeConfig {
+  visual?: { maxCalls?: number; allowedFamilies?: import('../types/index.js').Family[] };
   start?: string[];
   readyUrl?: string;
   flows?: Flow[];
@@ -67,7 +68,7 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
     issues.push(`${path} must be a string of ${min}-${max} characters`); return false;
   }
   const block = object(raw, 'runtime', ['start', 'readyUrl', 'readyTimeoutSeconds', 'flowTimeoutSeconds', 'stepTimeoutSeconds',
-    'screenshots', 'image', 'memoryMiB', 'pids', 'flows']);
+    'screenshots', 'image', 'memoryMiB', 'pids', 'flows', 'visual']);
   const result: RuntimeConfig = {
     readyTimeoutSeconds: number(block.readyTimeoutSeconds, 'runtime.readyTimeoutSeconds', 60, 5, 300),
     flowTimeoutSeconds: number(block.flowTimeoutSeconds, 'runtime.flowTimeoutSeconds', 60, 10, 300),
@@ -77,6 +78,16 @@ export function readRuntimeConfig(raw: unknown, issues: string[]): RuntimeConfig
     pids: number(block.pids, 'runtime.pids', 512, 512, 2048),
   };
   if (block.screenshots !== undefined && typeof block.screenshots !== 'boolean') issues.push('runtime.screenshots must be a boolean');
+  if (block.visual !== undefined) {
+    const visual = object(block.visual, 'runtime.visual', ['maxCalls', 'allowedFamilies']);
+    result.visual = {};
+    if (visual.maxCalls !== undefined) result.visual.maxCalls = number(visual.maxCalls, 'runtime.visual.maxCalls', 2, 1, 40);
+    if (visual.allowedFamilies !== undefined) {
+      if (!Array.isArray(visual.allowedFamilies) || !visual.allowedFamilies.every(family => ['anthropic', 'google', 'openai', 'local'].includes(family as string))) {
+        issues.push('runtime.visual.allowedFamilies must be an array of anthropic, google, openai or local');
+      } else result.visual.allowedFamilies = [...new Set(visual.allowedFamilies)] as NonNullable<RuntimeConfig['visual']>['allowedFamilies'];
+    }
+  }
   if (block.start !== undefined) {
     if (!Array.isArray(block.start) || !block.start.length || !block.start.every(arg => typeof arg === 'string' && arg.trim() !== '')) {
       issues.push('runtime.start must be a non-empty argv array of non-empty strings, not a shell string');

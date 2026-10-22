@@ -8,6 +8,7 @@ export class UsageError extends Error {
 export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'] as const;
 
 export interface ParsedFlags {
+  visual?: boolean;
   help?: boolean;
   version?: boolean;
   mode?: (typeof REVIEW_MODES)[number];
@@ -47,10 +48,11 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
+type BooleanFlag = 'visual' | 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
 type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
+  visual: 'visual',
   'strict-flows': 'strictFlows',
   mutation: 'mutation',
   help: 'help',

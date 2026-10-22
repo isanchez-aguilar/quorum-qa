@@ -5,6 +5,7 @@ import type { RuntimeComparison } from '../runtime/compare.js';
 import { UsageError } from './args.js';
 import type { CliIo } from './index.js';
 import { runtimeText } from '../runtime/run.js';
+import type { VisualReview } from '../runtime/visual.js';
 
 export function runtimeReview(config: RuntimeConfig | undefined, dryRun: boolean, io: CliIo): number {
   for (const key of ['start', 'readyUrl', 'flows'] as const) {
@@ -28,7 +29,19 @@ export function runtimeReview(config: RuntimeConfig | undefined, dryRun: boolean
 export type RuntimeVerdict = 'NEW RUNTIME PROBLEMS' | 'SUSPECT' | 'NO NEW RUNTIME PROBLEMS FOUND' | 'UNKNOWN';
 export interface RuntimeVerdictResult { verdict: RuntimeVerdict; exitCode: number; reasons: string[] }
 export function evaluateRuntimeVerdict(evidence: RuntimeEvidence, comparison: RuntimeComparison | undefined,
-  { strictFlows }: { strictFlows: boolean }): RuntimeVerdictResult {
+  { strictFlows, visual }: { strictFlows: boolean; visual?: VisualReview }): RuntimeVerdictResult {
+  const deterministic = deterministicVerdict(evidence, comparison, strictFlows);
+  if (!visual?.requested) return deterministic;
+  for (const label of visual.corroboratedLabels) {
+    const families = new Set(visual.findings.filter(finding => finding.corroborated && `${finding.flow}/${finding.step}` === label).map(finding => finding.family));
+    if (families.size < 2) continue;
+    deterministic.reasons.push(`Visual review (advisory, ${families.size} families agreed): ${label}`);
+    if (deterministic.verdict === 'NO NEW RUNTIME PROBLEMS FOUND') deterministic.verdict = 'SUSPECT';
+  }
+  return deterministic;
+}
+
+function deterministicVerdict(evidence: RuntimeEvidence, comparison: RuntimeComparison | undefined, strictFlows: boolean): RuntimeVerdictResult {
   const reasons = [...evidence.reasons];
   if (!evidence.available) reasons.push('Runtime evidence unavailable.');
   for (const side of ['base', 'head'] as const) {

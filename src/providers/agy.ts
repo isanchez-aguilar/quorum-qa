@@ -4,6 +4,7 @@ import { AGY_SCHEMAS, validStructuredOutput } from './schemas.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
 import { ProviderCommands, quotaLanguage, remaining, cleanupPreservingError } from './commands.js';
 import { ProviderError, type ProviderAdapter, type Quota, type RawProviderResult, type ReviewOptions } from './types.js';
+import { runtimeImageInstructions, runtimeImageWorkspace } from '../runtime/image-workspace.js';
 
 export const AGY_NO_TOOLS = 'Do not call any tools: no file reads and no commands. Everything you need is in this prompt; answer only with the JSON.';
 export const AGY_COMMAND_DENIED = 'agy tried to run a command in headless mode and returned nothing';
@@ -55,11 +56,12 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
   async executeReview(context: ReviewContext, modelId: string, prompt: string, options: ReviewOptions): Promise<RawProviderResult> {
     const started = this.now();
     remaining(options, started, this.now);
-    const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run, options.warn);
+    const images = context.mode === 'runtime' ? await runtimeImageWorkspace(context) : undefined;
+    const worktree = images ?? await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run, options.warn);
     let failure: unknown;
     try {
       const timeoutMs = remaining(options, started, this.now);
-      const args = ['--model', modelId, '--sandbox', '--output-format', 'json', '--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`, `--print=${AGY_NO_TOOLS}\n${prompt}`];
+      const args = ['--model', modelId, '--sandbox', '--output-format', 'json', '--print-timeout', `${Math.max(1, Math.floor(timeoutMs / 1000))}s`, `--print=${images ? runtimeImageInstructions(context) : AGY_NO_TOOLS}\n${prompt}`];
       const purpose = options.purpose ?? 'review';
       args.push('--json-schema', JSON.stringify(AGY_SCHEMAS[purpose]));
       // Count resolved executable and quoting overhead, without ever shortening the prompt.
@@ -91,7 +93,7 @@ export class AgyProvider extends ProviderCommands implements ProviderAdapter {
       const tokens = record(usage) && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number'
         && Number.isFinite(usage.input_tokens) && usage.input_tokens >= 0 && Number.isFinite(usage.output_tokens) && usage.output_tokens >= 0
         ? { prompt: usage.input_tokens, completion: usage.output_tokens } : undefined;
-      return { rawOutput, durationMs: this.now() - started, worktreeClean: await isClean(worktree.path, this.run), ...(tokens ? { tokensUsed: tokens } : {}) };
+      return { rawOutput, durationMs: this.now() - started, worktreeClean: images ? await images.clean() : await isClean(worktree.path, this.run), ...(tokens ? { tokensUsed: tokens } : {}) };
     } catch (error) { failure = error; throw error; }
     finally { await cleanupPreservingError(worktree.cleanup, failure, options.warn); }
   }

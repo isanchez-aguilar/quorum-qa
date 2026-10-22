@@ -36,6 +36,8 @@ import { evaluateRefactorVerdict } from './refactor.js';
 import { runtimeReview } from './runtime.js';
 import { runRuntimeEvidence } from '../runtime/run.js';
 import { buildRuntimeReport } from '../reporters/runtime.js';
+import { createVisualImages, emptyVisualReview, runVisualReview, visualCandidates, visualMaxCalls, type VisualReview } from '../runtime/visual.js';
+import { runtimeText } from '../runtime/run.js';
 
 export interface ReviewDependencies {
   contextRunner?: CommandRunner;
@@ -51,6 +53,29 @@ export interface ReviewDependencies {
   appendLedger?: typeof appendLedger;
   appendFindings?: typeof appendFindings;
   now?: () => number;
+}
+
+function reviewProviders(config: QuorumConfig, dependencies: ReviewDependencies): ReadonlyMap<string, ProviderAdapter> {
+  return dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider({ ...config.qwen, fetch: dependencies.fetch })]]);
+}
+
+async function refreshQuota(providers: ReadonlyMap<string, ProviderAdapter>, catalog: readonly CatalogEntry[], snapshot: QuotaSnapshot,
+  refs: string[], now: () => number): Promise<QuotaSnapshot> {
+  const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
+  const groups = new Set<string>();
+  for (const ref of refs) {
+    const model = parseModelRef(ref, catalog);
+    const entry = catalog.find(item => item.provider === model.provider && item.id === model.model)!;
+    if (groups.has(entry.quotaGroup)) continue;
+    groups.add(entry.quotaGroup);
+    const provider = providers.get(entry.provider);
+    if (!provider) continue;
+    try {
+      const quota = await provider.getQuota(entry.id);
+      readings[entry.quotaGroup] = { remainingPercent: quota === 'unknown' ? 'unknown' : quota.remainingPercent, timestamp: new Date(now()).toISOString() };
+    } catch { readings[entry.quotaGroup] = { remainingPercent: 'unknown', timestamp: new Date(now()).toISOString() }; }
+  }
+  return readings;
 }
 
 async function configAt(commit: string, root: string, runner: CommandRunner): Promise<QuorumConfig> {
@@ -73,12 +98,13 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  if (flags.visual && mode !== 'runtime') throw new UsageError('--visual requires runtime mode.');
   if (flags.strictFlows && mode !== 'runtime') throw new UsageError('--strict-flows requires runtime mode.');
   if (flags.format && mode !== 'runtime') throw new UsageError('--format requires runtime mode.');
   if (mode === 'runtime') {
     for (const [key, flag] of Object.entries({ reproduce: 'reproduce', allowUnproven: 'allow-unproven',
       noHostPrompt: 'no-host-prompt', author: 'author', noCache: 'no-cache', probe: 'probe' })) {
-      if (flags[key as keyof ParsedFlags] !== undefined) throw new UsageError(`--${flag} is not supported: runtime is deterministic and makes no provider calls.`);
+      if (flags[key as keyof ParsedFlags] !== undefined) throw new UsageError(`--${flag} is not supported: ${flags.visual ? 'this option is not used by runtime review' : 'runtime is deterministic and makes no provider calls'}.`);
     }
     if (flags.noChecks) throw new UsageError('runtime mode must run the app; --no-checks is not supported.');
     for (const flag of ['spec', 'inventory', 'images', 'rules'] as const) {
@@ -122,14 +148,51 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'runtime') {
     const base = flags.since && !headConfig ? (await bootstrapConfig()).base : parts[1]!;
     const trusted = headConfig ?? await configAt(await mergeBase(await revParse(base, root, runner), head, root, runner), root, runner);
+    if (flags.visual && trusted.runtime) trusted.runtime = { ...trusted.runtime, screenshots: true };
     const planned = runtimeReview(trusted.runtime, flags.dryRun === true, io);
+    let visualDeps: Parameters<typeof runVisualReview>[2] | undefined;
+    let visual: VisualReview | undefined;
+    if (flags.visual) {
+      visual = emptyVisualReview(trusted.runtime!);
+      let names = 'none';
+      try {
+        const catalog = withQwenModel(dependencies.catalog ?? DEFAULT_CATALOG, trusted.qwen?.model);
+        const providers = reviewProviders(trusted, dependencies);
+        let quotaSnapshot = await readQuota(path.join(root, '.quorum', 'quota.json'));
+        const budget = new RunBudget(trusted.budget, { ...systemClock, now });
+        visualDeps = { catalog, providers, quotaSnapshot, budget, createImages: pairs => createVisualImages(root, pairs) };
+        if (!flags.dryRun) {
+          const refs = visualCandidates(trusted, visualDeps, budget).models.map(entry => `${entry.provider}:${entry.id}`);
+          quotaSnapshot = await refreshQuota(providers, catalog, quotaSnapshot, refs, now);
+          visualDeps.quotaSnapshot = quotaSnapshot;
+        }
+        const recipients = visualCandidates(trusted, visualDeps, budget).models;
+        names = recipients.map(entry => `${entry.provider}:${entry.id} (${entry.family})`).join(', ') || 'none';
+        if (!flags.dryRun) io.err(`quorum: --visual sends app screenshots (test data only) to: ${runtimeText(names, trusted.runtime!)}\n`);
+      } catch {
+        visualDeps = undefined;
+        visual.notes.push('visual review unavailable: provider initialization failed');
+        visual.incompleteFlows = trusted.runtime!.flows!.map(flow => runtimeText(flow.name, trusted.runtime!));
+        visual.notes.push('visual coverage incomplete: provider unavailable');
+        io.err('quorum: visual review unavailable: provider initialization failed\n');
+      }
+      if (flags.dryRun) {
+        const families = trusted.runtime!.visual?.allowedFamilies ?? ['anthropic', 'google', 'openai', 'local'];
+        const maxCalls = Math.min(visualMaxCalls(trusted.runtime!), trusted.budget.maxCalls);
+        const imagesPerCall = Math.max(0, ...trusted.runtime!.flows!.map(flow => Math.min(10, flow.steps.filter(step =>
+          ['goto', 'click', 'press', 'waitForUrl', 'waitForSelector'].some(action => action in step)).length) * 2));
+        // Retries also transmit images and consume calls; never understate the consent ceiling.
+        io.out(`Visual review plan (no commands run):\n  Maximum model calls: ${maxCalls}\n  Maximum images: ${maxCalls * imagesPerCall} (upper bound including corroboration and retries)\n  Allowed families: ${families.join(', ') || 'none'}\n  Screenshot recipients: ${runtimeText(names, trusted.runtime!)}\n`);
+      }
+    }
     if (flags.dryRun) return planned;
     const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner });
     const runId = `qrm-${randomUUID()}`;
     const evidence = await runRuntimeEvidence(context, trusted, { root, runId, gitRunner: runner,
       containerRunner: dependencies.containerRunner ?? runCommand, now,
       warn: message => io.err(`quorum: ${message}\n`), announce: message => io.err(message) });
-    const runtime = buildRuntimeReport(evidence, trusted.runtime!, { strictFlows: flags.strictFlows === true });
+    if (visualDeps) visual = await runVisualReview(evidence, trusted, visualDeps);
+    const runtime = buildRuntimeReport(evidence, trusted.runtime!, { strictFlows: flags.strictFlows === true, visual });
     const result: ReviewResult = {
       runtime, runId, timestamp: new Date(now()).toISOString(), mode, range,
       headSha: head, baseSha: context.mergeBaseCommit ?? context.baseCommit, checks: null,
@@ -232,22 +295,9 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     ...(deterministicOnly ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
   }) : undefined;
   if (evidence) context.refactorSummary = evidence.summary;
-  const providers = dependencies.providers ?? new Map<string, ProviderAdapter>([['agy', new AgyProvider()], ['codex', new CodexProvider()], ['claude', new ClaudeProvider()], ['qwen', new QwenProvider({ ...config.qwen, fetch: dependencies.fetch })]]);
-  const readings: Record<string, QuotaSnapshot[string]> = { ...snapshot };
-  const groups = new Set<string>();
-  for (const ref of deterministicOnly ? [] : [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()]) {
-    const model = parseModelRef(ref, catalog);
-    const entry = catalog.find(item => item.provider === model.provider && item.id === model.model)!;
-    if (groups.has(entry.quotaGroup)) continue;
-    groups.add(entry.quotaGroup);
-    const provider = providers.get(entry.provider);
-    if (!provider) continue;
-    try {
-      const quota = await provider.getQuota(entry.id);
-      readings[entry.quotaGroup] = { remainingPercent: quota === 'unknown' ? 'unknown' : quota.remainingPercent, timestamp: new Date(now()).toISOString() };
-    } catch { readings[entry.quotaGroup] = { remainingPercent: 'unknown', timestamp: new Date(now()).toISOString() }; }
-  }
-  snapshot = readings;
+  const providers = reviewProviders(config, dependencies);
+  snapshot = await refreshQuota(providers, catalog, snapshot,
+    deterministicOnly ? [] : [...Object.values(config.tiers).flat(), ...Object.values(config.escalate.routes ?? {}).flat()], now);
   let checks: ReviewResult['checks'] = null;
   if (!flags.noChecks && mode !== 'refactor') {
     if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);

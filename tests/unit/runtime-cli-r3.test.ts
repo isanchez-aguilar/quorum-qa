@@ -7,6 +7,8 @@ import { createReviewWorktree } from '../../src/worktree/index.js';
 import type { CommandRunner } from '../../src/types/index.js';
 import type { Observation } from '../../src/runtime/report.js';
 import { createHash } from 'node:crypto';
+import { FakeProvider } from '../../src/providers/fake.js';
+import type { CatalogEntry } from '../../src/types/index.js';
 
 vi.mock('../../src/worktree/index.js', () => ({ createReviewWorktree: vi.fn() }));
 vi.mock('../../src/checks/resolver.js', () => ({ resolveCommand: (file: string, args: string[]) => ({ file, args }) }));
@@ -22,14 +24,14 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-async function execute(behavior: string, flags: string[] = [], screenshots = false) {
+async function execute(behavior: string, flags: string[] = [], screenshots = false, families = 0) {
   let out = ''; let err = ''; let runs = 0;
   const forbidden = vi.fn(async () => { throw new Error('must not run'); });
   const gitRunner: CommandRunner = async (_file, args) => {
     expect(args).not.toContain('worktree');
     let stdout = '';
     if (args.includes('rev-parse') || args.includes('merge-base')) stdout = args.includes('--show-toplevel') ? root : 'a'.repeat(40);
-    if (args.includes('show') && args.some(arg => arg.endsWith(':quorum.config.json'))) stdout = JSON.stringify({ checks: [], runtime: {
+    if (args.includes('show') && args.some(arg => arg.endsWith(':quorum.config.json'))) stdout = JSON.stringify({ checks: [], tiers: { visual: ['agy:gemini-4-argon-high', 'claude:sonnet'] }, runtime: {
       start: ['node', 'server.cjs'], readyUrl: 'http://localhost:4173/', screenshots,
       flows: [{ name: 'home', steps: [{ goto: '/' }, { fill: 'input', value: 'PRIVATE_VALUE' }] }],
     } });
@@ -49,16 +51,62 @@ async function execute(behavior: string, flags: string[] = [], screenshots = fal
       })) };
     const data = Buffer.from([255, 216, 255, 1]);
     const shot = { flow: 'home', step: 0, mime: 'image/jpeg', bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), data: data.toString('base64') };
-    return { ...result, stdout: (screenshots ? args.at(-2)! + 'IMG ' + JSON.stringify(shot) + '\n' : '') + args.at(-2)! + JSON.stringify(payload) };
+    return { ...result, stdout: (screenshots || flags.includes('--visual') ? args.at(-2)! + 'IMG ' + JSON.stringify(shot) + '\n' : '') + args.at(-2)! + JSON.stringify(payload) };
   };
+  const finding = JSON.stringify([{ file: 'home/0', line: 1, severity: 'IMPORTANT', confidence: 0.9,
+    trigger: 'layout-break', impact: 'overlapping boxes and missing primary button', evidence_quote: 'boxes', fix: 'restore layout' }]);
+  const providers = new Map([
+    ['agy', new FakeProvider('agy', 'google', forbidden, { 'gemini-4-argon-high': [finding] })],
+    ['claude', new FakeProvider('claude', 'anthropic', forbidden, { sonnet: [finding] })],
+  ].slice(0, families) as Array<[string, FakeProvider]>);
+  const catalog: CatalogEntry[] = [{ provider: 'agy', id: 'gemini-4-argon-high', family: 'google', defaultTier: 'visual', quotaGroup: 'google', supportsImages: true },
+    { provider: 'claude', id: 'sonnet', family: 'anthropic', defaultTier: 'visual', quotaGroup: 'anthropic', supportsImages: true }];
+  for (const provider of providers.values()) {
+    vi.spyOn(provider, 'getQuota'); vi.spyOn(provider, 'probe');
+  }
   const code = await main(['review', '--mode', 'runtime', '--diff', 'main...HEAD', '--out', 'runtime.md', '--sarif', 'runtime.sarif', ...flags], {
     out: text => { out += text; }, err: text => { err += text; },
   }, { repoRoot: root, gitRunner, containerRunner, checkRunner: forbidden, contextRunner: forbidden, fetch: forbidden,
-    appendLedger: forbidden, appendFindings: forbidden, providers: new Map() });
+    appendLedger: forbidden, appendFindings: forbidden, get providers() { if (families === -1) throw new Error('PRIVATE_VALUE'); return providers; }, catalog });
   expect(forbidden).not.toHaveBeenCalled();
   expect(out + err).not.toContain('PRIVATE_VALUE');
-  return { code, out, err };
+  return { code, out, err, providers, runs };
 }
+it.each([1, 2])('reviews layout-break through main with %i fake families', async families => {
+  const result = await execute('layout-break', ['--visual', '--json'], false, families);
+  expect(result.code, result.err).toBe(0);
+  const json = JSON.parse(result.out);
+  expect(json.runtime.verdict).toBe(families === 2 ? 'SUSPECT' : 'NO NEW RUNTIME PROBLEMS FOUND');
+  expect(json.runtime.visual.calls).toBe(families); expect(json.runtime.shots).toHaveLength(2);
+  expect(await readFile(path.join(root, 'runtime.md'), 'utf8')).toContain('## Visual review (advisory)');
+  expect(result.err).toContain('agy'); expect(result.err).toContain('google');
+});
+it('prints visual maxima and recipients without running anything', async () => {
+  const result = await execute('layout-break', ['--visual', '--dry-run'], false, 2);
+  expect(result.code, result.err).toBe(0); expect(result.runs).toBe(0);
+  expect(result.out).toContain('Maximum model calls: 2'); expect(result.out).toContain('Maximum images:');
+  expect(result.out).toContain('Allowed families:'); expect(result.out).toContain('agy');
+  for (const provider of result.providers.values()) {
+    expect(provider.calls).toHaveLength(0); expect(provider.getQuota).not.toHaveBeenCalled(); expect(provider.probe).not.toHaveBeenCalled();
+  }
+});
+it('degrades to a note without image-capable providers', async () => {
+  const result = await execute('good', ['--visual', '--json']);
+  expect(result.code, result.err).toBe(0);
+  expect(JSON.parse(result.out).runtime.notes.join(' ')).toContain('visual review unavailable');
+});
+it('keeps deterministic output when provider construction throws', async () => {
+  const result = await execute('good', ['--visual', '--json'], false, -1);
+  expect(result.code, result.err).toBe(0); expect(JSON.parse(result.out).runtime.visual.notes).toContain('visual review unavailable: provider initialization failed');
+});
+it('never accesses providers without visual, including when screenshots are enabled', async () => {
+  expect((await execute('good', ['--json'], true, -1)).code).toBe(0);
+});
+it.each([['review', '--mode', 'feature'], ['review', '--mode', 'refactor'], ['doctor']])('rejects visual outside runtime: %j', async (...args) => {
+  let err = '';
+  expect(await main([...args, '--visual'], { out: () => {}, err: text => { err += text; } })).toBe(2);
+  expect(err).toContain('--visual requires runtime mode.');
+});
 it.each([
   ['good', 0, 'NO NEW RUNTIME PROBLEMS FOUND'], ['console-error', 1, 'NEW RUNTIME PROBLEMS'],
   ['http500', 1, 'NEW RUNTIME PROBLEMS'], ['blank', 1, 'NEW RUNTIME PROBLEMS'],
