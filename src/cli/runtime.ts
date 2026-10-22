@@ -1,6 +1,7 @@
 import type { RuntimeConfig } from '../runtime/config.js';
 import { DEFAULT_RUNTIME_IMAGE } from '../runtime/image.js';
 import type { RuntimeEvidence } from '../runtime/run.js';
+import type { RuntimeComparison } from '../runtime/compare.js';
 import { UsageError } from './args.js';
 import type { CliIo } from './index.js';
 
@@ -23,27 +24,27 @@ export function runtimeReview(config: RuntimeConfig | undefined, dryRun: boolean
   return 0;
 }
 
-export function printRuntimeEvidence(evidence: RuntimeEvidence, json: boolean, io: CliIo): number {
-  const sides = Object.fromEntries((['base', 'head'] as const).map(side => {
-    const result = evidence[side];
-    return [side, result ? {
-      flows: Object.keys(result.stable.flows).length,
-      completedRuns: result.report.runs.filter(run => run.completed).length,
-      stableSignatures: Object.fromEntries(Object.entries(result.stable.flows).map(([flow, signatures]) => [flow, signatures.size])),
-      flaky: result.stable.flaky, incomplete: result.stable.incomplete, durationMs: result.durationMs,
-    } : null];
-  }));
-  const message = 'runtime mode: comparison and verdict arrive in R3';
-  if (json) io.out(JSON.stringify({ available: evidence.available, ...sides, reasons: evidence.reasons, notes: evidence.notes, message, exitCode: 2 }, null, 2) + '\n');
-  else {
-    io.out('Runtime evidence (interim):\n');
-    for (const side of ['base', 'head']) {
-      const result = sides[side];
-      io.out(`  ${side}: ${result ? `${result.flows} flows; ${result.completedRuns} completed runs; stable signatures ${JSON.stringify(result.stableSignatures)}; flaky ${JSON.stringify(result.flaky)}; incomplete ${JSON.stringify(result.incomplete)}` : 'unavailable'}\n`);
-    }
-    for (const reason of evidence.reasons) io.out(`  Reason: ${reason}\n`);
-    for (const note of evidence.notes) io.out(`  Note: ${JSON.stringify(note)}\n`);
+export type RuntimeVerdict = 'NEW RUNTIME PROBLEMS' | 'SUSPECT' | 'NO NEW RUNTIME PROBLEMS FOUND' | 'UNKNOWN';
+export interface RuntimeVerdictResult { verdict: RuntimeVerdict; exitCode: number; reasons: string[] }
+export function evaluateRuntimeVerdict(evidence: RuntimeEvidence, comparison: RuntimeComparison | undefined,
+  { strictFlows }: { strictFlows: boolean }): RuntimeVerdictResult {
+  const reasons = [...evidence.reasons];
+  if (!evidence.available) reasons.push('Runtime evidence unavailable.');
+  for (const side of ['base', 'head'] as const) {
+    if (!evidence[side]) reasons.push(`${side}: runtime evidence missing.`);
+    else for (const flow of evidence[side].stable.incomplete) reasons.push(`${side}: incomplete flow ${flow}.`);
   }
-  io.err(message + '\n');
-  return 2;
+  if (!comparison) reasons.push('Runtime comparison unavailable.');
+  for (const item of comparison?.incomplete ?? []) reasons.push(`${item.side}: incomplete flow ${item.flow}.`);
+  if (comparison?.uncoveredFlows.length) reasons.push(`Uncovered flows: ${comparison.uncoveredFlows.join(', ')}.`);
+  const unknown = reasons.length > 0;
+  const count = comparison?.newAtHead.length ?? 0;
+  if (count) reasons.push(`${count} new problem(s) confirmed at head.`);
+  if (comparison?.flowBroke.length) reasons.push(`Flows broke at head: ${comparison.flowBroke.map(item => item.flow).join(', ')}${strictFlows ? ' (--strict-flows)' : ''}.`);
+  if (comparison?.flaky.length) reasons.push(`Flaky flows: ${comparison.flaky.map(item => `${item.side}: ${item.flow}`).join(', ')}.`);
+  const unique = [...new Set(reasons)];
+  if (unknown) return { verdict: count ? 'NEW RUNTIME PROBLEMS' : 'UNKNOWN', exitCode: count ? 1 : 2, reasons: unique };
+  if (count || strictFlows && comparison!.flowBroke.length) return { verdict: 'NEW RUNTIME PROBLEMS', exitCode: 1, reasons: unique };
+  if (comparison!.flowBroke.length || comparison!.flaky.length) return { verdict: 'SUSPECT', exitCode: 0, reasons: unique };
+  return { verdict: 'NO NEW RUNTIME PROBLEMS FOUND', exitCode: 0, reasons: [`no new problems found in flows: ${comparison!.coveredFlows.join(', ')}`] };
 }

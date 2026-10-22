@@ -37,6 +37,7 @@ export interface ParsedFlags {
   mutation?: boolean;
   deterministicOnly?: boolean;
   allowApiChange?: boolean;
+  strictFlows?: boolean;
 }
 
 export interface ParsedArgs {
@@ -46,10 +47,11 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
+type BooleanFlag = 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
 type ValueFlag = 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
+  'strict-flows': 'strictFlows',
   mutation: 'mutation',
   help: 'help',
   version: 'version',

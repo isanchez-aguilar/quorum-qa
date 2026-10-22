@@ -33,8 +33,9 @@ import type { CliIo } from './index.js';
 import { UsageError, type ParsedFlags } from './args.js';
 import { runRefactorEvidence, resolveRefactorTestCommand } from '../refactor/index.js';
 import { evaluateRefactorVerdict } from './refactor.js';
-import { runtimeReview, printRuntimeEvidence } from './runtime.js';
+import { runtimeReview } from './runtime.js';
 import { runRuntimeEvidence } from '../runtime/run.js';
+import { buildRuntimeReport } from '../reporters/runtime.js';
 
 export interface ReviewDependencies {
   contextRunner?: CommandRunner;
@@ -72,6 +73,7 @@ async function copyImages(directory: string, destination: string): Promise<strin
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
   const mode = flags.mode ?? 'feature';
+  if (flags.strictFlows && mode !== 'runtime') throw new UsageError('--strict-flows requires runtime mode.');
   if (flags.format && mode !== 'runtime') throw new UsageError('--format requires runtime mode.');
   if (mode === 'runtime') {
     if (flags.noChecks) throw new UsageError('runtime mode must run the app; --no-checks is not supported.');
@@ -122,7 +124,16 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const evidence = await runRuntimeEvidence(context, trusted, { root, gitRunner: runner,
       containerRunner: dependencies.containerRunner ?? runCommand, now,
       warn: message => io.err(`quorum: ${message}\n`), announce: message => io.err(message) });
-    return printRuntimeEvidence(evidence, flags.json === true || flags.format === 'json', io);
+    const runtime = buildRuntimeReport(evidence, trusted.runtime!, { strictFlows: flags.strictFlows === true });
+    const result: ReviewResult = {
+      runtime, runId: `qrm-${randomUUID()}`, timestamp: new Date(now()).toISOString(), mode, range,
+      headSha: head, baseSha: context.mergeBaseCommit ?? context.baseCommit, checks: null,
+      criteria: [], inventory: [], families: [], reviewedFamilies: [], cacheHits: 0,
+      findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [], exitCode: runtime.exitCode,
+      coverage: { reviewedFiles: [], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [],
+        complete: evidence.available && !!runtime.comparison && !runtime.comparison.incomplete.length && !runtime.comparison.uncoveredFlows.length },
+    };
+    return outputReview(result, flags, root, io);
   }
   const context = await buildReviewContext({ base: parts[1]!, head, cwd: root, mode, runner, exactBase: mode !== 'refactor' && parts[2] === '..' });
   if (mode === 'bughunt') context.radius = flags.radius ?? 40;
@@ -323,6 +334,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     try { await verificationTree?.cleanup(); } catch (error) { warn(`Review worktree cleanup failed: ${String(error)}`); }
   }
   result.warnings.push(...warnings.filter(w => !result.warnings.includes(w)));
+  return outputReview(result, flags, root, io);
+}
+
+async function outputReview(result: ReviewResult, flags: ParsedFlags, root: string, io: CliIo): Promise<number> {
   async function save(file: string, render: () => string, label: string): Promise<void> {
     try { await atomicWrite(path.resolve(root, file), render(), root); }
     catch (error) {
@@ -330,9 +345,9 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
       result.warnings.push(message); io.err(`quorum: ${message}\n`);
     }
   }
-  await save(flags.out ?? `.quorum/reports/${runId}.md`, () => generateMarkdownReport(result), 'Report');
+  await save(flags.out ?? `.quorum/reports/${result.runId}.md`, () => generateMarkdownReport(result), 'Report');
   if (flags.sarif) await save(flags.sarif, () => generateSarifReport([...result.findings, ...result.unconfirmed.filter(f => f.family !== 'local')], result), 'SARIF');
-  if (flags.json) io.out(JSON.stringify(result, null, 2) + '\n');
+  if (flags.json || flags.format === 'json') io.out(JSON.stringify(result, null, 2) + '\n');
   else io.out(generateMarkdownReport(result));
   return result.exitCode;
 }
