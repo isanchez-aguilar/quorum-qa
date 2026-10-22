@@ -60,6 +60,18 @@ it.each([
   ['token QWxhZGRpbjpvcGVuIHNlc2FtZQ==', 'token [token]'],
   ['token abcd/efgh/ijkl/mnop/qrst/uvwx', 'token [token]'],
   ['file=C:/synthetic/build/app.js:1:2', 'file=app.js'],
+  // Relative URLs carry their secrets after ? or #; they were left intact.
+  ['GET /api/user?token=SECRET_KEY 401 Unauthorized', 'GET user 401 Unauthorized'],
+  ['failed to fetch /auth/callback?code=SECRET#access_token=SECRET', 'failed to fetch callback'],
+  ['call fetch?id=77&token=abc now', 'call fetch now'],
+  ['what? really', 'what? really'],
+  // UNC and extended Windows paths reduce to the base name.
+  [String.raw`at f (\\server\share\build\app.js:1:2)`, 'at f (app.js)'],
+  [String.raw`at f (\\?\C:\project\secret\app.js:1:2)`, 'at f (app.js)'],
+  // Long identifiers made of words are not secrets: two different selectors must stay different.
+  ['No element matching "user-settings-billing-container"', 'No element matching "user-settings-billing-container"'],
+  ['No element matching "navigation-menu-profile-wrapper"', 'No element matching "navigation-menu-profile-wrapper"'],
+  ['jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9', 'jwt [token]'],
 ])('scrubs display text exactly: %s', (input, output) => {
   expect((signatures as unknown as { scrubForDisplay: (text: string) => string }).scrubForDisplay(input)).toBe(output);
 });
