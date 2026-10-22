@@ -1,3 +1,4 @@
+import { fastest } from '../helpers/timing.js';
 import { expect, it } from 'vitest';
 import { compareApi, scanExports } from '../../src/refactor/api.js';
 import { compareTests } from '../../src/refactor/index.js';
@@ -163,7 +164,7 @@ it.each(['main', 'module', 'types', 'typings', 'exports', 'imports', 'bin', 'ver
   'sideEffects', 'browser', 'typesVersions', 'peerDependencies', 'workspaces'])('compares package field %s', field => {
   expect(compareApi(new Map(), new Map(), { [field]: { a: ['before'] } }, { [field]: { a: ['after'] } }))
     .toMatchObject({ breaking: true, packageChanges: [{ field, before: { a: ['before'] }, after: { a: ['after'] } }] });
-  expect(compareApi(new Map(), new Map(), { [field]: { a: 1, b: [2] } }, { [field]: { b: [2], a: 1 } }).packageChanges).toEqual([]);
+  expect(compareApi(new Map(), new Map(), { [field]: { a: 1, b: [2] } }, { [field]: { b: [2], a: 1 } }).packageChanges).toHaveLength(['exports', 'imports', 'typesVersions'].includes(field) ? 1 : 0);
 });
 it('reports added, removed and changed members in Markdown and SARIF', () => {
   const api = compare('export class S { old(); run(a: number); }', 'export class S { fresh(); run(a: string); }');
@@ -194,7 +195,5 @@ it.each([
   ['commas', pad('export class X {' + ','.repeat(256 * 1024))],
   ['quoted braces', pad('export class X { value: "{ }"; run() { const a = "}"; const b = `x ${ { a: "}" } }`; } }')],
 ])('bounds adversarial skeleton capture: %s', (_label, source) => {
-  const start = performance.now();
-  compare(source);
-  expect(performance.now() - start).toBeLessThan(300);
+  expect(fastest(() => { compare(source); })).toBeLessThan(300);
 });

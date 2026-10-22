@@ -3507,3 +3507,39 @@ UNKNOWN" contradicts the intended rule for a stable same-step failure, so accept
 should be written from the verdict table rather than from the summary.
 The deterministic `pnpm test` check failed once inside the review's disposable worktree and passed
 in six later runs of that worktree; the failing test could not be identified from the stored report.
+
+## Review fixes batch B
+
+- **M1:** Refactor verdicts include deterministic rule IDs and locations. Error matches
+  force NOT EQUIVALENT / exit 1; warnings make complete evidence SUSPECT / exit 0.
+  This also applies to deterministic-only reviews. Timed-out or partially scanned
+  rules cannot produce a clean verdict.
+- **M2:** New test failures include added failures and skipped-to-failed transitions.
+  Reasons and the bounded context summary list the first few new failures, while
+  `regressions` retains passed-to-failed semantics for existing reporters.
+  Passed-to-skipped tests and failures at
+  both revisions make otherwise complete evidence SUSPECT.
+- **M3:** Package `exports`, `imports`, and `typesVersions` preserve object key order
+  recursively; other package fields retain order-insensitive object comparison.
+- **M4:** Enum skeletons retain implicit values, including offsets after explicit
+  numeric initializers. Reordering, inserting, or removing earlier members detects
+  changed values; explicitly initialized members remain order-insensitive. Unknown
+  initializer expressions retain symbolic offsets and mark implicit values incomplete.
+- **M5:** CodeGraph symbols use delimiter scans instead of overlapping regex
+  quantifiers. Tests cover 256 KiB and 1 MiB malformed lines and best-of-five
+  64-to-256 KiB scaling. The regex audit also reproduced backtracking on Unicode
+  line separators in acceptance criteria and contract clauses; those patterns now
+  separate whitespace from content. Configurable rule regexes remain worker-bounded.
+- **K4:** `doctor --dry-run --probe` fails with an explicit UsageError before any
+  diagnostics. Plain doctor and help/version also reject ignored dry-run flags;
+  rules propose already rejected them and now uses the common error. Review modes
+  retain their existing dry-run plans.
+- **T1:** Shared `fastest` and `expectLinear` helpers filter scheduling noise using
+  repeated measurements without increasing performance bounds. Eligible refactor,
+  contract, and runtime adversarial tests retain their original 50–300 ms limits.
+  Tests outside this batch's ownership and bounds above 1000 ms are unchanged.
+  A temporary quadratic mutation of the API scanner failed the converted
+  50,000-member skeleton test (best of three: 3495 ms against 300 ms); the
+  unmodified scanner passed after the temporary probe files were removed.
+  With a one-off synthetic 400 ms scheduling delay, the original single-sample
+  test failed (518 ms) while the converted test passed at the same 300 ms bound.

@@ -1,5 +1,6 @@
 import type { CascadeResult } from '../cascade/index.js';
 import type { RefactorEvidence } from '../refactor/index.js';
+import type { RuleRun } from '../rules/index.js';
 
 export type RefactorVerdict = 'NOT EQUIVALENT' | 'SUSPECT' | 'NO BEHAVIOUR CHANGE FOUND' | 'UNKNOWN';
 
@@ -7,8 +8,13 @@ export function evaluateRefactorVerdict(
   evidence: RefactorEvidence,
   cascade: Pick<CascadeResult, 'findings' | 'unconfirmed' | 'errors' | 'coverage'>,
   allowApiChange = false,
+  rules?: RuleRun | null,
 ): { verdict: RefactorVerdict; exitCode: number; reasons: string[] } {
   const reasons = [...evidence.reasons];
+  for (const result of rules?.results ?? []) {
+    if (result.totalMatches) reasons.push(`Rule ${result.rule.id} (${result.rule.severity}) matched: ${result.matches.slice(0, 5).map(match => `${match.file}:${match.line}`).join(', ')}`);
+  }
+  const failingRule = rules?.passed === false;
   if (evidence.mutation?.survived.length) reasons.push(`${evidence.mutation.survived.length} of ${evidence.mutation.attempted} sampled mutants of the changed lines survived the test suite: the tests do not pin this code (${evidence.mutation.survived.slice(0, 3).map(item => `${item.file}:${item.line} ${item.operator}`).join(', ')})`);
   if (evidence.api.incomplete || evidence.api.unscanned?.length) {
     for (const note of evidence.api.notes.length ? evidence.api.notes : ['Public API scan is incomplete.']) reasons.push(note);
@@ -21,13 +27,18 @@ export function evaluateRefactorVerdict(
   const verified = [...cascade.findings, ...cascade.unconfirmed.filter(finding => finding.family !== 'local')];
   const blocker = verified.some(finding => finding.verified && finding.severity === 'BLOCKER');
   if (blocker) reasons.push('A verified BLOCKER is a suspected behaviour change.');
-  if (!evidence.available) return { verdict: blocker ? 'NOT EQUIVALENT' : 'UNKNOWN', exitCode: blocker ? 1 : 2, reasons };
-  if (evidence.tests.regressions.length) reasons.push(`${evidence.tests.regressions.length} tests passed at base and failed at head.`);
+  if (!evidence.available) return { verdict: blocker || failingRule ? 'NOT EQUIVALENT' : 'UNKNOWN', exitCode: blocker || failingRule ? 1 : 2, reasons };
+  const newFailures = evidence.tests.newFailures ?? evidence.tests.regressions;
+  if (newFailures.length) reasons.push(`${newFailures.length} tests fail at head that did not fail at base: ${newFailures.slice(0, 5).map(test => `${test.file}: ${test.name}`).join(', ')}`);
+  const newlySkipped = evidence.tests.skippedChanges.filter(test => test.before === 'passed' && test.after === 'skipped');
+  if (newlySkipped.length) reasons.push(`${newlySkipped.length} tests were passing and are now skipped: ${newlySkipped.slice(0, 5).map(test => test.name).join(', ')}`);
+  if (evidence.tests.failingBoth.length) reasons.push(`${evidence.tests.failingBoth.length} tests fail at both base and head: ${evidence.tests.failingBoth.slice(0, 5).map(test => test.name).join(', ')}`);
   if (evidence.api.breaking && !allowApiChange) reasons.push('The public API has breaking changes.');
-  if (blocker || evidence.tests.regressions.length || evidence.api.breaking && !allowApiChange) {
+  if (blocker || failingRule || newFailures.length || evidence.api.breaking && !allowApiChange) {
     return { verdict: 'NOT EQUIVALENT', exitCode: 1, reasons };
   }
-  if (cascade.errors.length || !cascade.coverage.complete) {
+  if (cascade.errors.length || !cascade.coverage.complete || rules?.results.some(result => result.timedOut || result.skippedLongLines)) {
+    reasons.push(...(rules?.notes ?? []));
     for (const error of cascade.errors) reasons.push(error);
     reasons.push('Review coverage is incomplete.');
     return { verdict: 'UNKNOWN', exitCode: 2, reasons };
