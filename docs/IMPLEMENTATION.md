@@ -3559,3 +3559,18 @@ in six later runs of that worktree; the failing test could not be identified fro
   warnings remain deduplicated per file.
 - Regression coverage reproduces all four defects, checks eight concurrent cache
   instances, and times 256 KiB comment inputs with the shared `fastest` helper.
+
+**Second self-review, larger budget (2026-10-22).** Same range and criteria (two criteria reworded:
+a stable same-step failure is not UNKNOWN, and the provider's temporary image copy is by design),
+run with `budget.maxCalls: 40`, `maxMinutes: 30` on a base commit that carried that config.
+It used **13 calls**: 8 triage (`agy:gemini-3.8-flash-low`) and 5 confirmation (Codex x4 including one
+batch call, Claude Opus unavailable). Codex **rejected 3 findings** and the report ended with 1 BLOCKER
+(`visual.ts:100`, "`fill` values in the prompt"), 1 BLOCKER pending (`compare.ts:70`, infrastructure) and
+1 IMPORTANT (`compare.ts:50`, flow moved to another failing step). All three were checked against the
+code and are false positives: the prompt lists the *key* `fill` (the selector) but never `value`, and a
+test asserts the secret is absent; infrastructure failures make the flow `incomplete` through
+`stableObservations` and end UNKNOWN (test in `runtime-hardening`); a failure that moves to another step
+is `SUSPECT` by design (the verdict table). Compared with the first run (9 findings, 0 confirmations),
+the larger budget let the confirmation stage do its job: the reports are shorter and every surviving
+item is a single-model finding that Codex had not yet been asked about. Practical rule: for a range
+split into N chunks, set `budget.maxCalls` to at least 3 x N.
