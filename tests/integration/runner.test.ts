@@ -19,6 +19,16 @@ it('captures stdout, stderr and exit code', async () => {
     .toEqual({ stdout: 'hello', stderr: 'error', exitCode: 7 });
 });
 
+it('accepts a caller-supplied capture limit for a 2 MiB runtime report', async () => {
+  const size = 2 * MAX_OUTPUT_BYTES;
+  const result = await runCommand(process.execPath, ['-e', `process.stdout.write('x'.repeat(${size}))`], { maxOutputBytes: size + 4096 });
+  expect(result.stdout.length).toBe(size);
+});
+
+it.each([0, -1, Infinity, 1.5, 17 * MAX_OUTPUT_BYTES])('rejects an invalid capture limit %s before spawning', async maxOutputBytes => {
+  await expect(runCommand('must-not-spawn', [], { maxOutputBytes })).rejects.toThrow('maxOutputBytes');
+});
+
 it('kills a sleeping process at the deadline', async () => {
   await expect(runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 200 }))
     .rejects.toBeInstanceOf(CommandTimeoutError);

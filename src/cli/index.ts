@@ -52,6 +52,7 @@ Options for review:
                              or a family (anthropic, openai, google, local)
   --since <sha>              Re-review only the changes since this commit
   --dry-run                  Print the plan and spend nothing
+  --format json              Runtime only: print the interim evidence as JSON
   --reproduce                Try to reproduce BLOCKERs with a failing test
   --allow-unproven           Waive BLOCKERs only without cross-family confirmation
                              Cross-family BLOCKERs fail even when reproduction is unproven

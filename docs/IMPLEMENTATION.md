@@ -3204,3 +3204,86 @@ tests/unit/runtime-app.test.ts --maxWorkers 2`, rebuilt successfully and passed
 repository test script with reduced concurrency and the explicit network-suite
 exclusion, not a claim that the unrestricted `pnpm test` ran. Changes remain
 uncommitted on `feat/runtime-r1`.
+
+## v2 runtime R2 as built
+
+`src/runtime/run.ts` collects evidence at the merge-base and head in disposable
+review worktrees, always attempting their cleanup. Docker/Podman detection uses
+the existing command resolver. Missing infrastructure, preparation failures,
+timeouts and invalid reports leave evidence unavailable; none implies a pass.
+No provider calls or ledger writes occur in this lane.
+
+`image.ts` pins the 3.6 GB Playwright 1.64.0 Noble image by index digest and the
+matching `playwright-core` version/integrity. The image supplies browsers, not
+the npm package. A named volume keyed by image and integrity holds that package.
+Preparation checks its marker, lockfile integrity and installed version. A fresh
+volume is chowned offline as root with only CAP_CHOWN, then npm installs as
+1001:1001 with scripts disabled and network enabled. Verification and marking
+are offline; mismatches remove the volume. Completed volumes are reused.
+An image override warns that browser/package compatibility is unverified.
+
+`prepareDependencies` is extracted from reproduction isolation without changing
+its default UID or cache names. Runtime supplies its image and UID 1001; a UID
+suffix isolates its preparation images and dependency volumes. Existing frozen
+lockfile installs, metadata hashes, install-script consent, limits and cache
+markers are reused. The generated preparation image adds the pinned package
+manager to the runtime image. Image construction and dependency installation
+can access the network; setup and collection cannot. Setup argv commands run in
+containers with a writable disposable worktree and dependency volume. Collection
+then mounts both read-only, with the existing runner-cache tmpfs overlays.
+
+The Quorum-owned `runner.cjs`, collector and bounded plan live in a temporary
+read-only `/quorum/bin` mount. The plan contains only readiness URL, timeouts,
+screenshot flag and validated flows; start argv is a separate argument. The
+runner spawns without a shell in `/work`, in its own process group, with only
+PATH, HOME, TMPDIR, XDG_CACHE_HOME, NODE_ENV, optional PORT and CI. It polls the
+loopback readiness URL every 250 ms, accepts statuses below 500 without following
+redirects, and bounds individual requests. App stdout is discarded; stderr is
+retained only as a bounded, control-character-sanitized error tail with fill
+values redacted. Teardown signals the whole app group with SIGTERM, waits three
+seconds, and signals SIGKILL even if the leader already exited.
+
+Collection uses UID/GID 1001, no network, all capabilities dropped,
+no-new-privileges, a read-only root, tmpfs `/tmp` and 512 MiB `/dev/shm`, configured
+memory/pids and two CPUs. The Playwright volume is read-only at
+`/quorum/playwright`; the collector uses its fixed absolute package path.
+The outer timeout is readiness + twice each flow deadline + 30 seconds, capped
+by the global remaining budget. Containers have unique names; timeout kills
+them by name and cleanup force-removes them. Process capture allows 2 MiB plus
+transport overhead while report parsing retains the strict 2 MiB cap. Parsing
+uses only the last fresh marker, validates coverage through `parseRuntimeReport`,
+redacts fill values from report strings and derives stable observations.
+
+The CLI preserves runtime dry-run and refuses `--no-checks`. Execution prints
+per-side flow/completion/stable-signature counts, flaky/incomplete flows and
+unavailability reasons. `--format json` and `--json` emit structured summaries.
+All executions still exit **2**, with `runtime mode: comparison and verdict
+arrive in R3`. Screenshots remain a forwarded plan option; this milestone does
+not add screenshot retention or comparison/verdict logic.
+
+New tests cover runner injection, readiness/errors, environment, process groups,
+marker transport, redaction, container argv, offline boundaries, integrity/cache,
+setup, cleanup, timeouts, volume identity and CLI JSON. Before implementation,
+the new runner/orchestration suites failed collection because their modules did
+not exist; no individual assertions ran then. The opt-in container test creates
+its own temporary Git repository and tests good, console-error, http500,
+external and blank behaviors at base/head. Only that synthetic repository gets
+Git writes. No dependencies were added to Quorum. Cross-family review is not
+run because this task forbids executing the provider CLIs.
+
+The opt-in command was attempted on Windows on 2026-10-21 with
+`$env:QUORUM_CONTAINER_TESTS='1'; pnpm exec vitest run tests/container/runtime.test.ts`.
+Vitest reported `Test Files 1 passed (1)` and `Tests 1 skipped (1)` (520 ms).
+The Docker probe was denied by the execution sandbox:
+`permission denied while trying to connect to the docker API at npipe:////./pipe/docker_engine`.
+The preflight therefore skipped before creating the temporary Git repository or
+installing packages. The five real-browser cases remain **unverified**, despite
+the image/daemon being present on the host. No permission changes or alternate
+daemon access were attempted.
+
+Final R2 local validation: `pnpm typecheck` passed; `pnpm test` rebuilt and passed
+75 files / 2003 tests, with 8 skipped gates, in 161.78 seconds. Both
+`node --check src/runtime/runner.cjs` and `node --check src/runtime/collector.cjs`
+passed, as did `git -c core.safecrlf=false diff --check`. Changes remain
+uncommitted on the existing `feat/runtime-r2` branch. No Git write command was
+run against this checkout, and no provider CLI was executed.

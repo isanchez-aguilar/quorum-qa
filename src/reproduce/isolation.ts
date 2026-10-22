@@ -44,9 +44,9 @@ const READY_FILE = '/work/node_modules/.quorum-ready';
 // Directories that test runners write inside node_modules (vite bundles its config into .vite-temp).
 // They are created in the writable preparation step and covered by tmpfs in the test step, so the
 // dependency volume itself stays read-only. Bump LAYOUT when this list changes so old volumes rebuild.
-const RUNNER_CACHE_DIRS = ['.vite-temp', '.vite', '.vitest', '.cache'];
+export const RUNNER_CACHE_DIRS = ['.vite-temp', '.vite', '.vitest', '.cache'];
 const LAYOUT = 'layout-2';
-const PREPARATION_LIMITS = ['--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
+export const PREPARATION_LIMITS = ['--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
   '--memory', '2g', '--pids-limit', '512', '--cpus', '2', '--read-only', '--tmpfs', '/tmp'];
 
 // Hash names and raw bytes in stable order; never follow repository symlinks.
@@ -98,6 +98,120 @@ async function regularFile(root: string, name: string): Promise<string> {
   return readFile(file, 'utf8');
 }
 
+export interface PreparedDependencies { root: string; image: string; dependencyMount: string }
+type ContainerInvoke = (args: string[], limit?: number) => ReturnType<CommandRunner>;
+
+// Shared preparation; the caller owns runtime detection and deadlines.
+export async function prepareDependencies(worktreePath: string, config: QuorumConfig['reproduce'],
+  invoke: ContainerInvoke, runAuxiliary: (args: string[]) => ReturnType<CommandRunner>, networkOn: string,
+  options: { image?: string; user?: string; warn?: (message: string) => void } = {},
+): Promise<PreparedDependencies | IsolationResult> {
+  const user = options.user ?? '1000:1000';
+  let volume: string | undefined;
+  let createdVolume = false;
+  let preparationComplete = false;
+  let context: string | undefined;
+  try {
+    const root = path.resolve(worktreePath);
+    // Docker's --mount syntax treats commas as separators; reject rather than
+    // letting a repository name alter the mount configuration.
+    if (root.includes(',') || /[\r\n\0]/.test(root)) return failure('unsupported worktree mount path');
+    const modules = await lstat(path.join(root, 'node_modules')).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (modules && (modules.isSymbolicLink() || !modules.isDirectory())) return failure('node_modules must be a directory, not a symlink or file');
+    // The preparation step mounts the worktree read-only and the dependency volume at
+    // /work/node_modules; Docker can't create that mount point inside a read-only bind
+    // mount, so it must already exist. Git ignores an empty directory, so the worktree stays clean.
+    if (!modules) await mkdir(path.join(root, 'node_modules'));
+    const manifest = JSON.parse(await regularFile(root, 'package.json')) as { packageManager?: unknown };
+    const manager = typeof manifest.packageManager === 'string'
+      ? /^(pnpm|npm|yarn)@(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)(?:\+sha(?:224|256|384|512)\.[a-fA-F0-9]+)?$/.exec(manifest.packageManager)
+      : null;
+    if (!manager) return failure('preparation failed: packageManager must pin npm, pnpm or yarn to an exact version');
+    const managerName = manager[1]!;
+    const lockfile = managerName === 'pnpm' ? 'pnpm-lock.yaml' : managerName === 'npm' ? 'package-lock.json' : 'yarn.lock';
+    await regularFile(root, lockfile);
+    if (managerName === 'yarn' && !config.allowInstallScripts) {
+      const yarnConfig = await regularFile(root, '.yarnrc.yml').catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+        throw error;
+      });
+      // A bounded line scanner, not a YAML evaluator: only top-level keys.
+      if (yarnConfig.replace(/^\uFEFF/, '').split(/\r?\n/).some(line => /^(?:yarnPath|plugins|"(?:yarnPath|plugins)"|'(?:yarnPath|plugins)')[ \t]*:/.test(line))) {
+        return failure('yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)');
+      }
+    }
+    let image = options.image ?? config.image ?? DEFAULT_REPRODUCE_IMAGE;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$/.test(image)) return failure('preparation failed: invalid image reference');
+    if (!/@sha256:[a-f0-9]{64}$/i.test(image)) {
+      const pulled = await invoke(['pull', image]);
+      if (pulled.exitCode !== 0) return failure('preparation failed: image digest resolution');
+      const inspected = await invoke(['image', 'inspect', '--format', '{{json .RepoDigests}}', image]);
+      const digests: unknown = JSON.parse(inspected.stdout);
+      if (inspected.exitCode !== 0 || !Array.isArray(digests) || typeof digests[0] !== 'string'
+        || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$/i.test(digests[0])) return failure('preparation failed: image digest resolution');
+      image = digests[0];
+    }
+    const hash = await dependencyKey(root, lockfile, managerName, manager[2]!, image, config.allowInstallScripts === true);
+    const suffix = user !== '1000:1000' ? '-uid-' + user.replace(':', '-') : '';
+    const identity = `${hash}:${LAYOUT}${suffix}`;
+    const preparedImage = `quorum-prep:${hash}${suffix}`;
+    volume = `quorum-deps-${hash}${suffix}`;
+    context = await mkdtemp(path.join(os.tmpdir(), 'quorum-build-'));
+    // This context contains only this generated Dockerfile, never repository data.
+    await writeFile(path.join(context, 'Dockerfile'), `FROM ${image}\nRUN ${JSON.stringify(['npm', 'install', '-g', `${managerName}@${manager[2]}`])}\nRUN ${JSON.stringify(['mkdir', '-p', '/work/node_modules'])}\nRUN ${JSON.stringify(['chown', user, '/work/node_modules'])}\n`, { flag: 'wx' });
+    const imageExists = await invoke(['image', 'inspect', '--format', '{{ index .Config.Labels "quorum.preparation" }}', preparedImage]);
+    if (imageExists.exitCode !== 0 || imageExists.stdout.trim() !== identity) {
+      const build = await invoke(['build', '--network', networkOn, '--label', `quorum.preparation=${identity}`, '--tag', preparedImage, context]);
+      if (build.exitCode !== 0) return failure('preparation failed: image build');
+    }
+    const volumeExists = await invoke(['volume', 'inspect', volume]);
+    const dependencyMount = `type=volume,src=${volume},dst=/work/node_modules`;
+    const preparationMounts = ['--mount', `type=bind,src=${root},dst=/work,readonly`, '--mount', dependencyMount];
+    let reusable = false;
+    if (volumeExists.exitCode === 0) {
+      // A failed or interrupted install must never turn into a valid cache hit.
+      const ready = await runAuxiliary(['--rm', '--network', 'none', '--user', user, ...PREPARATION_LIMITS,
+        '--mount', `${dependencyMount},readonly`, preparedImage, 'node', '-e',
+        `process.exit(require('node:fs').readFileSync(${JSON.stringify(READY_FILE)}, 'utf8') === ${JSON.stringify(identity)} ? 0 : 1)`]);
+      reusable = ready.exitCode === 0;
+      if (!reusable) {
+        options.warn?.('Reproduction preparation: removing orphan dependency volume and rebuilding once.');
+        const removed = await invoke(['volume', 'rm', volume]);
+        if (removed.exitCode !== 0) return failure('preparation failed: orphan volume removal');
+      }
+    }
+    if (!reusable) {
+      const create = await invoke(['volume', 'create', volume]);
+      if (create.exitCode !== 0) return failure('preparation failed: dependency volume');
+      createdVolume = true;
+      const command = managerName === 'pnpm' ? ['pnpm', 'install', '--frozen-lockfile']
+        : managerName === 'npm' ? ['npm', 'ci'] : ['yarn', 'install', '--immutable'];
+      if (!config.allowInstallScripts) command.push(managerName === 'yarn' ? '--mode=skip-build' : '--ignore-scripts');
+      if (managerName === 'pnpm' && !config.allowInstallScripts) command.push('--ignore-pnpmfile');
+      const prepare = await runAuxiliary(['--rm', '--network', networkOn, '--user', user,
+        ...PREPARATION_LIMITS, '--workdir', '/work', ...preparationMounts, ...CACHE_ENV,
+        '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', preparedImage, ...command]);
+      if (prepare.exitCode !== 0) return failure('preparation failed: dependency installation');
+      const mark = await runAuxiliary(['--rm', '--network', 'none', '--user', user,
+        ...PREPARATION_LIMITS, '--mount', dependencyMount, preparedImage, 'node', '-e',
+        `const fs = require('node:fs'); for (const dir of ${JSON.stringify(RUNNER_CACHE_DIRS)}) fs.mkdirSync('/work/node_modules/' + dir, { recursive: true }); fs.writeFileSync(${JSON.stringify(READY_FILE)}, ${JSON.stringify(identity)})`]);
+      if (mark.exitCode !== 0) return failure('preparation failed: dependency cache marker');
+    }
+    preparationComplete = true;
+
+    return { root, image: preparedImage, dependencyMount };
+
+  } catch (error) {
+    return failure(error instanceof CommandTimeoutError ? 'container timeout' : `preparation failed: ${error instanceof Error ? error.message : 'invalid metadata'}`, error instanceof CommandTimeoutError);
+  } finally {
+    if (createdVolume && !preparationComplete && volume) await invoke(['volume', 'rm', volume], 5000).catch(() => undefined);
+    if (context) await rm(context, { recursive: true, force: true });
+  }
+}
+
 export async function runIsolatedTest(
   worktreePath: string,
   testFile: string,
@@ -141,104 +255,12 @@ export async function runIsolatedTest(
     }
   };
 
-  let volume: string | undefined;
-  let createdVolume = false;
-  let preparationComplete = false;
-  let context: string | undefined;
+  const relative = testFile.replaceAll('\\', '/');
+  if (!relative || relative.startsWith('/') || /[:\0]/.test(relative) || relative.split('/').includes('..')) return failure('invalid test path');
+  const prepared = await prepareDependencies(worktreePath, config, invoke, runAuxiliary, networkOn, options);
+  if (!('root' in prepared)) return prepared;
+  const { root, image: preparedImage, dependencyMount } = prepared;
   try {
-    const root = path.resolve(worktreePath);
-    // Docker's --mount syntax treats commas as separators; reject rather than
-    // letting a repository name alter the mount configuration.
-    if (root.includes(',') || /[\r\n\0]/.test(root)) return failure('unsupported worktree mount path');
-    const modules = await lstat(path.join(root, 'node_modules')).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
-    });
-    if (modules && (modules.isSymbolicLink() || !modules.isDirectory())) return failure('node_modules must be a directory, not a symlink or file');
-    // The preparation step mounts the worktree read-only and the dependency volume at
-    // /work/node_modules; Docker can't create that mount point inside a read-only bind
-    // mount, so it must already exist. Git ignores an empty directory, so the worktree stays clean.
-    if (!modules) await mkdir(path.join(root, 'node_modules'));
-    const relative = testFile.replaceAll('\\', '/');
-    if (!relative || relative.startsWith('/') || /[:\0]/.test(relative) || relative.split('/').includes('..')) {
-      return failure('invalid test path');
-    }
-    const manifest = JSON.parse(await regularFile(root, 'package.json')) as { packageManager?: unknown };
-    const manager = typeof manifest.packageManager === 'string'
-      ? /^(pnpm|npm|yarn)@(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)(?:\+sha(?:224|256|384|512)\.[a-fA-F0-9]+)?$/.exec(manifest.packageManager)
-      : null;
-    if (!manager) return failure('preparation failed: packageManager must pin npm, pnpm or yarn to an exact version');
-    const managerName = manager[1]!;
-    const lockfile = managerName === 'pnpm' ? 'pnpm-lock.yaml' : managerName === 'npm' ? 'package-lock.json' : 'yarn.lock';
-    await regularFile(root, lockfile);
-    if (managerName === 'yarn' && !config.allowInstallScripts) {
-      const yarnConfig = await regularFile(root, '.yarnrc.yml').catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
-        throw error;
-      });
-      // A bounded line scanner, not a YAML evaluator: only top-level keys.
-      if (yarnConfig.replace(/^\uFEFF/, '').split(/\r?\n/).some(line => /^(?:yarnPath|plugins|"(?:yarnPath|plugins)"|'(?:yarnPath|plugins)')[ \t]*:/.test(line))) {
-        return failure('yarn configuration runs repository code (set reproduce.allowInstallScripts to allow it)');
-      }
-    }
-    let image = config.image ?? DEFAULT_REPRODUCE_IMAGE;
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$/.test(image)) return failure('preparation failed: invalid image reference');
-    if (!/@sha256:[a-f0-9]{64}$/.test(image)) {
-      const pulled = await invoke(['pull', image]);
-      if (pulled.exitCode !== 0) return failure('preparation failed: image digest resolution');
-      const inspected = await invoke(['image', 'inspect', '--format', '{{json .RepoDigests}}', image]);
-      const digests: unknown = JSON.parse(inspected.stdout);
-      if (inspected.exitCode !== 0 || !Array.isArray(digests) || typeof digests[0] !== 'string'
-        || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(digests[0])) return failure('preparation failed: image digest resolution');
-      image = digests[0];
-    }
-    const hash = await dependencyKey(root, lockfile, managerName, manager[2]!, image, config.allowInstallScripts === true);
-    const identity = `${hash}:${LAYOUT}`;
-    const preparedImage = `quorum-prep:${hash}`;
-    volume = `quorum-deps-${hash}`;
-    context = await mkdtemp(path.join(os.tmpdir(), 'quorum-build-'));
-    // This context contains only this generated Dockerfile, never repository data.
-    await writeFile(path.join(context, 'Dockerfile'), `FROM ${image}\nRUN ${JSON.stringify(['npm', 'install', '-g', `${managerName}@${manager[2]}`])}\nRUN ${JSON.stringify(['mkdir', '-p', '/work/node_modules'])}\nRUN ${JSON.stringify(['chown', '1000:1000', '/work/node_modules'])}\n`, { flag: 'wx' });
-    const imageExists = await invoke(['image', 'inspect', '--format', '{{ index .Config.Labels "quorum.preparation" }}', preparedImage]);
-    if (imageExists.exitCode !== 0 || imageExists.stdout.trim() !== identity) {
-      const build = await invoke(['build', '--network', networkOn, '--label', `quorum.preparation=${identity}`, '--tag', preparedImage, context]);
-      if (build.exitCode !== 0) return failure('preparation failed: image build');
-    }
-    const volumeExists = await invoke(['volume', 'inspect', volume]);
-    const dependencyMount = `type=volume,src=${volume},dst=/work/node_modules`;
-    const preparationMounts = ['--mount', `type=bind,src=${root},dst=/work,readonly`, '--mount', dependencyMount];
-    let reusable = false;
-    if (volumeExists.exitCode === 0) {
-      // A failed or interrupted install must never turn into a valid cache hit.
-      const ready = await runAuxiliary(['--rm', '--network', 'none', '--user', '1000:1000', ...PREPARATION_LIMITS,
-        '--mount', `${dependencyMount},readonly`, preparedImage, 'node', '-e',
-        `process.exit(require('node:fs').readFileSync(${JSON.stringify(READY_FILE)}, 'utf8') === ${JSON.stringify(identity)} ? 0 : 1)`]);
-      reusable = ready.exitCode === 0;
-      if (!reusable) {
-        options.warn?.('Reproduction preparation: removing orphan dependency volume and rebuilding once.');
-        const removed = await invoke(['volume', 'rm', volume]);
-        if (removed.exitCode !== 0) return failure('preparation failed: orphan volume removal');
-      }
-    }
-    if (!reusable) {
-      const create = await invoke(['volume', 'create', volume]);
-      if (create.exitCode !== 0) return failure('preparation failed: dependency volume');
-      createdVolume = true;
-      const command = managerName === 'pnpm' ? ['pnpm', 'install', '--frozen-lockfile']
-        : managerName === 'npm' ? ['npm', 'ci'] : ['yarn', 'install', '--immutable'];
-      if (!config.allowInstallScripts) command.push(managerName === 'yarn' ? '--mode=skip-build' : '--ignore-scripts');
-      if (managerName === 'pnpm' && !config.allowInstallScripts) command.push('--ignore-pnpmfile');
-      const prepare = await runAuxiliary(['--rm', '--network', networkOn, '--user', '1000:1000',
-        ...PREPARATION_LIMITS, '--workdir', '/work', ...preparationMounts, ...CACHE_ENV,
-        '--env', 'npm_config_store_dir=/work/node_modules/.pnpm-store', preparedImage, ...command]);
-      if (prepare.exitCode !== 0) return failure('preparation failed: dependency installation');
-      const mark = await runAuxiliary(['--rm', '--network', 'none', '--user', '1000:1000',
-        ...PREPARATION_LIMITS, '--mount', dependencyMount, preparedImage, 'node', '-e',
-        `const fs = require('node:fs'); for (const dir of ${JSON.stringify(RUNNER_CACHE_DIRS)}) fs.mkdirSync('/work/node_modules/' + dir, { recursive: true }); fs.writeFileSync(${JSON.stringify(READY_FILE)}, ${JSON.stringify(identity)})`]);
-      if (mark.exitCode !== 0) return failure('preparation failed: dependency cache marker');
-    }
-    preparationComplete = true;
-
     const name = `quorum-test-${randomUUID()}`;
     const marker = `QUORUM_REPORT_${randomUUID()}:`;
     const reportPath = `/tmp/quorum-${randomUUID()}.json`;
@@ -279,9 +301,6 @@ export async function runIsolatedTest(
       await invoke(['rm', '--force', name], 5000).catch(() => undefined);
     }
   } catch (error) {
-    return failure(error instanceof CommandTimeoutError ? 'container timeout' : `preparation failed: ${error instanceof Error ? error.message : 'invalid metadata'}`, error instanceof CommandTimeoutError);
-  } finally {
-    if (createdVolume && !preparationComplete && volume) await invoke(['volume', 'rm', volume], 5000).catch(() => undefined);
-    if (context) await rm(context, { recursive: true, force: true });
+    return failure(error instanceof CommandTimeoutError ? 'container timeout' : 'container execution failed', error instanceof CommandTimeoutError);
   }
 }

@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { parseArgs, REVIEW_MODES } from '../../src/cli/args.js';
 import { main } from '../../src/cli/index.js';
 import type { CommandRunner } from '../../src/types/index.js';
+import { DEFAULT_RUNTIME_IMAGE } from '../../src/runtime/image.js';
 import { runtimeReview } from '../../src/cli/runtime.js';
 import { validateConfig } from '../../src/config/schema.js';
 
@@ -19,7 +20,7 @@ async function run(flags: string[] = [], runtime: unknown = { start: ['node', 's
   const forbidden = vi.fn(async () => { throw new Error('must not run'); });
   const code = await main(['review', '--mode', 'runtime', '--diff', 'main...HEAD', ...flags], {
     out: text => { out += text; }, err: text => { err += text; },
-  }, { gitRunner, checkRunner: forbidden, containerRunner: forbidden, contextRunner: forbidden, fetch: forbidden,
+  }, { gitRunner, checkRunner: forbidden, containerRunner: async () => ({ stdout: '', stderr: '', exitCode: 1 }), contextRunner: forbidden, fetch: forbidden,
     appendLedger: forbidden, appendFindings: forbidden, providers: new Map() });
   expect(forbidden).not.toHaveBeenCalled();
   expect(commands.flat().join(' ')).not.toMatch(/quorum\.rules|worktree add/);
@@ -36,15 +37,15 @@ it.each(['--spec=x', '--inventory=x', '--images=x', '--rules=x', '--deterministi
 it('refuses no-checks even for dry-run', async () => {
   const result = await run(['--no-checks', '--dry-run']); expect(result.code).toBe(2); expect(result.err).toContain('runtime mode must run the app');
 });
-it('stops before execution with the R0 message', async () => {
+it('reports unavailable evidence with the R2 message and no provider calls', async () => {
   const result = await run(); expect(result.code).toBe(2);
-  expect(result.err).toContain('runtime mode: the collector and container orchestration are not built yet (R1-R3)');
+  expect(result.err).toContain('runtime mode: comparison and verdict arrive in R3');
 });
 it('prints only the runtime plan without field values, even for an empty diff', async () => {
   const result = await run(['--dry-run']); expect(result.code).toBe(0);
   expect(result.out).toBe('Runtime plan (no commands run):\n  Start: node server.cjs\n  Ready URL: http://localhost:4173/\n'
     + '  Flows: 1; steps: 2\n  Timeouts: ready 60s; flow 60s; step 10s\n'
-    + '  Image: default (not pinned yet)\n  Limits: 2048 MiB; 512 pids\n  Screenshots: off\n');
+    + `  Image: ${DEFAULT_RUNTIME_IMAGE}\n  Limits: 2048 MiB; 512 pids\n  Screenshots: off\n`);
   expect(result.out + result.err).not.toContain('PRIVATE_TEST_VALUE');
 });
 it.each(['start', 'readyUrl', 'flows'])('requires runtime.%s only on runtime execution', async missing => {
@@ -65,3 +66,9 @@ it('requires a runtime block and prints configured limits without serializing fl
   expect(out).toContain('Limits: 8192 MiB; 2048 pids\n  Screenshots: on');
   expect(out).not.toMatch(/PRIVATE_TEST_VALUE|private-flow-name/);
 });
+
+it('prints interim JSON with --format json and still exits 2', async () => {
+  const result = await run(['--format', 'json']);
+  expect(result.code).toBe(2); expect(JSON.parse(result.out)).toMatchObject({ available: false, base: null, head: null, reasons: ['no container runtime'], exitCode: 2 });
+});
+it('rejects unsupported format values', () => { expect(() => parseArgs(['review', '--format', 'xml'])).toThrow('--format must be json'); });

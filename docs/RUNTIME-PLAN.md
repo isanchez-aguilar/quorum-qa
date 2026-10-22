@@ -1,6 +1,6 @@
 # Plan: `--mode runtime`
 
-Status: R0-R1 built (config, validation, dry-run, synthetic fixture, collector, report parser, signatures and flake filter); R2-R5 planned. R1 uses fake Playwright only; real-container verification remains R2. Written 2026-10-20. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
+Status: R0-R2 built (config, validation, dry-run, collector, report parser, signatures, flake filter and base/head container orchestration); R3-R5 planned. Runtime execution still exits 2: comparison and verdict arrive in R3. Updated 2026-10-21. Read [PLAN.md](PLAN.md) and the reproduction lane in [IMPLEMENTATION.md](IMPLEMENTATION.md) first; this mode reuses that container lane and the refactor mode's base-versus-head comparison.
 
 ## What it answers
 
@@ -14,7 +14,7 @@ Like refactor mode, the evidence is **deterministic and comparative**. A problem
 2. **Compare with the merge-base.** The same flows run against both revisions in the same container image. New-at-head is the signal.
 3. **Contained.** The app and the browser run inside one container with `--network none` (loopback only), a read-only root, tmpfs for writes, `--cap-drop ALL`, `--security-opt no-new-privileges`, a non-root user, and a digest-pinned image. Chromium's own sandbox cannot start without extra privileges in this container, so the collector launches it with `--no-sandbox --disable-dev-shm-usage` and the container gets `--tmpfs /dev/shm:rw,size=512m`. The container boundary is the sandbox. Adding `CAP_SYS_ADMIN`, `seccomp=unconfined` or any other privilege to make Chromium work is forbidden (a test asserts the argv). Resource limits are higher than the reproduction lane because a dev server and a browser share the container: at least 2 GiB memory and 512 pids. The collector answers every non-loopback request with an empty synthetic `204` through `page.route` and counts it as `blocked-external` (information, never an error, and it never triggers `requestfailed`). v1 therefore supports apps that bundle their own scripts, styles and fonts; an app that needs a CDN to render will show as `blank`/errors on BOTH revisions and be listed as pre-existing, with a note.
 4. **Test data only.** Flows may fill fields only with values written in `quorum.config.json` or read from the project's own seed/fixture files. Quorum never asks for or stores real credentials. A flow that needs a login uses a test account the project already seeds.
-5. **No new dependency in Quorum.** Playwright lives in the pinned container image, not in `package.json`.
+5. **No new dependency in Quorum.** Browsers live in the pinned container image; matching `playwright-core@1.64.0` lives in an integrity-verified named volume, never in Quorum's `package.json`.
 6. **Unknown is not clean.** App failed to start, readiness timed out, no container runtime, or the collector crashed: the verdict is UNKNOWN (exit 2), never a pass.
 
 ## Flow format (declarative JSON in config, v1)
@@ -80,7 +80,7 @@ The report always says which flows ran, and that "no new problems found" covers 
 
 ## Container image
 
-The official Playwright image, **pinned by digest** (same discipline as `DEFAULT_REPRODUCE_IMAGE`). The image is large (roughly 1.5 GB), so the first pull needs Isaac's yes (AGENTS.md: ask before spending). Until then every container test uses a fake runner; one opt-in real-container test runs only when Docker and the image are present.
+The official Playwright image, **pinned by digest** (same discipline as `DEFAULT_REPRODUCE_IMAGE`): `mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f` (3.6 GB). It contains the browsers but no Playwright npm package. R2 prepares a separate keyed volume with matching `playwright-core@1.64.0`, checks lockfile integrity and installed version, and mounts it read-only. UID/GID is 1001. Image overrides warn that the browser/package pairing is unverified. The opt-in test requires Docker and this image to be present; it never pulls the base image itself.
 
 ## Milestones
 
@@ -107,8 +107,8 @@ Each milestone: Codex implements from a brief, Claude verifies by execution, Gem
 
 - **Own Playwright specs: not in v1.** Declarative JSON only; running repository specs means arbitrary code in the collector, weaker determinism and weaker containment. Taken by the planner, recorded here.
 - **4xx handling:** as in the verdict table (5xx/network always; 4xx unless `expectStatus`; static sub-resources always).
-- **Image pull:** needs Isaac's yes (about 1.5 GB, once, to pin the digest). Everything before R2's real-container test uses a fake runner and can be built without it.
+- **Image pull:** the 3.6 GB image and index digest were verified before R2. The R2 opt-in fixture test is authorized to prepare its dependency volumes with network access; ordinary unit tests use fake runners.
 
-## Open question for Isaac
+## R2 execution
 
-May Quorum pull the Playwright image once to pin its digest and run the first real container test (only R2 needs it)?
+`--mode runtime` runs the merge-base and head in disposable worktrees with no provider calls. `--format json` (or `--json`) prints an interim per-side summary; the exit code remains 2 until R3 implements comparison and verdict. `--no-checks` is refused. Run `QUORUM_CONTAINER_TESTS=1 pnpm exec vitest run tests/container/runtime.test.ts` for the opt-in test (set the environment variable using the current shell's syntax).
