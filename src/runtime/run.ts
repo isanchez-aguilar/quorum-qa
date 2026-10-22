@@ -41,9 +41,18 @@ export function runtimePayload(stdout: string, marker: string, config: RuntimeCo
         ...(typeof error.stderrTail === 'string' ? { note: runtimeText(error.stderrTail, config).slice(-2000) } : {}),
       };
     }
-    // Redact strings before they can reach reports, including collector notes and page messages.
-    const clean = (_key: string, item: unknown) => typeof item === 'string' ? runtimeText(item, config) : item;
-    return parseRuntimeReport(JSON.stringify(value, clean), config);
+    // Redact only free text (messages, paths, notes), after validation: redacting structural fields
+    // too would let a short fill value (say "e") corrupt `kind: "console"` and void every report.
+    const report = parseRuntimeReport(raw, config);
+    if ('error' in report) return report;
+    for (const run of report.runs) {
+      run.notes = run.notes.map(note => runtimeText(note, config));
+      for (const observation of run.observations) {
+        observation.message = runtimeText(observation.message, config);
+        if (observation.path !== undefined) observation.path = runtimeText(observation.path, config);
+      }
+    }
+    return report;
   } catch { return { error: 'Invalid runtime report' }; }
 }
 
@@ -115,7 +124,8 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
     let complete = false;
     try {
       // Rebuild an interrupted preparation; never install over an untrusted partial tree.
-      const removed = await invoke(['volume', 'rm', volume]);
+      // --force: an engine that did not auto-create the volume during the check (Podman) must not fail here.
+      const removed = await invoke(['volume', 'rm', '--force', volume]);
       if (removed.exitCode !== 0) return 'playwright-core preparation failed';
       if ((await invoke(['volume', 'create', volume])).exitCode !== 0) return 'playwright-core preparation failed';
       const chown = await runContainer(['--rm', '--network', 'none', '--user', '0:0', ...PREPARATION_LIMITS,

@@ -120,7 +120,9 @@ it('keys playwright volumes by image and integrity; uses a ready marker without 
 it('removes a mismatched playwright volume and leaves both sides unavailable', async () => {
   const runner = fake({ mismatch: true }); const result = await execute(runner);
   expect(result.available).toBe(false); expect(result.reasons).toEqual(['base: playwright-core integrity mismatch', 'head: playwright-core integrity mismatch']);
-  expect(runner.mock.calls.filter(([, args]) => args[0] === 'volume' && args[1] === 'rm' && args[2] === playwrightVolume(DEFAULT_RUNTIME_IMAGE)).length).toBeGreaterThanOrEqual(2);
+  expect(runner.mock.calls.filter(([, args]) => args[0] === 'volume' && args[1] === 'rm' && args.includes(playwrightVolume(DEFAULT_RUNTIME_IMAGE))).length).toBeGreaterThanOrEqual(2);
+  // A missing volume must not fail preparation on engines that do not auto-create it.
+  expect(runner.mock.calls.some(([, args]) => JSON.stringify(args) === JSON.stringify(['volume', 'rm', '--force', playwrightVolume(DEFAULT_RUNTIME_IMAGE)]))).toBe(true);
   expect(runner.mock.calls.some(([, args]) => args.includes('/quorum/bin/runner.cjs'))).toBe(false);
   for (const cleanup of cleanups) expect(cleanup).toHaveBeenCalledOnce();
 });
@@ -177,6 +179,13 @@ it('selects the last fresh marker, rejects oversized/invalid reports and redacts
   expect(runtimePayload(marker + '{bad}', marker, runtime)).toEqual({ error: 'Invalid runtime report' });
   const raw = structuredClone(report); raw.runs[0]!.notes = ['PRIVATE_VALUE'] as never[];
   expect(JSON.stringify(runtimePayload(marker + JSON.stringify(raw), marker, runtime))).not.toContain('PRIVATE_VALUE');
+  // A one-letter fill value must redact free text only, never structural fields such as `kind`.
+  const short = structuredClone(runtime); short.flows![0]!.steps = [{ fill: '#q', value: 'o' }];
+  const withConsole = structuredClone(report);
+  withConsole.runs[0]!.observations = [{ kind: 'console', message: 'boom', path: '/home' }] as never[];
+  const parsed = runtimePayload(marker + JSON.stringify(withConsole), marker, short);
+  expect('runs' in parsed).toBe(true);
+  if ('runs' in parsed) expect(parsed.runs[0]!.observations[0]).toMatchObject({ kind: 'console', message: 'b[redacted][redacted]m', path: '/h[redacted]me' });
 });
 
 it('runs setup offline before collection and suppresses a failed setup output', async () => {
