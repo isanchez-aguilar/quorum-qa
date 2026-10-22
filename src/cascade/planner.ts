@@ -1,6 +1,6 @@
 import { contractClauses } from '../modes/index.js';
 import { CONFIRM_BATCH_SIZE, reviewChunks } from './prompts.js';
-import { systemClock, type Clock } from './budget.js';
+import { AUTO_MAX_CALLS_CEILING, resolveBudget, systemClock, type Clock } from './budget.js';
 import type { CatalogEntry, QuorumConfig, ReviewContext, Tier } from '../types/index.js';
 import { resolveAuthorFamily, TIERS } from '../config/schema.js';
 import { modelRef, parseModelRef } from '../catalog/index.js';
@@ -53,6 +53,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
       timestamp: quotaSnapshot[group]?.timestamp, status };
   });
   const payload = reviewChunks(context);
+  config = { ...config, budget: resolveBudget(config.budget, payload.chunks.length) };
   for (const note of [...(context.contextNotes ?? []), ...payload.notes]) warnings.push(note);
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
@@ -97,7 +98,8 @@ export function formatDryRun(plan: ExecutionPlan): string {
     '    Possibly related, cross-family pairs -> confirm: same defect?',
     `    confirmImportant: ${config.escalate.confirmImportant !== false}; after mandatory escalation and reproduction, group by resolved route and source family, up to ${CONFIRM_BATCH_SIZE} candidates per confirm-batch call using remaining budget and unused reserve.`,
     '  [Phase 4: Reproduction Lane]', '    Enabled: No (M6; requires opt-in)',
-    '', 'Budget Ceilings:', `    Max API Calls: ${config.budget.maxCalls}`,
+    '', 'Budget Ceilings:', `    Max API Calls: ${config.budget.maxCalls} (${config.budget.maxCallsExplicit === false
+      ? `auto: 3 x ${plan.chunkCount} chunks, clamped to 12..${AUTO_MAX_CALLS_CEILING}` : 'from budget.maxCalls'})`,
     `    Confirmation reserve: ${plan.confirmationReserve} calls (released when no findings need escalation)`,
     `    Max Run Time: ${config.budget.maxMinutes} minutes`, `    Max Call Time: ${config.budget.maxCallSeconds ?? 300} seconds`, `    Quota Floor: ${config.budget.quotaFloorPercent}%`,
     ...plan.warnings.map(warning => `Warning: ${warning}`), '', 'Nothing was called: dry-run spends no quota.',

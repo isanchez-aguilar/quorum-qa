@@ -12,7 +12,7 @@ import { buildBughuntContext } from '../context/bughunt.js';
 import { selectContextProvider, type ContextProvider } from '../context/providers.js';
 import { CodeGraphContextProvider } from '../context/codegraph.js';
 import { reviewChunks } from '../cascade/prompts.js';
-import { RunBudget, systemClock } from '../cascade/budget.js';
+import { callBudgetMetadata, resolveBudget, RunBudget, systemClock } from '../cascade/budget.js';
 import { git, mergeBase, revParse } from '../context/git.js';
 import { acceptanceCriteria, contractClauses, inventoryFeatures } from '../modes/index.js';
 import { runCommand } from '../process/runner.js';
@@ -149,6 +149,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'runtime') {
     const base = flags.since && !headConfig ? (await bootstrapConfig()).base : parts[1]!;
     const trusted = headConfig ?? await configAt(await mergeBase(await revParse(base, root, runner), head, root, runner), root, runner);
+    trusted.budget = resolveBudget(trusted.budget);
     if (flags.visual && trusted.runtime) trusted.runtime = { ...trusted.runtime, screenshots: true };
     const planned = runtimeReview(trusted.runtime, flags.dryRun === true, io);
     let visualDeps: Parameters<typeof runVisualReview>[2] | undefined;
@@ -195,7 +196,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (visualDeps) visual = await runVisualReview(evidence, trusted, visualDeps);
     const runtime = buildRuntimeReport(evidence, trusted.runtime!, { strictFlows: flags.strictFlows === true, visual });
     const result: ReviewResult = {
-      runtime, runId, timestamp: new Date(now()).toISOString(), mode, range,
+      runtime, callBudget: callBudgetMetadata(trusted.budget), runId, timestamp: new Date(now()).toISOString(), mode, range,
       headSha: head, baseSha: context.mergeBaseCommit ?? context.baseCommit, checks: null,
       criteria: [], inventory: [], families: [], reviewedFamilies: [], cacheHits: 0,
       findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [], exitCode: runtime.exitCode,
@@ -323,6 +324,12 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   });
   context.providerContext = enrichment.perFile;
   for (const note of enrichment.notes) context.contextNotes.push(note);
+  const chunkCount = deterministicOnly ? 0 : reviewChunks(context).chunks.length;
+  config.budget = resolveBudget(config.budget, chunkCount);
+  Object.assign(budget.limits, config.budget);
+  if (config.budget.maxCallsExplicit === false && config.budget.maxCalls > 12) {
+    io.err(`quorum: call budget ${config.budget.maxCalls} (auto-scaled from ${chunkCount} chunks; set budget.maxCalls to pin it)\n`);
+  }
   // Establish the review baseline after context, while retaining the earlier write check.
   const afterContext = await checkoutSnapshot(root, runner);
   const contextChange = checkoutDifference(baseline, afterContext);
@@ -348,6 +355,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (changedBefore) throw new Error(changedBefore);
     if (flags.reproduce && config.reproduce.allowInstallScripts) warn('Reproduction preparation: install scripts are enabled (allowInstallScripts=true); preparation has network access to fetch packages.');
     const cascade: CascadeResult = deterministicOnly ? {
+      callBudget: callBudgetMetadata(config.budget),
       reviewedFamilies: [], cacheHits: 0, findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [],
       coverage: { reviewedFiles: [...context.touchedFiles], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: evidence?.available === true },
     } : await runCascade(context, config, providers, { budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree?.path, copyVerificationRoot: copyDirectory, cache,

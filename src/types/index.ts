@@ -120,6 +120,8 @@ export interface QuorumConfig {
   };
   budget: {
     maxCalls: number;
+    // Set by validation from trusted config presence; absent for programmatic budgets.
+    maxCallsExplicit?: boolean;
     maxMinutes: number;
     maxCallSeconds?: number;
     quotaFloorPercent: number;

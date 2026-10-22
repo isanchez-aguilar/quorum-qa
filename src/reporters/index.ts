@@ -50,7 +50,8 @@ function reproductionDetails(findings: Finding[]): string {
 }
 
 export function generateMarkdownReport(result: ReviewResult): string {
-  if (result.runtime) return ['# Quorum Runtime Review Report', ...runtimeMarkdown(result.runtime),
+  const budget = result.callBudget ? [`**Call budget:** ${result.callBudget.maxCalls} (${result.callBudget.auto ? 'auto' : 'from budget.maxCalls'})`] : [];
+  if (result.runtime) return ['# Quorum Runtime Review Report', ...budget, ...runtimeMarkdown(result.runtime),
     '## Warnings', result.warnings.map(warning => `- ${cell(warning)}`).join('\n') || 'None.'].join('\n\n').replace(/\|\n\n(?=\|)/g, '|\n') + '\n';
   const { coverage } = result;
   const all = [...result.findings, ...result.unconfirmed.filter(f => f.family !== 'local')];
@@ -58,6 +59,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
   const findingDetails = (findings: Finding[]) => details(findings, refactor);
   return [
     '# Quorum QA Review Report', `**Run ID:** ${cell(result.runId)} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
+    ...budget,
     ...(result.refactor ? [`**Verdict:** ${result.refactor.verdict}`] : []),
     `**Time:** ${cell(result.timestamp)} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
     `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 || check.timedOut).length ?? 0} failed deterministic checks · Cache hits: ${result.cacheHits}`,

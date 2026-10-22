@@ -43,7 +43,7 @@ it.each([
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const elapsed = await new Promise<number>((resolve, reject) => {
-      timer = setTimeout(() => resolve(Infinity), 2000);
+      timer = setTimeout(() => resolve(Infinity), 30_000); // hang guard only; the measured time comes from the worker
       worker.once('message', resolve); worker.once('error', reject);
     });
     expect(elapsed).toBeLessThan(200);
