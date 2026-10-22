@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveCommand, type ResolveOptions } from '../checks/resolver.js';
 import { CommandTimeoutError } from '../process/runner.js';
 import { assertNoLinks } from '../context/contract.js';
 import { git } from '../context/git.js';
-import { prepareDependencies, PREPARATION_LIMITS, RUNNER_CACHE_DIRS } from '../reproduce/isolation.js';
+import { prepareDependencies, PREPARATION_LIMITS, runnerCacheTmpfs } from '../reproduce/isolation.js';
 import type { CommandRunner, QuorumConfig, ReviewContext } from '../types/index.js';
 import { createReviewWorktree } from '../worktree/index.js';
 import type { RuntimeConfig } from './config.js';
@@ -266,6 +266,10 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
         flowTimeoutSeconds: runtime.flowTimeoutSeconds, stepTimeoutSeconds: runtime.stepTimeoutSeconds,
         screenshots: runtime.screenshots, flows: runtime.flows };
       await writeFile(path.join(directory, 'plan.json'), JSON.stringify(plan), { flag: 'wx' });
+      // The container runs as uid 1001, which is not the host user on Linux (rootless Podman maps it to a
+      // sub-uid): a private 0700 temp directory would be unreadable there. 0711 lets it open the known file
+      // names but not list the directory; the files stay readable (0644). No effect on Windows.
+      await chmod(directory, 0o711);
       const marker = `QUORUM_RUNTIME_${randomUUID()}:`;
       const captureSeconds = runtime.screenshots ? runtime.flows.reduce((count, flow) => count + flow.steps.filter(step =>
         ['goto', 'click', 'press', 'waitForUrl', 'waitForSelector'].some(action => Object.hasOwn(step, action))).length * 2 * 5, 0) : 0;
@@ -274,7 +278,7 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
         '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/dev/shm:rw,size=512m',
         '--memory', `${runtime.memoryMiB}m`, '--pids-limit', String(runtime.pids), '--cpus', '2', '--workdir', '/work', '--env', 'HOME=/tmp',
         '--mount', `type=bind,src=${deps.root},dst=/work,readonly`, '--mount', dependencyMount + ',readonly',
-        ...RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1001,gid=1001,mode=0700`]),
+        ...runnerCacheTmpfs(engine, 1001),
         '--mount', pwMount + ',readonly', '--mount', `type=bind,src=${directory},dst=/quorum/bin,readonly`,
         deps.image, 'node', '/quorum/bin/runner.cjs', '/quorum/bin/plan.json', marker, JSON.stringify(runtime.start)], limit, undefined,
         runtime.screenshots ? SHOTS_OUTPUT_BYTES : REPORT_BYTES + 4096);

@@ -10,7 +10,7 @@ import { createReviewWorktree } from '../../src/worktree/index.js';
 import { CommandTimeoutError, CommandOutputLimitError } from '../../src/process/runner.js';
 import { createHash } from 'node:crypto';
 import { REPORT_BYTES } from '../../src/runtime/report.js';
-import { RUNNER_CACHE_DIRS } from '../../src/reproduce/isolation.js';
+import { RUNNER_CACHE_DIRS, runnerCacheTmpfs } from '../../src/reproduce/isolation.js';
 import type { CommandRunner, ReviewContext } from '../../src/types/index.js';
 
 vi.mock('../../src/worktree/index.js', () => ({ createReviewWorktree: vi.fn() }));
@@ -328,4 +328,30 @@ it('keeps output limit errors unavailable even if the captured tail has a valid 
   });
   const result = await execute(runner, {}, value);
   expect(result.available).toBe(false); expect(result.base).toBeUndefined(); expect(result.head).toBeUndefined();
+});
+it.skipIf(process.platform === 'win32')('makes the mounted script directory traversable by the container user (0711) and its files readable', async () => {
+  const { statSync } = await import('node:fs');
+  const modes: Array<{ dir: number; files: Record<string, number> }> = [];
+  const runner = fake(); const original = runner.getMockImplementation()!;
+  runner.mockImplementation(async (command, args, options) => {
+    if (args.includes('/quorum/bin/runner.cjs')) {
+      const dir = args.find(arg => arg.startsWith('type=bind,src=') && arg.endsWith('dst=/quorum/bin,readonly'))!.slice('type=bind,src='.length).split(',dst=')[0]!;
+      modes.push({ dir: statSync(dir).mode & 0o777, files: Object.fromEntries(['runner.cjs', 'collector.cjs', 'scrub.cjs', 'plan.json'].map(name => [name, statSync(path.join(dir, name)).mode & 0o777])) });
+    }
+    return original(command, args, options);
+  });
+  await execute(runner);
+  expect(modes.length).toBeGreaterThan(0);
+  for (const { dir, files } of modes) {
+    expect(dir).toBe(0o711);
+    // Every file must be readable by "other": the container user is neither owner nor group.
+    for (const mode of Object.values(files)) expect(mode & 0o004).toBe(0o004);
+  }
+});
+it('uses Podman-compatible tmpfs options for the runner cache directories, and the Docker ones for Docker', () => {
+  expect(runnerCacheTmpfs('docker', 1001)).toEqual(RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,uid=1001,gid=1001,mode=0700`]));
+  const podman = runnerCacheTmpfs('podman', 1001);
+  expect(podman).toEqual(RUNNER_CACHE_DIRS.flatMap(dir => ['--tmpfs', `/work/node_modules/${dir}:rw,mode=1777`]));
+  // Podman 4.x rejects "unknown mount option uid" on a tmpfs.
+  expect(podman.join(' ')).not.toMatch(/uid=|gid=/);
 });
