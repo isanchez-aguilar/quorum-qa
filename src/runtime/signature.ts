@@ -1,4 +1,11 @@
 import type { Observation } from './report.js';
+import { createRequire } from 'node:module';
+
+// Shared with the scripts copied into the container; resolve in source and built layouts.
+export const { scrubForDisplay, redact } = createRequire(import.meta.url)('../../src/runtime/scrub.cjs') as {
+  scrubForDisplay: (text: string) => string;
+  redact: (text: string, plan: { flows?: import('./config.js').Flow[] }) => string;
+};
 
 export function normalizeMessage(text: string): string {
   // Token-scoped passes avoid backtracking across long runs of slashes/colons.

@@ -15,10 +15,12 @@ export interface RuntimeComparison extends FlowComparison {
   incomplete: Array<{ flow: string; side: 'base' | 'head' }>;
   coveredFlows: string[]; uncoveredFlows: string[];
   blockedExternal: Record<'base' | 'head', Record<string, number>>;
+  notes: Array<{ flow: string; text: string }>;
 }
 
 function stableFailures(side: SideResult, flow: string): Observation[] {
   const runs = [1, 2].map(index => side.report.runs.find(run => run.flow === flow && run.run === index));
+  if (runs.some(run => run?.observations.some(item => item.errorClass === 'infrastructure'))) return [];
   return (runs[0]?.observations ?? []).filter(observation => observation.kind === 'flow-failure'
     && runs[1]?.observations.some(other => other.kind === 'flow-failure' && other.step === observation.step));
 }
@@ -28,9 +30,13 @@ function completed(side: SideResult, flow: string): boolean {
 
 export function compareRuntime(base: SideResult, head: SideResult, config: RuntimeConfig): RuntimeComparison {
   const result: RuntimeComparison = { flows: Object.create(null) as RuntimeComparison['flows'], newAtHead: [], fixed: [], preExisting: [], flowBroke: [],
-    flaky: [], incomplete: [], coveredFlows: [], uncoveredFlows: [], blockedExternal: { base: {}, head: {} } };
+    flaky: [], incomplete: [], coveredFlows: [], uncoveredFlows: [], blockedExternal: { base: {}, head: {} }, notes: [] };
   const text = (value: string) => runtimeText(value, config);
   for (const [name, side] of [['base', base], ['head', head]] as const) {
+    for (const run of side.report.runs) for (const note of run.notes) {
+      const item = { flow: text(run.flow), text: text(note) };
+      if (!result.notes.some(other => other.flow === item.flow && other.text === item.text)) result.notes.push(item);
+    }
     for (const category of ['flaky', 'incomplete'] as const) result[category] = [...result[category], ...side.stable[category].map(flow => ({ flow: text(flow), side: name }))];
     const hosts = new Map<string, number>();
     for (const run of side.report.runs) for (const [host, count] of Object.entries(run.blockedExternal)) hosts.set(text(host), (hosts.get(text(host)) ?? 0) + count);
@@ -45,9 +51,9 @@ export function compareRuntime(base: SideResult, head: SideResult, config: Runti
     const before = base.stable.flows[flow] ?? new Set<string>();
     const after = head.stable.flows[flow] ?? new Set<string>();
     const entry = (key: string, observation: Observation): RuntimeEntry => ({
-      signature: text(key), kind: observation.kind, flow: text(flow), message: text(observation.message),
+      signature: text(key), kind: observation.kind, flow: text(flow), message: text(observation.message).slice(0, 300),
       ...(['blank', 'technicalText', 'flow-failure'].includes(observation.kind) ? { step: observation.step } : {}),
-      ...(observation.path !== undefined ? { path: text(observation.path) } : {}),
+      ...(observation.path !== undefined ? { path: runtimeText(observation.path, config, true) } : {}),
       counts: { base: [...(base.stable.counts[key] ?? [0, 0])], head: [...(head.stable.counts[key] ?? [0, 0])] },
     });
     for (const key of new Set([...before, ...after])) {
@@ -61,7 +67,9 @@ export function compareRuntime(base: SideResult, head: SideResult, config: Runti
     const failureCounts = (side: SideResult, step: number) => [1, 2].map(index => side.report.runs.find(run => run.flow === flow && run.run === index)
       ?.observations.filter(other => other.kind === 'flow-failure' && other.step === step).length ?? 0) as [number, number];
     const failedSteps = (side: SideResult) => new Map(stableFailures(side, flow).map(observation => [observation.step!, observation]));
-    const baseFailed = failedSteps(base); const headFailed = failedSteps(head);
+    const infrastructure = [base, head].some(side => side.report.runs.some(run => run.flow === flow && run.observations.some(item => item.errorClass === 'infrastructure')));
+    const baseFailed = infrastructure ? new Map<number, Observation>() : failedSteps(base);
+    const headFailed = infrastructure ? new Map<number, Observation>() : failedSteps(head);
     for (const [step, observation] of headFailed) {
       const item = entry(signature(observation, flow)!, observation);
       item.counts = { base: failureCounts(base, step), head: failureCounts(head, step) };

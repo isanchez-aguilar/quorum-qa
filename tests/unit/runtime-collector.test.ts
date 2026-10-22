@@ -3,6 +3,7 @@ import { runInNewContext } from 'node:vm';
 import { expect, it, vi } from 'vitest';
 import type { RuntimeReport } from '../../src/runtime/report.js';
 import type { Step } from '../../src/runtime/config.js';
+import { parseRuntimeReport } from '../../src/runtime/report.js';
 
 const require = createRequire(import.meta.url);
 const { run, CHROMIUM_ARGS } = require('../../src/runtime/collector.cjs') as {
@@ -25,6 +26,42 @@ function fake(script: (page: any, index: number, action: string) => unknown = ()
   return { contexts, browser, chromium: { launch: vi.fn(async () => browser) } };
 }
 const plan = (steps: Step[] = [{ goto: '/' }]) => ({ readyUrl: 'http://localhost:4173/base', flowTimeoutSeconds: 60, stepTimeoutSeconds: 10, flows: [{ name: 'home', steps }] });
+it.each(['launch', 'route', 'page', 'context-close', 'browser-close'])('records %s infrastructure failures without losing flow coverage', async stage => {
+  const pw = fake(); const fail = async () => { throw new Error('infrastructure unavailable'); };
+  if (stage === 'launch') pw.chromium.launch.mockImplementation(fail);
+  else if (stage === 'browser-close') pw.browser.close.mockImplementation(fail);
+  else {
+    const original = pw.browser.newContext.getMockImplementation()!;
+    pw.browser.newContext.mockImplementation(async () => {
+      const context = await original();
+      if (stage === 'route') context.route.mockImplementation(fail);
+      if (stage === 'page') context.newPage = fail;
+      if (stage === 'context-close') context.close.mockImplementation(fail);
+      return context;
+    });
+  }
+  const value = await run({ playwright: pw, plan: plan() });
+  expect(value.runs).toHaveLength(2);
+  for (const item of value.runs) expect(item).toMatchObject({ completed: false,
+    observations: [expect.objectContaining({ errorClass: 'infrastructure' })] });
+});
+it('inspects press and both wait-for actions at their own step, skipping fill and wait', async () => {
+  const pw = fake((page, _index, action) => { if (action === 'press') page.evaluate.mockResolvedValue({ blank: true, snippets: [] }); });
+  const value = await run({ playwright: pw, plan: plan([{ goto: '/' }, { fill: 'input', value: '' },
+    { press: 'input', key: 'Enter' }, { waitForUrl: '/next' }, { waitForSelector: 'body' }, { wait: 1 }]) });
+  expect(value.runs[0]!.observations.filter(item => item.kind === 'blank').map(item => item.step)).toEqual([2, 3, 4]);
+});
+it('redacts fill values and scrubs messages before any collector cap', async () => {
+  const secret = 'SYNTHETIC_PASSWORD_1234567890!';
+  const pw = fake(page => {
+    for (const prefix of [480, 1980]) page.emit('console', { type: () => 'error', text: () => ' '.repeat(prefix) + secret + ' end' });
+    page.emit('pageerror', new Error('failed http://localhost:4173/api?token=SYNTHETIC_SECRET at C:/synthetic/build/app.js:1:2'));
+  });
+  const value = await run({ playwright: pw, plan: plan([{ fill: 'input', value: secret }]) });
+  const serialized = JSON.stringify(value);
+  for (let i = 0; i <= secret.length - 4; i++) expect(serialized).not.toContain(secret.slice(i, i + 4));
+  expect(value.runs[0]!.observations.at(-1)!.message).toBe('failed http://localhost:4173/api at app.js');
+});
 const response = (page: any, type: string, status = 404) => {
   const request = { resourceType: () => type, frame: () => page, isNavigationRequest: () => type === 'document' };
   page.emit('request', request);
@@ -61,8 +98,8 @@ it('collects exact event fields, expected statuses and DOM snippets', async () =
   const value = await run({ playwright: pw, plan: plan([{ goto: '/', expectStatus: [404] }]) });
   expect(value.runs[0]!.observations).toEqual([
     { kind: 'console', step: 0, path: '/page', message: 'boom' }, { kind: 'pageerror', step: 0, path: '/page', message: 'uncaught' },
-    { kind: 'http', step: 0, path: '/missing.js', status: 404, resourceType: 'document', expected: true, message: '404 /missing.js' },
-    { kind: 'http', step: 0, path: '/missing.js', status: 404, resourceType: 'script', message: '404 /missing.js' },
+    { kind: 'http', step: 0, path: '/missing.js', status: 404, resourceType: 'document', expected: true, message: '404 missing.js' },
+    { kind: 'http', step: 0, path: '/missing.js', status: 404, resourceType: 'script', message: '404 missing.js' },
     { kind: 'requestfailed', step: 0, path: '/api', message: 'failed' }, { kind: 'blank', step: 0, path: '/page', message: 'blank' },
     { kind: 'technicalText', step: 0, path: '/page', message: 'TypeError:' },
   ]);
@@ -83,9 +120,9 @@ it('enforces a flow deadline even when a browser operation never resolves', asyn
   } finally { vi.useRealTimers(); }
 });
 it('caps observations and messages with notes', async () => {
-  const pw = fake(page => { for (let index = 0; index < 205; index++) page.emit('console', { type: () => 'error', text: () => 'x'.repeat(600) }); });
+  const pw = fake(page => { for (let index = 0; index < 205; index++) page.emit('console', { type: () => 'error', text: () => 'word '.repeat(500) }); });
   const value = await run({ playwright: pw, plan: plan() });
-  expect(value.runs[0]!.observations).toHaveLength(200); expect(value.runs[0]!.observations[0]!.message).toHaveLength(500);
+  expect(value.runs[0]!.observations).toHaveLength(200); expect(value.runs[0]!.observations[0]!.message).toHaveLength(2000);
   expect(value.runs[0]!.notes).toContain('cap: message'); expect(value.runs[0]!.notes).toContain('cap: observations per run');
 });
 it('caps report observation count and UTF-8 serialized size', async () => {
@@ -96,6 +133,18 @@ it('caps report observation count and UTF-8 serialized size', async () => {
     expect(value.runs.reduce((sum, item) => sum + item.observations.length, 0)).toBeLessThanOrEqual(2000);
     expect(value.runs.flatMap(item => item.notes)).toContain(message === 'x' ? 'cap: observations per report' : 'cap: report size');
   }
+});
+it('keeps the 2 MiB report valid with 2000-character messages and teardown failures after caps', async () => {
+  const pw = fake((page, index) => {
+    for (let i = 0; i < 200; i++) page.emit('console', { type: () => 'error', text: () => '\u0000'.repeat(2000) });
+    pw.contexts[index].close.mockRejectedValue(new Error('\u0000'.repeat(2000)));
+  });
+  const input = { ...plan(), flows: Array.from({ length: 20 }, (_, index) => ({ name: `flow${index}`, steps: [{ goto: '/' }] })) };
+  const value = await run({ playwright: pw, plan: input }); const raw = JSON.stringify(value);
+  expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(2 * 1024 * 1024);
+  expect(parseRuntimeReport(raw, input)).not.toHaveProperty('error');
+  expect(value.runs.flatMap(item => item.notes)).toContain('cap: report size');
+  for (const item of value.runs) expect(item.observations.some(observation => observation.errorClass === 'infrastructure')).toBe(true);
 });
 it('executes all declarative actions with per-step timeouts and ignores only idle timeouts', async () => {
   const pw = fake(page => { page.waitForLoadState.mockImplementation(async (state: string) => {
@@ -132,9 +181,8 @@ it.each([
     document: { body: { innerText: text + '\nPRIVATE PAGE CONTENT' }, querySelectorAll: () => [] },
   })));
   const value = await run({ playwright: pw, plan: plan() });
-  expect(value.runs[0]!.observations).toEqual([{ kind: 'technicalText', step: 0, path: '/page', message: snippet.slice(0, 200) }]);
+  expect(value.runs[0]!.observations).toEqual([{ kind: 'technicalText', step: 0, path: '/page', message: snippet.startsWith('at name') ? 'at name ([token].js)' : snippet }]);
   expect(JSON.stringify(value)).not.toContain('PRIVATE PAGE CONTENT');
-  if (snippet.length > 200) expect(value.runs[0]!.notes).toContain('cap: message');
 });
 it.each(['img', 'svg', 'canvas', 'video', 'input'])('does not call visible %s blank', async tag => {
   const pw = fake(page => page.evaluate.mockImplementation(async (fn: Function) => runInNewContext(`(${fn.toString()})()`, {
@@ -151,14 +199,14 @@ it.each(['', 'Banana Finance myundefined TypeErrorish'])('inspects blank and ben
 });
 it('bounds failure messages, paths and host metadata', async () => {
   const pw = fake(async (page, index) => {
-    page.url = () => 'http://localhost/' + 'x'.repeat(600);
+    page.url = () => 'http://localhost/' + 'x.'.repeat(600);
     page.emit('console', { type: () => 'error', text: () => 'boom' });
     for (let host = 0; host < 201; host++) await pw.contexts[index].handler({ request: () => ({ url: () => `http://h${host}.test/secret` }), fulfill: async () => {} });
-    throw new Error('x'.repeat(400));
+    throw new Error('word '.repeat(500));
   });
   const value = await run({ playwright: pw, plan: plan() });
   expect(value.runs[0]!.observations[0]!.path).toHaveLength(500);
-  expect(value.runs[0]!.observations[1]!.message).toHaveLength(300);
+  expect(value.runs[0]!.observations[1]!.message).toHaveLength(2000);
   expect(Object.keys(value.runs[0]!.blockedExternal)).toHaveLength(200);
   expect(value.runs[0]!.notes).toEqual(['cap: path', 'cap: external hosts', 'cap: message']);
 });
@@ -173,7 +221,9 @@ it('allocates two contexts for each flow and closes the browser on teardown fail
   ] } });
   expect(pw.contexts).toHaveLength(4); expect(value.runs.map(item => [item.flow, item.run])).toEqual([['one', 1], ['one', 2], ['two', 1], ['two', 2]]);
   const broken = fake((_page, index) => { broken.contexts[index].close.mockRejectedValue(new Error('close failed')); });
-  await expect(run({ playwright: broken, plan: plan() })).rejects.toThrow('close failed'); expect(broken.browser.close).toHaveBeenCalledOnce();
+  const failed = await run({ playwright: broken, plan: plan() });
+  expect(failed.runs.every(item => item.observations.some(observation => observation.errorClass === 'infrastructure'))).toBe(true);
+  expect(broken.browser.close).toHaveBeenCalledOnce();
 });
 it('records resource categories and only errors from responses', async () => {
   const types = ['document', 'script', 'stylesheet', 'image', 'font', 'fetch', 'xhr', 'media'];

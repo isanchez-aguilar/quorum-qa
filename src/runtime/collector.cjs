@@ -1,11 +1,12 @@
 'use strict';
+const { scrubForDisplay, redact } = require('./scrub.cjs');
 
 const CHROMIUM_ARGS = Object.freeze(['--no-sandbox', '--disable-dev-shm-usage']);
 const MAX_BYTES = 2 * 1024 * 1024;
 // about:blank and other opaque URLs have no absolute path; record none.
 const pathname = value => { try { const path = new URL(value).pathname; return path.startsWith('/') ? path : ''; } catch { return ''; } };
 
-// Runs in the page. Return bounded evidence, never the full document text.
+// Runs in the page. Return only matched snippets; redact before bounding them outside.
 function inspectBody() {
   const text = document.body?.innerText || '';
   const visible = [...document.querySelectorAll('img,svg,canvas,video,input')].some(element => {
@@ -15,12 +16,12 @@ function inspectBody() {
   });
   const patterns = [/\bat [\w.$<>]+ \([^\n)]*:\d+:\d+\)/, /\bTypeError:/, /\bReferenceError:/, /\bSyntaxError:/,
     /\bundefined\b/, /\[object Object\]/, /\bNaN\b/, /\bInternal Server Error\b/, /\bECONNREFUSED\b/, /^\s*\{\s*"(?:error|message)"/];
-  const snippets = []; let truncated = false;
+  const snippets = [];
   for (const pattern of patterns) {
     const match = pattern.exec(text);
-    if (match) { if (match[0].length > 200) truncated = true; snippets.push(match[0].slice(0, 200)); }
+    if (match) snippets.push(match[0]);
   }
-  return { blank: text.trim() === '' && !visible, snippets, truncated };
+  return { blank: text.trim() === '' && !visible, snippets };
 }
 
 async function run({ playwright, plan, now = Date.now }) {
@@ -29,8 +30,20 @@ async function run({ playwright, plan, now = Date.now }) {
   }))) };
   // Reserve bounded metadata space (hosts, notes and completion) before observations.
   let bytes = Buffer.byteLength(JSON.stringify(report)); let total = 0; let sizeCapped = false;
-  const reserve = report.runs.length * 2048;
-  const browser = await playwright.chromium.launch({ args: CHROMIUM_ARGS });
+  const reserve = report.runs.length * 16000;
+  const clean = text => scrubForDisplay(redact(text, plan));
+  const infrastructure = (result, error) => {
+    result.completed = false;
+    const message = clean(String(error.message ?? error));
+    if (message.length > 2000 && !result.notes.includes('cap: message')) result.notes.push('cap: message');
+    // Reserve includes one infrastructure failure per run, even after observation caps.
+    if (result.observations.some(item => item.errorClass === 'infrastructure')) return;
+    if (result.observations.length >= 200) { result.observations.pop(); result.notes.push('cap: observations per run'); }
+    result.observations.push({ kind: 'flow-failure', step: 0, errorClass: 'infrastructure', message: message.slice(0, 2000) });
+  };
+  let browser;
+  try { browser = await playwright.chromium.launch({ args: CHROMIUM_ARGS }); }
+  catch (error) { for (const result of report.runs) infrastructure(result, error); return report; }
   try {
     for (let index = 0; index < report.runs.length; index++) {
       const result = report.runs[index]; const flow = plan.flows[Math.floor(index / 2)];
@@ -40,12 +53,14 @@ async function run({ playwright, plan, now = Date.now }) {
       const note = message => { if (!result.notes.includes(message)) result.notes.push(message); };
       const add = observation => {
         if (!active) return;
-        const cap = observation.kind === 'flow-failure' ? 300 : observation.kind === 'technicalText' ? 200 : 500;
+        const cap = 2000;
+        observation.message = clean(observation.message);
         if (observation.message.length > cap) note('cap: message');
         observation.message = observation.message.slice(0, cap);
+        if (observation.path) observation.path = scrubForDisplay('http://runtime' + redact(observation.path, plan)).slice('http://runtime'.length);
         if (observation.path?.length > 500) { note('cap: path'); observation.path = observation.path.slice(0, 500); }
         if (result.observations.length >= 200) { note('cap: observations per run'); return; }
-        if (total >= 2000) { note('cap: observations per report'); return; }
+        if (total >= 2000 - report.runs.length) { note('cap: observations per report'); return; }
         const size = Buffer.byteLength(JSON.stringify(observation)) + 1;
         if (sizeCapped || bytes + size + reserve > MAX_BYTES) { sizeCapped = true; note('cap: report size'); return; }
         bytes += size; total++; result.observations.push(observation);
@@ -69,10 +84,11 @@ async function run({ playwright, plan, now = Date.now }) {
           const url = new URL(route.request().url());
           if (['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return route.continue();
           if (active && url.hostname) {
-            if (Object.hasOwn(result.blockedExternal, url.hostname)) result.blockedExternal[url.hostname]++;
+            const host = clean(url.hostname);
+            if (Object.hasOwn(result.blockedExternal, host)) result.blockedExternal[host]++;
             else if (['__proto__', 'constructor', 'prototype'].includes(url.hostname)) note('cap: external hosts');
             else if (sizeCapped || bytes + reserve + 300 > MAX_BYTES) { sizeCapped = true; note('cap: report size'); }
-            else if (Object.keys(result.blockedExternal).length < 200) { result.blockedExternal[url.hostname] = 1; bytes += 300; }
+            else if (Object.keys(result.blockedExternal).length < 200) { result.blockedExternal[host] = 1; bytes += 300; }
             else note('cap: external hosts');
           }
           return route.fulfill({ status: 204, body: '' });
@@ -106,7 +122,7 @@ async function run({ playwright, plan, now = Date.now }) {
             else if (currentAction === 'waitForSelector') await page.waitForSelector(action.waitForSelector, options);
             else await page.waitForTimeout(action.wait);
             if (!active) return;
-            if (currentAction === 'goto' || currentAction === 'click') {
+            if (['goto', 'click', 'press', 'waitForUrl', 'waitForSelector'].includes(currentAction)) {
               await page.waitForLoadState('domcontentloaded', options);
               try { await page.waitForLoadState('networkidle', { timeout: Math.min(2000, options.timeout) }); }
               catch (error) { if (error.name !== 'TimeoutError') throw error; }
@@ -123,16 +139,16 @@ async function run({ playwright, plan, now = Date.now }) {
         result.completed = true;
       } catch (error) {
         const message = String(error.message ?? error);
-        const errorClass = error.name === 'TimeoutError' || /timed? ?out|timeout/i.test(message) ? 'timeout'
+        const errorClass = !currentAction ? 'infrastructure' : error.name === 'TimeoutError' || /timed? ?out|timeout/i.test(message) ? 'timeout'
           : /selector|No element|strict mode violation/i.test(message) ? 'selector'
           : /net::|navigation|navigate/i.test(message) ? 'navigation' : 'other';
         add({ kind: 'flow-failure', step: Math.min(step, flow.steps.length - 1), errorClass, message });
       } finally {
         active = false; expected = undefined;
-        if (context) await context.close();
+        if (context) try { await context.close(); } catch (error) { infrastructure(result, error); }
       }
     }
-  } finally { await browser.close(); }
+  } finally { try { await browser.close(); } catch (error) { for (const result of report.runs) infrastructure(result, error); } }
   return report;
 }
 

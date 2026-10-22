@@ -100,6 +100,16 @@ async function regularFile(root: string, name: string): Promise<string> {
 
 export interface PreparedDependencies { root: string; image: string; dependencyMount: string }
 type ContainerInvoke = (args: string[], limit?: number) => ReturnType<CommandRunner>;
+const preparations = new Map<string, Promise<void>>();
+
+async function lockPreparation(key: string): Promise<() => void> {
+  const previous = preparations.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  preparations.set(key, current);
+  await previous;
+  return () => { if (preparations.get(key) === current) preparations.delete(key); release(); };
+}
 
 // Shared preparation; the caller owns runtime detection and deadlines.
 export async function prepareDependencies(worktreePath: string, config: QuorumConfig['reproduce'],
@@ -111,6 +121,8 @@ export async function prepareDependencies(worktreePath: string, config: QuorumCo
   let createdVolume = false;
   let preparationComplete = false;
   let context: string | undefined;
+  let release: (() => void) | undefined;
+  let lease: string | undefined;
   try {
     const root = path.resolve(worktreePath);
     // Docker's --mount syntax treats commas as separators; reject rather than
@@ -159,6 +171,7 @@ export async function prepareDependencies(worktreePath: string, config: QuorumCo
     const identity = `${hash}:${LAYOUT}${suffix}`;
     const preparedImage = `quorum-prep:${hash}${suffix}`;
     volume = `quorum-deps-${hash}${suffix}`;
+    release = await lockPreparation(volume);
     context = await mkdtemp(path.join(os.tmpdir(), 'quorum-build-'));
     // This context contains only this generated Dockerfile, never repository data.
     await writeFile(path.join(context, 'Dockerfile'), `FROM ${image}\nRUN ${JSON.stringify(['npm', 'install', '-g', `${managerName}@${manager[2]}`])}\nRUN ${JSON.stringify(['mkdir', '-p', '/work/node_modules'])}\nRUN ${JSON.stringify(['chown', user, '/work/node_modules'])}\n`, { flag: 'wx' });
@@ -167,6 +180,13 @@ export async function prepareDependencies(worktreePath: string, config: QuorumCo
       const build = await invoke(['build', '--network', networkOn, '--label', `quorum.preparation=${identity}`, '--tag', preparedImage, context]);
       if (build.exitCode !== 0) return failure('preparation failed: image build');
     }
+    // Container names are atomic across processes. Never steal a live or stale lease:
+    // a competing preparation is unavailable rather than installing over its files.
+    const leaseName = `quorum-deps-preparing-${hash}${suffix}`;
+    const acquired = await invoke(['create', '--name', leaseName, '--network', 'none', '--user', user,
+      ...PREPARATION_LIMITS, preparedImage, 'node', '-e', '']);
+    if (acquired.exitCode !== 0) return failure('preparation failed: dependency volume in use');
+    lease = leaseName;
     const volumeExists = await invoke(['volume', 'inspect', volume]);
     const dependencyMount = `type=volume,src=${volume},dst=/work/node_modules`;
     const preparationMounts = ['--mount', `type=bind,src=${root},dst=/work,readonly`, '--mount', dependencyMount];
@@ -207,8 +227,11 @@ export async function prepareDependencies(worktreePath: string, config: QuorumCo
   } catch (error) {
     return failure(error instanceof CommandTimeoutError ? 'container timeout' : `preparation failed: ${error instanceof Error ? error.message : 'invalid metadata'}`, error instanceof CommandTimeoutError);
   } finally {
-    if (createdVolume && !preparationComplete && volume) await invoke(['volume', 'rm', volume], 5000).catch(() => undefined);
-    if (context) await rm(context, { recursive: true, force: true });
+    try {
+      if (createdVolume && !preparationComplete && volume) await invoke(['volume', 'rm', volume], 5000).catch(() => undefined);
+      if (lease) await invoke(['rm', '--force', lease], 5000).catch(() => undefined);
+      if (context) await rm(context, { recursive: true, force: true });
+    } finally { release?.(); }
   }
 }
 

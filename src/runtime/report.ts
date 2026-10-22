@@ -1,9 +1,10 @@
 import type { Flow } from './config.js';
+import { scrubForDisplay, redact } from './signature.js';
 
 export type ObservationKind = 'console' | 'pageerror' | 'http' | 'requestfailed' | 'blank' | 'technicalText' | 'flow-failure';
 export interface Observation {
   kind: ObservationKind; step?: number; path?: string; status?: number; resourceType?: string;
-  expected?: boolean; message: string; errorClass?: 'timeout' | 'selector' | 'navigation' | 'other';
+  expected?: boolean; message: string; errorClass?: 'timeout' | 'selector' | 'navigation' | 'other' | 'infrastructure';
 }
 export interface RuntimeRun {
   flow: string; run: 1 | 2; completed: boolean; observations: Observation[];
@@ -43,16 +44,18 @@ export function parseRuntimeReport(raw: string, plan: { flows?: Flow[] }): Runti
         || (total += rawRun.observations.length) > 2000) throw new Error('observation cap');
       if (!Array.isArray(rawRun.notes) || rawRun.notes.length > 20) throw new Error('invalid notes');
       const notes = rawRun.notes.map(note => string(note));
-      const cappedString = (value: unknown, cap = 500) => {
-        const result = string(value, cap);
-        if ((value as string).length > cap && !notes.includes('cap: string')) notes.push('cap: string');
-        return result;
+      const cappedString = (value: unknown, cap = 500, field = 'path') => {
+        if (typeof value !== 'string') throw new Error('invalid string');
+        const redacted = redact(value, plan);
+        const cleaned = field === 'path' ? scrubForDisplay('http://runtime' + redacted).slice('http://runtime'.length) : scrubForDisplay(redacted);
+        if (cleaned.length > cap && !notes.includes(`cap: ${field}`)) notes.push(`cap: ${field}`);
+        return cleaned.slice(0, cap);
       };
       const observations = rawRun.observations.map(rawObservation => {
         object(rawObservation, ['kind', 'step', 'path', 'status', 'resourceType', 'expected', 'message', 'errorClass']);
         if (!kinds.includes(string(rawObservation.kind))) throw new Error('invalid kind');
         const kind = rawObservation.kind as ObservationKind;
-        const observation: Observation = { kind, message: cappedString(rawObservation.message, kind === 'technicalText' ? 200 : kind === 'flow-failure' ? 300 : 500) };
+        const observation: Observation = { kind, message: cappedString(rawObservation.message, 2000, 'message') };
         if ('step' in rawObservation) observation.step = integer(rawObservation.step, 0, flow.steps.length - 1);
         if (['blank', 'technicalText', 'flow-failure'].includes(kind) && observation.step === undefined) throw new Error('missing step');
         if ('path' in rawObservation) {
@@ -73,7 +76,7 @@ export function parseRuntimeReport(raw: string, plan: { flows?: Flow[] }): Runti
           observation.expected = rawObservation.expected;
         }
         if ('errorClass' in rawObservation) {
-          if (!['timeout', 'selector', 'navigation', 'other'].includes(string(rawObservation.errorClass)) || kind !== 'flow-failure') throw new Error('invalid error class');
+          if (!['timeout', 'selector', 'navigation', 'other', 'infrastructure'].includes(string(rawObservation.errorClass)) || kind !== 'flow-failure') throw new Error('invalid error class');
           observation.errorClass = rawObservation.errorClass as Observation['errorClass'];
         }
         if (kind === 'http' && (observation.status === undefined || observation.path === undefined || observation.resourceType === undefined)

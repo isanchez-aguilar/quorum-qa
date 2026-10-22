@@ -26,7 +26,7 @@ it('starts without a shell and with only the allowed environment; kills the proc
   await vi.runAllTimersAsync(); expect(await pending).toEqual({ version: 1, runs: [] });
   expect(f.spawn).toHaveBeenCalledWith('node', ['server.cjs'], { shell: false, detached: true, cwd: '/work', stdio: ['ignore', 'ignore', 'pipe'],
     env: { PATH: '/bin', HOME: '/tmp', TMPDIR: '/tmp', XDG_CACHE_HOME: '/tmp', NODE_ENV: 'development', PORT: '4173', CI: '1' } });
-  expect(f.kill.mock.calls).toEqual([[-42, 'SIGTERM'], [-42, 'SIGKILL']]); expect(f.collect).toHaveBeenCalledOnce();
+  expect(f.kill.mock.calls.filter(call => call[1] !== 0)).toEqual([[-42, 'SIGTERM'], [-42, 'SIGKILL']]); expect(f.collect).toHaveBeenCalledOnce();
 });
 it('bounds and sanitizes stderr on readiness timeout without leaking fill values', async () => {
   vi.useFakeTimers(); const f = fixture(500); const pending = f.execute();
@@ -50,7 +50,7 @@ it('kills the app group when collection throws', async () => {
   vi.useFakeTimers(); const f = fixture(); f.collect.mockRejectedValueOnce(new Error('collector crashed'));
   const pending = expect(f.execute()).rejects.toThrow('collector crashed');
   await vi.runAllTimersAsync(); await pending;
-  expect(f.kill.mock.calls).toEqual([[-42, 'SIGTERM'], [-42, 'SIGKILL']]);
+  expect(f.kill.mock.calls.filter(call => call[1] !== 0)).toEqual([[-42, 'SIGTERM'], [-42, 'SIGKILL']]);
 });
 
 it('bounds a hanging HTTP request and does not follow redirects', async () => {
@@ -77,4 +77,21 @@ it('emits exactly the fresh marker/report at the entry point, never app stdout o
   f.app.stdout.emit('data', 'FRESH:{"forged":true}'); f.app.stderr.emit('data', 'PRIVATE_VALUE');
   await vi.runAllTimersAsync();
   expect(write.mock.calls).toEqual([['\nFRESH:{"version":1,"runs":[]}\n']]);
+});
+it('stops waiting and skips SIGKILL as soon as the process group is gone', async () => {
+  vi.useFakeTimers(); const f = fixture();
+  let alive = true;
+  f.kill.mockImplementation((_pid: number, signal: string | number) => {
+    if (signal === 'SIGTERM') { setTimeout(() => { alive = false; }, 120); return; }
+    if (signal === 0 && !alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+  });
+  const pending = f.execute(); const started = Date.now();
+  await vi.runAllTimersAsync(); await pending;
+  expect(f.kill.mock.calls.some(call => call[1] === 'SIGKILL')).toBe(false);
+  expect(Date.now() - started).toBeLessThan(2000);
+});
+it('sends SIGKILL when the group is still alive after three seconds', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.kill.mockImplementation(() => undefined);
+  const pending = f.execute(); await vi.runAllTimersAsync(); await pending;
+  expect(f.kill.mock.calls.filter(call => call[1] === 'SIGKILL')).toEqual([[-42, 'SIGKILL']]);
 });

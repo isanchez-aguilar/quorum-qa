@@ -7,7 +7,7 @@ const step = (value: unknown) => read({ flows: [{ name: 'login', steps: [value] 
 it('accepts the full runtime block and defaults an optional block', () => {
   expect(read({})).toEqual({ readyTimeoutSeconds: 60, flowTimeoutSeconds: 60, stepTimeoutSeconds: 10, screenshots: false, memoryMiB: 2048, pids: 512 });
   const runtime = { start: ['node', 'server.cjs'], readyUrl: 'http://127.0.0.1:4173/', readyTimeoutSeconds: 90,
-    flowTimeoutSeconds: 120, stepTimeoutSeconds: 20, screenshots: true, image: 'image@sha256:' + 'a'.repeat(64), memoryMiB: 4096, pids: 1024,
+    flowTimeoutSeconds: 120, stepTimeoutSeconds: 20, screenshots: false, image: 'image@sha256:' + 'a'.repeat(64), memoryMiB: 4096, pids: 1024,
     flows: [{ name: 'Sign-in_1.0', steps: [{ goto: '/', expectStatus: [404] }, { click: '#submit', expectStatus: [401, 403] },
       { fill: '#email', value: '' }, { press: '#email', key: 'Control+A' }, { waitForUrl: 'http://[::1]/ok' },
       { waitForSelector: 'main', timeoutSeconds: 1 }, { wait: 5000 }] }] };

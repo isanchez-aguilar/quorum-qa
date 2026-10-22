@@ -4,6 +4,7 @@ import type { RuntimeEvidence } from '../runtime/run.js';
 import type { RuntimeComparison } from '../runtime/compare.js';
 import { UsageError } from './args.js';
 import type { CliIo } from './index.js';
+import { runtimeText } from '../runtime/run.js';
 
 export function runtimeReview(config: RuntimeConfig | undefined, dryRun: boolean, io: CliIo): number {
   for (const key of ['start', 'readyUrl', 'flows'] as const) {
@@ -14,13 +15,13 @@ export function runtimeReview(config: RuntimeConfig | undefined, dryRun: boolean
     return 2;
   }
   io.out('Runtime plan (no commands run):\n'
-    + `  Start: ${runtime.start!.join(' ')}\n`
-    + `  Ready URL: ${runtime.readyUrl}\n`
+    + `  Start: ${runtimeText(runtime.start!.join(' '), runtime)}\n`
+    + `  Ready URL: ${runtimeText(runtime.readyUrl!, runtime)}\n`
     + `  Flows: ${runtime.flows!.length}; steps: ${runtime.flows!.reduce((count, flow) => count + flow.steps.length, 0)}\n`
     + `  Timeouts: ready ${runtime.readyTimeoutSeconds}s; flow ${runtime.flowTimeoutSeconds}s; step ${runtime.stepTimeoutSeconds}s\n`
     + `  Image: ${runtime.image ?? DEFAULT_RUNTIME_IMAGE}\n`
     + `  Limits: ${runtime.memoryMiB} MiB; ${runtime.pids} pids\n`
-    + `  Screenshots: ${runtime.screenshots ? 'on' : 'off'}\n`);
+    + '  Screenshots: off\n');
   return 0;
 }
 

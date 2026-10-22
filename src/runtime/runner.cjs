@@ -1,9 +1,8 @@
 'use strict';
 
 function sanitize(text, plan) {
-  for (const flow of plan.flows) for (const step of flow.steps) {
-    if ('fill' in step && step.value) text = text.split(step.value).join('[redacted]');
-  }
+  const { scrubForDisplay, redact } = require('./scrub.cjs');
+  text = scrubForDisplay(redact(text, plan));
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').slice(-2000);
 }
 
@@ -18,7 +17,8 @@ async function run({ start, plan, childProcess = require('node:child_process'), 
       ...(url.port ? { PORT: url.port } : {}), CI: '1' },
   });
   let tail = ''; let exited = false; let exitCode;
-  app.stderr.on('data', chunk => { tail = (tail + chunk.toString()).slice(-4000); });
+  const longestFill = Math.max(0, ...plan.flows.flatMap(flow => flow.steps.map(step => 'fill' in step ? step.value.length : 0)));
+  app.stderr.on('data', chunk => { tail = (tail + chunk.toString()).slice(-(4000 + longestFill)); });
   app.once('exit', code => { exited = true; if (Number.isInteger(code)) exitCode = code; });
   app.once('error', () => { exited = true; });
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -44,8 +44,10 @@ async function run({ start, plan, childProcess = require('node:child_process'), 
     // Kill the group even when the leader exited: descendants can still hold ports/pipes.
     if (app.pid) {
       try { kill(-app.pid, 'SIGTERM'); } catch {}
-      await sleep(3000);
-      try { kill(-app.pid, 'SIGKILL'); } catch {}
+      // Give the group up to 3 s to exit, but stop waiting as soon as signal 0 reports it gone (ESRCH).
+      const gone = () => { try { kill(-app.pid, 0); return false; } catch (error) { return error?.code === 'ESRCH'; } };
+      for (let waited = 0; waited < 3000 && !gone(); waited += 50) await sleep(50);
+      if (!gone()) { try { kill(-app.pid, 'SIGKILL'); } catch {} }
     }
     app.stderr.destroy?.();
   }

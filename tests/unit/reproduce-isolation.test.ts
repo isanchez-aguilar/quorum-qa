@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../src/config/schema.js';
 import { CommandTimeoutError } from '../../src/process/runner.js';
-import { DEFAULT_REPRODUCE_IMAGE, REPORT_WRAPPER, runIsolatedTest, dependencyKey } from '../../src/reproduce/isolation.js';
+import { DEFAULT_REPRODUCE_IMAGE, REPORT_WRAPPER, runIsolatedTest, dependencyKey, prepareDependencies } from '../../src/reproduce/isolation.js';
 import type { CommandRunner } from '../../src/types/index.js';
 
 const config = defaultConfig().reproduce;
@@ -12,6 +12,39 @@ const lock = 'synthetic-lockfile';
 let hash: string;
 let identity: string;
 const resolver = { platform: 'linux' as const, env: { PATH: '/tools' }, exists: () => true };
+it('serializes shared preparation and releases the keyed lock after failure', async () => {
+  const second = path.join(root, 'second'); await mkdir(second);
+  await writeFile(path.join(second, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0' }));
+  await writeFile(path.join(second, 'pnpm-lock.yaml'), lock);
+  // Keep both metadata trees identical, including the synthetic nested workspace.
+  const first = path.join(root, 'first'); await mkdir(first);
+  await writeFile(path.join(first, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0' }));
+  await writeFile(path.join(first, 'pnpm-lock.yaml'), lock);
+  let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+  let active = 0; let maximum = 0; let calls = 0;
+  const invoke = vi.fn(async (args: string[]) => {
+    if (args[0] === 'image') {
+      active++; maximum = Math.max(maximum, active);
+      if (++calls === 1) { entered(); await blocked; active--; throw new Error('synthetic preparation failure'); }
+      active--;
+    }
+    return { exitCode: 0, stdout: '', stderr: '' };
+  });
+  const one = prepareDependencies(first, config, invoke, invoke, 'default'); await started;
+  const two = prepareDependencies(second, config, invoke, invoke, 'default');
+  // Both filesystem scans finish while the first preparation remains blocked.
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(calls).toBe(1); release();
+  const results = await Promise.all([one, two]);
+  expect(maximum).toBe(1); expect(results[0]).toHaveProperty('reason'); expect(results[1]).toHaveProperty('root', second);
+});
+it('refuses a cross-process preparation lease collision without touching its volume or lease', async () => {
+  const invoke = vi.fn(async (args: string[]) => ({ exitCode: args[0] === 'create' ? 1 : 0, stdout: '', stderr: '' }));
+  const result = await prepareDependencies(root, config, invoke, invoke, 'default');
+  expect(result).toHaveProperty('reason', 'preparation failed: dependency volume in use');
+  expect(invoke.mock.calls.some(([args]) => args[0] === 'volume' || args[0] === 'rm' || args.includes('--frozen-lockfile'))).toBe(false);
+});
 const report = {
   numTotalTests: 1, numFailedTests: 1, success: false,
   testResults: [{ name: '/work/src/repro.test.ts', status: 'failed', assertionResults: [

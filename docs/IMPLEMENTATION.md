@@ -3358,3 +3358,27 @@ Final R3 validation: `pnpm typecheck` passed. `pnpm test` rebuilt and passed
 gate was explicitly disabled (`QUORUM_CONTAINER_TESTS=0`); no real container or
 provider was run. `git -c core.safecrlf=false diff --check` passed. No logs are
 retained; fake-runner report files and synthetic directories are cleaned up.
+
+## Runtime hardening
+
+Runtime coverage treats infrastructure failures and every evidence cap as
+incomplete. Page inspection also follows press and both wait-for actions.
+Messages retain 2000 characters for comparison (300 for display); serialized
+reports remain below 2 MiB with visible cap notes, deduplicated by flow/text.
+The shared collector/host scrubber redacts fill values before truncation and
+removes URL queries, fragments, userinfo, filesystem directories and long tokens.
+The app stderr tail reserves the longest fill value before sanitizing and then
+keeps 2000 display characters, including redaction of partial edge values.
+
+Setup uses a private per-side dependency volume copied offline as UID 1001 with
+symlinks/modes preserved; only the copy is writable and it is removed in finally.
+No setup means no copy and read-only shared dependencies. Shared preparation is
+serialized by volume in-process and uses an atomic named-container lease across
+processes; a conflict is unavailable ("dependency volume in use"). A stale lease
+is not automatically stolen. Screenshots are reserved for R5 (true is rejected).
+Runtime rejects provider/cache/reproduction CLI flags that it cannot honor.
+
+Regression tests use fake browser/container implementations, including cleanup,
+concurrent preparation, redaction boundaries and 500 KB scrubber timing. Real
+Docker and end-to-end CLI validation remain separate checks. Known limit:
+`budget.maxMinutes` does not bound Git/worktree preparation.

@@ -10,9 +10,11 @@ export interface RuntimeReport extends RuntimeVerdictResult {
 export function buildRuntimeReport(evidence: RuntimeEvidence, config: RuntimeConfig, options: { strictFlows: boolean }): RuntimeReport {
   const comparison = evidence.base && evidence.head ? compareRuntime(evidence.base, evidence.head, config) : undefined;
   const verdict = evaluateRuntimeVerdict(evidence, comparison, options);
+  const runNotes = (['base', 'head'] as const).flatMap(side => evidence[side]?.report.runs.flatMap(run =>
+    run.notes.map(note => `${runtimeText(run.flow, config)}: ${runtimeText(note, config)}`)) ?? []);
   return { ...verdict, reasons: verdict.reasons.map(reason => runtimeText(reason, config)), available: evidence.available,
     ...(comparison ? { comparison } : {}), strictFlows: options.strictFlows,
-    notes: evidence.notes.map(note => runtimeText(note, config)),
+    notes: [...new Set([...evidence.notes.map(note => runtimeText(note, config)), ...runNotes])],
     summary: comparison ? summarizeRuntimeComparison(comparison) : JSON.stringify({ available: false }),
   };
 }

@@ -50,6 +50,38 @@ function fake(options: { ready?: boolean; mismatch?: boolean; timeout?: boolean;
 function execute(containerRunner = fake(), extra = {}, value = config()) {
   return runRuntimeEvidence(context, value, { root, gitRunner: async () => { throw new Error('unexpected git'); }, containerRunner, resolveOptions: resolver, ...extra });
 }
+it.each(['success', 'setup-failure', 'timeout', 'copy-failure', 'copy-timeout', 'setup-timeout'] as const)('isolates setup dependency writes and removes per-side volumes on %s', async outcome => {
+  const value = config(); value.setup = [['node', 'setup.cjs']];
+  const runner = fake({ timeout: outcome === 'timeout' }); const original = runner.getMockImplementation()!;
+  runner.mockImplementation(async (command, args, options) => {
+    if (outcome === 'copy-timeout' && args.includes('cp') || outcome === 'setup-timeout' && args.includes('setup.cjs')) throw new CommandTimeoutError('', '');
+    if (outcome === 'setup-failure' && args.includes('setup.cjs') || outcome === 'copy-failure' && args.includes('cp')) return { exitCode: 1, stdout: '', stderr: '' };
+    return original(command, args, options);
+  });
+  const result = await execute(runner, {}, value);
+  expect(result.available).toBe(outcome === 'success');
+  const copies = runner.mock.calls.filter(([, args]) => args.includes('cp'));
+  expect(copies).toHaveLength(2);
+  const volumes = new Set<string>();
+  for (const [, args] of copies) {
+    expect(args).toEqual(expect.arrayContaining(['--network', 'none', '--user', '1001:1001', '--cap-drop', 'ALL', '--read-only', '--security-opt', 'no-new-privileges', '--memory', '2g', '--pids-limit', '512', '--cpus', '2', 'cp', '-a', '/quorum/source/.', '/work/node_modules/']));
+    expect(args.find(arg => arg.startsWith('type=volume,src=quorum-deps-'))).toMatch(/dst=\/quorum\/source,readonly$/);
+    const mount = args.find(arg => arg.startsWith('type=volume,src=quorum-runtime-run-'))!;
+    expect(mount).toMatch(/dst=\/work\/node_modules$/);
+    const volume = mount.split('src=')[1]!.split(',')[0]!; volumes.add(volume);
+    expect(runner.mock.calls.some(([, call]) => call[0] === 'volume' && call[1] === 'rm' && call.includes(volume))).toBe(true);
+  }
+  expect(volumes.size).toBe(2);
+  for (const [, args] of runner.mock.calls.filter(([, args]) => args.includes('setup.cjs') || args.includes('/quorum/bin/runner.cjs'))) {
+    expect(args.some(arg => arg.startsWith('type=volume,src=quorum-deps-') && !arg.endsWith(',readonly'))).toBe(false);
+    const mount = args.find(arg => arg.startsWith('type=volume,src=quorum-runtime-run-'))!;
+    expect(mount).toBeDefined(); expect(mount.endsWith(',readonly')).toBe(args.includes('/quorum/bin/runner.cjs'));
+  }
+});
+it('does not copy dependencies without setup', async () => {
+  const runner = fake(); await execute(runner);
+  expect(runner.mock.calls.some(([, args]) => args.includes('cp') || args.some(arg => arg.includes('quorum-runtime-run-')))).toBe(false);
+});
 
 it('reports unavailable when no container runtime exists', async () => {
   const result = await runRuntimeEvidence({ mode: 'runtime', diff: '', baseCommit: 'a', headCommit: 'b', worktreeRoot: '.', touchedFiles: [] }, { ...defaultConfig(), checks: [] }, {
