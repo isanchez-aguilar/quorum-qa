@@ -1,6 +1,6 @@
 # Plan: runtime R5, screenshots and the optional model layer
 
-Status: V0 built (local capture, transport, storage and caps; no model). V1 and V2 pending; real Docker verification remains opt-in. Written 2026-10-21. Read [RUNTIME-PLAN.md](RUNTIME-PLAN.md) first; R0-R3 are built and the verdict is deterministic. R5 adds two things on top and changes nothing about the deterministic verdict: **(a) screenshots** and **(b) an opt-in visual review by a model**.
+Status: V0 and V1 built (local screenshots and opt-in advisory visual review, verified with fake providers/runners). V2 pending; real providers and Docker verification remain opt-in and were not run for V1. Written 2026-10-21. Read [RUNTIME-PLAN.md](RUNTIME-PLAN.md) first; R0-R3 are built and the verdict is deterministic. R5 adds two things on top and changes nothing about the deterministic verdict: **(a) screenshots** and **(b) an opt-in visual review by a model**.
 
 ## Why
 
@@ -51,7 +51,7 @@ The deterministic collector sees console errors, HTTP status, blank pages and te
 | | Deliverable | Verification |
 |---|---|---|
 | V0 | Capture + transport + storage + caps, `screenshots: true` re-enabled, no model | fake Playwright and fake runner tests; forged IMG lines; real Docker test asserts a JPEG per step with correct hash |
-| V1 | Pairing, prompt, `visual` tier call, corroboration, verdict rule, reporters, `--visual` | fake provider tests (agree, disagree, one family only, errors, caps); a recorded-response end-to-end |
+| V1 (built) | Pairing, prompt, `visual` tier call, corroboration, verdict rule, reporters, `--visual`; synthetic `layout-break` fixture | fake provider tests (agree, disagree, one family only, errors, caps); scripted-response end-to-end; no real provider or Docker run |
 | V2 | One real run with real providers on the fixture app (`console-error` and a layout-break variant added to the fixture), result written up | needs quota: Isaac's yes before running |
 
 ## Risks and answers

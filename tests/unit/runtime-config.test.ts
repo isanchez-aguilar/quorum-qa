@@ -4,6 +4,15 @@ import { modeInstructions } from '../../src/modes/index.js';
 
 const read = (runtime: unknown) => validateConfig({ checks: [], runtime }).runtime;
 const step = (value: unknown) => read({ flows: [{ name: 'login', steps: [value] }] });
+it('validates optional visual settings without enabling capture', () => {
+  expect(read({ visual: { maxCalls: 1, allowedFamilies: ['local'] } })).toMatchObject({ screenshots: false, visual: { maxCalls: 1, allowedFamilies: ['local'] } });
+  expect(read({ visual: {} })!.visual).toEqual({});
+  expect(read({ visual: { maxCalls: 40 } })!.visual!.maxCalls).toBe(40);
+  for (const visual of [null, [], { extra: true }, { maxCalls: 0 }, { maxCalls: 41 }, { maxCalls: 1.5 },
+    { maxCalls: '2' }, { allowedFamilies: 'local' }, { allowedFamilies: ['unknown'] }, { allowedFamilies: [null] }]) {
+    expect(() => read({ visual })).toThrow('runtime.visual');
+  }
+});
 it('accepts the full runtime block and defaults an optional block', () => {
   expect(read({})).toEqual({ readyTimeoutSeconds: 60, flowTimeoutSeconds: 60, stepTimeoutSeconds: 10, screenshots: false, memoryMiB: 2048, pids: 512 });
   const runtime = { start: ['node', 'server.cjs'], readyUrl: 'http://127.0.0.1:4173/', readyTimeoutSeconds: 90,

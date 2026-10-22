@@ -19,7 +19,8 @@ function createFixtureServer(behavior = process.env.QUORUM_FIXTURE || 'good') {
       const body = pathname === '/about' ? '<h1>About</h1><p>A synthetic fixture page.</p>'
         : behavior === 'blank' ? ''
         : behavior === 'technical' ? '<h1>TypeError: x is not a function</h1><p>Internal Server Error</p>'
-        : '<h1>Runtime fixture</h1><a href="/about">About</a>' + (scripts[behavior] || '');
+        : behavior === 'layout-break' ? '<h1>Runtime fixture</h1><a href="/about">About</a><div style="position:relative;height:200px"><div style="position:absolute;top:0;left:0;width:240px;background:coral">Layout box one</div><div style="position:absolute;top:0;left:40px;width:240px;background:skyblue">Layout box two</div></div>'
+        : '<h1>Runtime fixture</h1><a href="/about">About</a><div>Layout box one</div><div>Layout box two</div><button type="button">Primary action</button>' + (scripts[behavior] || '');
       res.end('<!doctype html><html><head><title>Runtime fixture</title></head><body>' + body + '</body></html>');
     } else {
       res.writeHead(404, { 'Content-Type': 'text/plain' });

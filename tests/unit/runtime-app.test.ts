@@ -17,6 +17,7 @@ it.each([
   ['uncaught', "throw new Error('uncaught')"], ['http500', "fetch('/api/data')"],
   ['http404', '<script src="/missing.js">'], ['blank', '<body></body>'],
   ['technical', 'TypeError: x is not a function'], ['external', "fetch('https://example.test/x.js')"],
+  ['layout-break', 'position:absolute'],
 ])('serves %s on loopback with no caching', async (behavior, expected) => {
   const { createFixtureServer } = require('../fixtures/runtime-app/server.cjs') as { createFixtureServer: () => Server };
   const previous = process.env.QUORUM_FIXTURE;
@@ -43,6 +44,11 @@ it.each([
       cache: 'no-store', body: behavior === 'http500' ? '{"error":"fixture failure"}' : '{"ok":true}' });
     if (behavior === 'technical') expect(home.body).toContain('Internal Server Error');
     if (behavior === 'external') expect(home.body).toContain('<script src="https://example.test/x.js">');
+    if (behavior === 'layout-break') {
+      expect(home.body).toContain('Layout box two'); expect(home.body).not.toContain('<button');
+      expect(home.body).not.toContain('<script');
+    }
+    if (behavior === 'good') expect(home.body).toContain('<button');
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 it('defaults to the good behavior', async () => {

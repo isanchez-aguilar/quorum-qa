@@ -3,19 +3,21 @@ import { compareRuntime, summarizeRuntimeComparison, type RuntimeComparison, typ
 import type { RuntimeConfig } from '../runtime/config.js';
 import { runtimeText, type RuntimeEvidence, type StoredRuntimeShot } from '../runtime/run.js';
 import { cell } from './refactor.js';
+import type { VisualReview } from '../runtime/visual.js';
 
 export interface RuntimeReport extends RuntimeVerdictResult {
+  visual?: VisualReview;
   shots: Array<StoredRuntimeShot & { side: 'base' | 'head'; paired: boolean }>;
   available: boolean; comparison?: RuntimeComparison; strictFlows: boolean; notes: string[]; summary: string;
 }
-export function buildRuntimeReport(evidence: RuntimeEvidence, config: RuntimeConfig, options: { strictFlows: boolean }): RuntimeReport {
+export function buildRuntimeReport(evidence: RuntimeEvidence, config: RuntimeConfig, options: { strictFlows: boolean; visual?: VisualReview }): RuntimeReport {
   const comparison = evidence.base && evidence.head ? compareRuntime(evidence.base, evidence.head, config) : undefined;
   const verdict = evaluateRuntimeVerdict(evidence, comparison, options);
   const runNotes = (['base', 'head'] as const).flatMap(side => evidence[side]?.report.runs.flatMap(run =>
     run.notes.map(note => `${runtimeText(run.flow, config)}: ${runtimeText(note, config)}`)) ?? []);
-  return { ...verdict, reasons: verdict.reasons.map(reason => runtimeText(reason, config)), available: evidence.available,
+  return { ...verdict, ...(options.visual ? { visual: options.visual } : {}), reasons: verdict.reasons.map(reason => runtimeText(reason, config)), available: evidence.available,
     ...(comparison ? { comparison } : {}), strictFlows: options.strictFlows,
-    notes: [...new Set([...evidence.notes.map(note => runtimeText(note, config)), ...runNotes])],
+    notes: [...new Set([...evidence.notes.map(note => runtimeText(note, config)), ...runNotes, ...(options.visual?.notes ?? [])])],
     shots: (['base', 'head'] as const).flatMap(side => (evidence[side]?.shots ?? []).map(shot => ({
       flow: shot.flow, step: shot.step, mime: shot.mime, bytes: shot.bytes, sha256: shot.sha256, path: shot.path, side,
       paired: (evidence[side === 'base' ? 'head' : 'base']?.shots ?? []).some(other => other.flow === shot.flow && other.step === shot.step),
@@ -31,6 +33,7 @@ const list = (items: string[]) => items.map(item => `- ${literal(item)}`).join('
 
 export function runtimeMarkdown(report: RuntimeReport): string[] {
   const comparison = report.comparison;
+  const visual = report.visual;
   return [
     `**Verdict:** ${report.verdict} · exit ${report.exitCode}`,
     '## Runtime comparison',
@@ -52,7 +55,25 @@ export function runtimeMarkdown(report: RuntimeReport): string[] {
     '### Notes', list(report.notes),
     `Covered flows: ${(comparison?.coveredFlows ?? []).map(literal).join(', ') || 'none'}.`,
     'The statement "no new problems found" covers only the listed flows; it is not a claim about the whole app.',
-    'Runtime comparison is deterministic; no provider calls.',
+    ...(visual?.requested ? [
+      '## Visual review (advisory)',
+      `Calls: ${visual.calls} / ${visual.maxCalls}; images sent: ${visual.images}; pairs reviewed: ${visual.pairs}.`,
+      `Families: ${visual.families.map(literal).join(', ') || 'none'}.`,
+      ...[...new Set([...Object.keys(comparison?.flows ?? {}), ...visual.findings.map(finding => finding.flow), ...visual.incompleteFlows])].flatMap(flow => [
+        `### Visual flow: ${literal(flow)}`,
+        list(report.shots.filter(shot => shot.flow === flow && shot.paired).map(shot => `${flow}/${shot.step}: ${shot.side}: ${shot.path} (${visual.notes.includes(`visual pair reviewed: ${flow}/${shot.step}`) ? 'reviewed' : 'not reviewed'})`)),
+        list(visual.findings.filter(finding => finding.flow === flow).map(finding => {
+          const attached = [...(comparison?.newAtHead ?? []), ...(comparison?.preExisting ?? []), ...(comparison?.flowBroke ?? [])]
+            .some(item => item.flow === flow && item.step === finding.step);
+          return `${flow}/${finding.step}: ${finding.severity}, visual, unverified; ${finding.corroborated ? 'corroborated' : 'uncorroborated'}; ${finding.provider}:${finding.model} (${finding.family}): ${finding.trigger}; ${finding.impact}${attached ? ' (context for deterministic finding above)' : ''}`;
+        })),
+      ]),
+      '### Unpaired images', list(visual.unpaired),
+      '### Visual incomplete flows', list(visual.incompleteFlows),
+      '### Visual notes', list(visual.notes),
+      'Screenshots of the app are sent to the named providers. Use test data only. Visual claims are advisory.',
+    ] : ['Visual review: off']),
+    'Runtime comparison is deterministic; visual review never creates a failing exit code.',
   ];
 }
 
@@ -68,5 +89,12 @@ export function runtimeSarif(report?: RuntimeReport) {
     ...(report?.comparison?.newAtHead ?? []).map(item => result(item, 'error')),
     ...(report?.comparison?.flowBroke ?? []).map(item => result(item, report?.strictFlows ? 'error' : 'warning')),
     ...(report?.comparison?.preExisting ?? []).map(item => result(item, 'note')),
+    ...(report?.visual?.findings ?? []).map(finding => ({
+      ruleId: 'quorum-runtime/visual', level: finding.corroborated ? 'warning' : 'note',
+      message: { text: `${finding.trigger}; ${finding.impact}` },
+      locations: [{ physicalLocation: { artifactLocation: { uri: 'quorum.config.json', uriBaseId: '%SRCROOT%' } },
+        logicalLocations: [{ name: `${finding.flow}/${finding.step}`, kind: 'member' }] }],
+      properties: { deterministic: false, advisory: true, ...finding },
+    })),
   ];
 }

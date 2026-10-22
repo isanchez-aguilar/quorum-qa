@@ -3,6 +3,7 @@ import { createReviewWorktree, isClean } from '../worktree/index.js';
 import { isRecord } from '../cascade/parse.js';
 import { ProviderCommands, quotaLanguage, remaining, cleanupPreservingError } from './commands.js';
 import { ProviderError, type ProviderAdapter, type Quota, type RawProviderResult, type ReviewOptions } from './types.js';
+import { runtimeImageInstructions, runtimeImageWorkspace } from '../runtime/image-workspace.js';
 
 export const claudeArgs = (model: string): string[] => ['-p', '--output-format', 'json', '--model', model,
   '--no-session-persistence', '--restricted', '--strict-mcp-config', '--tools', 'Read,Grep,Glob', '--permission-mode', 'dontAsk'];
@@ -35,7 +36,9 @@ export class ClaudeProvider extends ProviderCommands implements ProviderAdapter 
   async executeReview(context: ReviewContext, modelId: string, prompt: string, options: ReviewOptions): Promise<RawProviderResult> {
     const started = this.now();
     remaining(options, started, this.now);
-    const worktree = await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run, options.warn);
+    const images = context.mode === 'runtime' ? await runtimeImageWorkspace(context) : undefined;
+    const worktree = images ?? await createReviewWorktree(context.worktreeRoot, context.headCommit, this.run, options.warn);
+    if (images) prompt = runtimeImageInstructions(context) + prompt;
     let failure: unknown;
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -51,7 +54,7 @@ export class ClaudeProvider extends ProviderCommands implements ProviderAdapter 
           throw new ProviderError('quota', 'claude quota exhausted or rate limited');
         }
         const rawOutput = claudeAnswer(envelope) ?? 'Invalid Claude result envelope';
-        const clean = await isClean(worktree.path, this.run);
+        const clean = images ? await images.clean() : await isClean(worktree.path, this.run);
         if (!clean) return { rawOutput, durationMs: this.now() - started, worktreeClean: false };
         if (attempt === 0 && result.exitCode !== 0 && !result.stdout.trim()) {
           remaining(options, started, this.now);

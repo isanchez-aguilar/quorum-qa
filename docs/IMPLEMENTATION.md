@@ -3406,3 +3406,54 @@ otherwise collide). A storage refusal adds a note without affecting the verdict.
 Markdown/JSON list paths, sizes, hashes and pairing, without base64 or inline
 images. SARIF and the bounded model summary retain their prior structure.
 Tests use fake browsers and containers; the extended real Docker test is opt-in.
+
+## Runtime V1 as built
+
+Runtime-only `--visual` implies screenshot capture. The optional `runtime.visual`
+block validates `maxCalls` (1–40) and `allowedFamilies`; configuration alone
+never enables calls. Dry-run lists call/image ceilings and eligible recipients
+without invoking providers or containers. Provider construction and quota refresh
+are shared with other review modes; runtime enters them only with `--visual`.
+The visual budget starts before deterministic collection, so elapsed collection
+time reduces the remaining model deadline. No runtime ledger or cache is written.
+
+`runtime/visual.ts` pairs stored shots by flow and zero-based step (`flow/step`),
+lists unpaired shots, and borrows `resolveTier`, `quotaStatus`, `parseFindings` and
+`RunBudget` directly. The cascade implementation and its tests are unchanged.
+The first eligible family reviews each flow's paired images; only findings trigger
+an independent-family call with the same prompt and images. Quota failures mark
+the shared group unavailable. Every inference, including an adapter retry, counts
+against both ceilings. Counts of images include repeated transmissions.
+
+The attachment factory checks paths, links, JPEG bytes and hashes, copies only
+paired images to a fresh OS-temp directory outside the repository, and cleans it
+in `finally`, including on failures. The runtime path in the existing agy/Claude
+adapters borrows that directory instead of creating a code worktree, permits
+reading the named JPEGs, and checks its contents for modifications. Their existing
+code-review paths are unchanged. This small adapter bridge was necessary because
+the pre-V1 adapters created Git worktrees and agy's text-only prefix forbade image
+reads; passing `context.images` alone did not provide image isolation.
+
+Prompts contain quoted flow/step data (actions/selectors, no fill values), paired
+image labels and a narrow regression task. They contain no diff, touched files,
+source code or environment configuration. Image text is explicitly untrusted.
+Unknown finding labels are dropped and counted, malformed output makes visual
+coverage incomplete, and BLOCKER is capped to IMPORTANT. At most ten claims per
+call reserve space for both families (twenty per flow); displayed claims are
+redacted before the 300-character trigger/impact caps. Inline image data is removed.
+
+Corroboration groups by pair label and distinct family, preserving both claims.
+Only an otherwise clean verdict becomes SUSPECT (exit 0); existing SUSPECT,
+NEW RUNTIME PROBLEMS and UNKNOWN retain their verdicts and exit codes. Visual
+failures never affect deterministic coverage. Markdown labels the advisory claims,
+links them to deterministic observations at the same step, and lists stored image
+paths, reviewed pairs, unpaired images and coverage notes. JSON carries VisualReview;
+SARIF uses `quorum-runtime/visual` at the config file with `flow/step` logical
+locations, warning/note levels and no source line. The bounded model summary
+continues to contain only deterministic evidence, never visual claims or images.
+
+The synthetic fixture's `layout-break` response overlaps two boxes and omits the
+primary button with inline CSS and no browser errors. Unit/HTTP tests and `main()`
+tests use synthetic data, scripted providers and fake container runners. Real
+provider image ingestion, CLI permission enforcement and visual judgement remain
+V2 checks; no quota, real provider calls or Docker runs are part of V1 validation.
