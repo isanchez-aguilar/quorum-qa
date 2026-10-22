@@ -6,6 +6,20 @@
 
 ---
 
+## Review fixes batch A
+
+- **C1:** semantic verification retains grouping brackets and operators, including ternary punctuation; ordinary quote style and trailing separators remain tolerated, while template literals retain their meaning.
+- **C2:** negation tokens are retained and trigger negation parity gates strong merges. Shared absence alone does not establish a possibly-related annotation.
+- **C3:** disk cache entries carry HMAC-SHA256 over `[version, key, model, rawOutput]`, checked with `timingSafeEqual`. A lazily created, exclusive 32-byte user key lives at `~/.quorum/cache.key` (0600 where supported); unavailable keys disable caching with a warning. Unsigned or forged entries miss. Cache home is injectable for synthetic tests.
+- **C4:** verifier read errors are distinguished from absent evidence and retained in `coverage.lostFindings` as `verifier read error`, with file warnings and incomplete coverage.
+- **P1:** interrupted or inconsistent reports carry an infrastructure marker; a passing base additionally requires exit 0, otherwise reproduction remains unproven.
+- **P2:** failure details are paired with messages by index. Mismatched detail counts produce unknown failures, never assertion proof.
+- **P3:** infrastructure detection scans each line a constant number of times, including worker, cache-permission and missing-command patterns. Regressions cover 256 KiB/1 MiB inputs and best-of-five 64/256 KiB scaling below 8.
+- **K2:** reproduction fences use an iterative maximum. Unbounded confidence/quota reductions and review-note/finding appends avoid function-argument spreads; runtime maxima remain bounded by 20 flows and 50 steps per flow.
+- **K3:** untrusted Markdown prose escapes brackets, backslashes, pipes, newlines and HTML openers throughout review/refactor output, including rule notes and independence warnings. Runtime output already encodes Markdown delimiters; regression tests cover it too. Proposed code inside fences is preserved.
+
+Regression probes are named by item ID in `tests/unit/review-batch-a*.test.ts`; reporter-specific cases also cover refactor output. Historical token expectations and passing-report fixtures were updated to the corrected semantics, rather than preserving discarded grouping/negation or contradictory `success: false` evidence.
+
 ## 1. Repository Layout
 
 Every directory and source file for v1, with a one-line summary of its responsibility:
@@ -3493,3 +3507,55 @@ UNKNOWN" contradicts the intended rule for a stable same-step failure, so accept
 should be written from the verdict table rather than from the summary.
 The deterministic `pnpm test` check failed once inside the review's disposable worktree and passed
 in six later runs of that worktree; the failing test could not be identified from the stored report.
+
+## Review fixes batch B
+
+- **M1:** Refactor verdicts include deterministic rule IDs and locations. Error matches
+  force NOT EQUIVALENT / exit 1; warnings make complete evidence SUSPECT / exit 0.
+  This also applies to deterministic-only reviews. Timed-out or partially scanned
+  rules cannot produce a clean verdict.
+- **M2:** New test failures include added failures and skipped-to-failed transitions.
+  Reasons and the bounded context summary list the first few new failures, while
+  `regressions` retains passed-to-failed semantics for existing reporters.
+  Passed-to-skipped tests and failures at
+  both revisions make otherwise complete evidence SUSPECT.
+- **M3:** Package `exports`, `imports`, and `typesVersions` preserve object key order
+  recursively; other package fields retain order-insensitive object comparison.
+- **M4:** Enum skeletons retain implicit values, including offsets after explicit
+  numeric initializers. Reordering, inserting, or removing earlier members detects
+  changed values; explicitly initialized members remain order-insensitive. Unknown
+  initializer expressions retain symbolic offsets and mark implicit values incomplete.
+- **M5:** CodeGraph symbols use delimiter scans instead of overlapping regex
+  quantifiers. Tests cover 256 KiB and 1 MiB malformed lines and best-of-five
+  64-to-256 KiB scaling. The regex audit also reproduced backtracking on Unicode
+  line separators in acceptance criteria and contract clauses; those patterns now
+  separate whitespace from content. Configurable rule regexes remain worker-bounded.
+- **K4:** `doctor --dry-run --probe` fails with an explicit UsageError before any
+  diagnostics. Plain doctor and help/version also reject ignored dry-run flags;
+  rules propose already rejected them and now uses the common error. Review modes
+  retain their existing dry-run plans.
+- **T1:** Shared `fastest` and `expectLinear` helpers filter scheduling noise using
+  repeated measurements without increasing performance bounds. Eligible refactor,
+  contract, and runtime adversarial tests retain their original 50–300 ms limits.
+  Tests outside this batch's ownership and bounds above 1000 ms are unchanged.
+  A temporary quadratic mutation of the API scanner failed the converted
+  50,000-member skeleton test (best of three: 3495 ms against 300 ms); the
+  unmodified scanner passed after the temporary probe files were removed.
+  With a one-off synthetic 400 ms scheduling delay, the original single-sample
+  test failed (518 ms) while the converted test passed at the same 300 ms bound.
+
+## Review fixes follow-up
+
+- **F1:** The semantic lexer skips line and block comments while retaining string,
+  template, division, operator, and grouping semantics. A failed textual search
+  retries without comments using the same lexer, preserving line numbers and
+  source-line size limits; exact substring matches retain their existing behavior.
+- **F2:** `unless`, `except`, `instead`, and `otherwise` remain similarity tokens
+  and participate in negation parity, keeping opposite conditions separate.
+- **F3:** Empty or truncated cache keys recover through a private, exclusive
+  temporary file and atomic rename. A cross-process repair lock and recheck avoid
+  overwriting an already valid key; every repair caller rereads the stored key.
+- **F4:** Unreadable confirmation retries count once per original finding, while
+  warnings remain deduplicated per file.
+- Regression coverage reproduces all four defects, checks eight concurrent cache
+  instances, and times 256 KiB comment inputs with the shared `fastest` helper.

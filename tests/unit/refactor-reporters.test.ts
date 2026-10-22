@@ -25,6 +25,16 @@ function result(): ReviewResult {
   } as ReviewResult;
 }
 
+it.each(['![remote](https://example.invalid/pixel)', '[link](https://example.invalid)', '[x][y]', '<https://example.invalid>'])('K3 escapes refactor notes and evidence: %s', text => {
+  const report = result();
+  report.refactor!.reasons = [text];
+  report.refactor!.api.notes = [text];
+  report.refactor!.api.changes[0]!.name = text;
+  report.refactor!.tests.regressions[0]!.name = text;
+  report.refactor!.blastRadius.notes = [text];
+  expect(generateMarkdownReport(report)).not.toContain(text);
+});
+
 it('reports refactor verdict, counts, evidence and behaviour findings without origin', () => {
   const markdown = generateMarkdownReport(result());
   for (const text of ['**Verdict:** NOT EQUIVALENT', 'Test results at base and head', 'Regressions', 'Removed tests',

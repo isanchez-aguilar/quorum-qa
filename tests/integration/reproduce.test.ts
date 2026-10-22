@@ -40,7 +40,11 @@ function container(reports: string[] = [report(), report('passed')], unavailable
     if (unavailable) return { stdout: '', stderr: 'no runtime', exitCode: 1 };
     if (args[0] === 'image' || args[0] === 'volume' && args[1] === 'inspect') return { stdout: '', stderr: '', exitCode: 1 };
     const marker = args.find(arg => arg.startsWith('QUORUM_REPORT_'));
-    return { stdout: marker ? `${marker}${reports.shift() ?? report('passed')}` : '', stderr: '', exitCode: marker ? 1 : 0 };
+    if (!marker) return { stdout: '', stderr: '', exitCode: 0 };
+    const raw = reports.shift() ?? report('passed');
+    let exitCode = 1;
+    try { if (JSON.parse(raw).testResults.every((suite: { status: string }) => suite.status === 'passed')) exitCode = 0; } catch { /* Malformed fixture reports fail. */ }
+    return { stdout: `${marker}${raw}`, stderr: '', exitCode };
   };
   return Object.assign(run, { calls });
 }

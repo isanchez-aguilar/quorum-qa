@@ -52,7 +52,7 @@ it.each(['local', 'points-at-change'])('persists verified %s findings visible in
   let out = ''; let err = '';
   const code = await main(['review', '--mode', 'bughunt', '--diff', 'base...HEAD', '--trust-head-config', '--no-checks', '--json'],
     { out: text => { out += text; }, err: text => { err += text; } },
-    { repoRoot: root, gitRunner: runner, catalog, providers: new Map([[provider.name, provider]]) });
+    { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, catalog, providers: new Map([[provider.name, provider]]) });
   expect(code, err).toBe(local ? 2 : 0);
   const result = JSON.parse(out);
   expect(local ? result.unconfirmed : result.pointsAtChange).toMatchObject([{ verified: true }]);

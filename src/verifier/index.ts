@@ -9,6 +9,7 @@ import {
   findQuote,
   FUZZY,
   matchAtLine,
+  MAX_LINE,
   MAX_QUOTE_CHARS,
   MAX_QUOTE_LINES,
   MAX_RAW_QUOTE,
@@ -16,7 +17,7 @@ import {
   normalizeQuote,
   WORK_BUDGET,
 } from './quote.js';
-import { semanticDifference } from './semantic.js';
+import { semanticDifference, withoutComments } from './semantic.js';
 
 // Files bigger than this are not read: a model citing a bundle or a data dump is not a review.
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -31,6 +32,7 @@ export interface VerifyResult {
   // stays the ORIGINAL quote; a fuzzy note carries the text actually found in the code.
   correctedFinding?: Finding;
   reason?: string;
+  readError?: boolean;
 }
 
 function reject(reason: string): VerifyResult {
@@ -65,8 +67,8 @@ async function readBounded(handle: FileHandle, size: number): Promise<string | n
  * and the evidence quote is found at (or near) the cited line. Never mutates the finding.
  *
  * A quote is verified when it appears verbatim, or when a fuzzy match (similarity >= 0.85) has the
- * same code tokens in the same order: operators, keywords such as true/false/null, numbers, strings
- * (with their delimiters; a template literal's `${...}` expressions are code) and identifiers, where
+ * same code tokens in the same order: grouping, operators, keywords such as true/false/null, numbers,
+ * string contents (ordinary quote style may differ; template `${...}` expressions are code) and identifiers, where
  * an identifier may carry a typo (see semantic.ts). A fuzzy match that differs in a token is
  * rejected naming the token.
  *
@@ -97,7 +99,7 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     // Only to word the reason: a directory cannot be opened as a file on every platform.
     const info = await stat(real).catch(() => null);
     if (info?.isDirectory() === true) return reject(`"${finding.file}" is a directory, not a file`);
-    return reject(`file not readable: "${finding.file}"`);
+    return { ...reject(`file not readable: "${finding.file}"`), readError: true };
   }
 
   try {
@@ -139,7 +141,7 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     try {
       content = await readBounded(handle, info.size);
     } catch {
-      return reject(`file not readable: "${finding.file}"`);
+      return { ...reject(`file not readable: "${finding.file}"`), readError: true };
     }
     if (content === null) {
       return reject(`file changed while it was being verified: "${finding.file}" grew past ${info.size} bytes`);
@@ -160,7 +162,21 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
       return { verified: true, correctedFinding: { ...finding, line: here.line, verified: true } };
     }
 
-    const outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
+    let outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
+    if (outcome.kind === 'none' && (/\/[/\*]/.test(raw) || /\/[/\*]/.test(content))) {
+      const strippedQuote = normalizeQuote(withoutComments(raw));
+      if (countAlphanumeric(strippedQuote) >= MIN_ALNUM) {
+        const strippedLines = splitLines(withoutComments(content));
+        // Removing a comment must not make an over-long source line eligible for search.
+        const searchable = strippedLines.map((line, index) => lines[index]!.length > MAX_LINE ? lines[index]! : line);
+        const candidate = findQuote(searchable, strippedQuote, finding.line, WORK_BUDGET);
+        if (candidate.kind === 'match') {
+          candidate.match.exact = false;
+          candidate.match.text = lines.slice(candidate.match.line - 1, candidate.match.line - 1 + quoteLines).join('\n');
+        }
+        outcome = candidate;
+      }
+    }
     if (outcome.kind === 'budget') {
       return reject(
         `search budget exceeded: finding the quote in "${finding.file}" needs more than ` +
@@ -214,6 +230,8 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     const correctedFinding: Finding = { ...finding, line: match.line, verified: true };
     if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
     return { verified: true, correctedFinding };
+  } catch {
+    return { ...reject(`file not readable: "${finding.file}"`), readError: true };
   } finally {
     await handle.close().catch(() => undefined);
   }

@@ -51,7 +51,7 @@ it('keys cache by payload, prompt and model and stages before flushing', async (
   expect(cacheKey('other', 'prompt', 'agy:flash')).not.toBe(key);
   expect(cacheKey('payload', 'other', 'agy:flash')).not.toBe(key);
   expect(cacheKey('payload', 'prompt', 'codex')).not.toBe(key);
-  const cache = diskCache(root, () => {});
+  const cache = diskCache(root, () => {}, root, path.join(root, 'home'));
   cache.stage(key, '[]', 'agy:flash'); expect(await cache.read(key)).toBeUndefined();
   await cache.flush(); expect(await cache.read(key)).toBe('[]');
 });

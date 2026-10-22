@@ -8,6 +8,6 @@ it('preserves punctuation and language keywords for mining without changing veri
     ['string', 'x'], ['punctuation', ')'], ['punctuation', ';'],
   ]);
   expect(semanticTokens('const foo = bar(12, "x");')).toEqual([
-    'ident:const', 'ident:foo', 'operator:=', 'ident:bar', 'number:12', 'string:"x"',
+    'ident:const', 'ident:foo', 'operator:=', 'ident:bar', 'punctuation:(', 'number:12', 'string:"x"', 'punctuation:)',
   ]);
 });

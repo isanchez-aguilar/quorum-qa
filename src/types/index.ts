@@ -184,6 +184,7 @@ export interface ReproductionProposal {
 
 // Parsed from the test runner's JSON reporter (vitest or jest). Quorum never parses human-readable output.
 export interface TestReport {
+  infrastructureError?: string;
   runner: 'vitest' | 'jest';
   // Includes suites that failed to load before producing assertions.
   suiteFiles?: string[];
@@ -194,7 +195,8 @@ export interface TestReport {
     ancestorTitles?: string[];
     title?: string;
     status: 'passed' | 'failed' | 'skipped';
-    failureKind?: 'assertion' | 'error' | 'import' | 'syntax' | 'timeout';
+    failureKind?: 'assertion' | 'error' | 'import' | 'syntax' | 'timeout' | 'unknown';
+    failures?: Array<{ message: string; kind: 'assertion' | 'error' | 'import' | 'syntax' | 'timeout' | 'unknown' }>;
     // First line of the failure message, compared with `expect`.
     message?: string;
   }>;

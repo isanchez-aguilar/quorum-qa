@@ -314,14 +314,13 @@ describe('similarity calibration against table 5.5', () => {
     expect(gap('tokenOverlap')).toBeGreaterThan(gap('trigramDice'));
   });
 
-  // Documents a candidate that was tried and cannot satisfy the table: the character-level
-  // Levenshtein similarity scores the distinct defects of row 4 (about 0.23) above the paraphrase
-  // of row 8 (about 0.22), so no threshold separates the ten rows.
-  it('the character-level Levenshtein candidate cannot satisfy the rows', () => {
+  // Keeping negation changes calibration; the character metric still has a very narrow gap.
+  it('the character-level Levenshtein candidate has less margin than overlap', () => {
     const { minParaphrase, maxApart } = window(
       CANDIDATE_METRICS.characterSimilarity as (a: string, b: string) => number,
     );
-    expect(minParaphrase).toBeLessThan(maxApart);
+    const overlap = window(tokenOverlap);
+    expect(minParaphrase - maxApart).toBeLessThan(overlap.minParaphrase - overlap.maxApart);
   });
 
   describe('control pairs written after the table (not part of the spec)', () => {
@@ -367,7 +366,7 @@ describe('similarity calibration against table 5.5', () => {
   });
 
   it('tokenizes with stop words removed, stemming and camelCase splitting', () => {
-    expect(tokenize('The retries were missing an idempotencyKey')).toEqual(['retry', 'idempotency', 'key']);
+    expect(tokenize('The retries were missing an idempotencyKey')).toEqual(['retry', 'missing', 'idempotency', 'key']);
     expect(tokenize('Documented, documentation')).toEqual(['document', 'documentation']);
     expect(tokenize('')).toEqual([]);
   });
@@ -677,7 +676,7 @@ describe('M1 final round fix 3: the trigger and the impact must each be near-ide
   it('a long trigger in common does not merge two different impacts either', () => {
     const trigger =
       'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november ' +
-      'oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu';
+      'oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu extra shared words';
     const a = finding({
       file: 'src/users.ts',
       line: 10,

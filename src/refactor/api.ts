@@ -439,6 +439,8 @@ function scanFile(input: string, file: string): ScanResult {
       }
       expandLocalTypes(members, innerScope);
     } else if (budget.remaining) {
+      let enumNext = 0;
+      let enumAnchor = '';
       for (let j = body + 1; j < limit && budget.remaining;) {
         if ([';', ','].includes(value(j) ?? '')) { j++; continue; }
         const first = j;
@@ -492,7 +494,20 @@ function scanFile(input: string, file: string): ScanResult {
         }
         hidden ||= value(nameStart) === '#';
         if (last > first && !hidden) {
-          const signature = consume(key(first, last), budget);
+          let memberSignature = key(first, last);
+          if (kind === 'enum') {
+            const initializer = value(first + 1) === '=' ? first + 2 : undefined;
+            if (initializer === undefined) {
+              if (enumAnchor) note('API enum initializer is not a numeric literal; subsequent implicit values are symbolic.');
+              memberSignature += ` = <implicit ${enumAnchor}${enumNext++}>`;
+            } else {
+              const expression = key(initializer, last);
+              const numeric = Number(expression.replace(/\s/g, ''));
+              enumNext = Number.isFinite(numeric) ? numeric + 1 : 1;
+              enumAnchor = Number.isFinite(numeric) ? '' : `after ${expression} + `;
+            }
+          }
+          const signature = consume(memberSignature, budget);
           members.push(makeExport(memberName(first, last), signature, lex[first]!.line));
         }
         j = Math.max(first + 1, next);
@@ -888,14 +903,18 @@ export function compareApi(base: Map<string, string>, head: Map<string, string>,
       }
     }
   }
-  const stable = (value: unknown): string => {
-    if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-    if (value !== null && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  const stable = (value: unknown, ordered = false): string => {
+    if (Array.isArray(value)) return `[${value.map(item => stable(item, ordered)).join(',')}]`;
+    if (value !== null && typeof value === 'object') {
+      const keys = Object.keys(value);
+      if (!ordered) keys.sort();
+      return `{${keys.map(key => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key], ordered)}`).join(',')}}`;
+    }
     return JSON.stringify(value) ?? 'undefined';
   };
   const packageChanges = ['main', 'module', 'types', 'typings', 'exports', 'imports', 'bin', 'version', 'type', 'engines', 'files',
     'sideEffects', 'browser', 'typesVersions', 'peerDependencies', 'workspaces']
-    .filter(field => stable(basePackage[field]) !== stable(headPackage[field]))
+    .filter(field => stable(basePackage[field], ['exports', 'imports', 'typesVersions'].includes(field)) !== stable(headPackage[field], ['exports', 'imports', 'typesVersions'].includes(field)))
     .map(field => ({ field, before: basePackage[field], after: headPackage[field] }));
   return { changes, packageChanges, breaking: packageChanges.length > 0 || changes.some(change => change.breaking), notes: [...notes], incomplete, unscanned };
 }

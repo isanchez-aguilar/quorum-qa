@@ -19,6 +19,7 @@ export interface TestCounts { passed: number; failed: number; skipped: number; t
 export interface TestComparison {
   base: TestCounts; head: TestCounts;
   regressions: RefactorTest[]; fixed: RefactorTest[]; removed: RefactorTest[]; added: RefactorTest[];
+  newFailures?: RefactorTest[];
   failingBoth: RefactorTest[]; skippedChanges: Array<{ file: string; name: string; before: string; after: string }>;
   editedFiles: string[];
 }
@@ -43,16 +44,21 @@ export function compareTests(base: TestReport, head: TestReport, editedFiles: st
   const key = testIdentity;
   const before = new Map(base.tests.map(test => [key(test), test]));
   const after = new Map(head.tests.map(test => [key(test), test]));
-  const result: TestComparison = { base: counts(base), head: counts(head), regressions: [], fixed: [], removed: [], added: [], failingBoth: [], skippedChanges: [], editedFiles: [...new Set(editedFiles.map(normalize))].sort() };
+  const newFailures: RefactorTest[] = [];
+  const result: TestComparison = { base: counts(base), head: counts(head), regressions: [], newFailures, fixed: [], removed: [], added: [], failingBoth: [], skippedChanges: [], editedFiles: [...new Set(editedFiles.map(normalize))].sort() };
   for (const [identity, test] of before) {
     const current = after.get(identity);
     if (!current) { result.removed.push(test); continue; }
     if (test.status === 'passed' && current.status === 'failed') result.regressions.push(current);
+    if (test.status !== 'failed' && current.status === 'failed') newFailures.push(current);
     if (test.status === 'failed' && current.status === 'passed') result.fixed.push(current);
     if (test.status === 'failed' && current.status === 'failed') result.failingBoth.push(current);
     if (test.status !== current.status && (test.status === 'skipped' || current.status === 'skipped')) result.skippedChanges.push({ file: current.file, name: current.name, before: test.status, after: current.status });
   }
-  for (const [identity, test] of after) if (!before.has(identity)) result.added.push(test);
+  for (const [identity, test] of after) if (!before.has(identity)) {
+    result.added.push(test);
+    if (test.status === 'failed') newFailures.push(test);
+  }
   return result;
 }
 
@@ -96,15 +102,15 @@ export function summarizeEvidence(evidence: Omit<RefactorEvidence, 'summary'>): 
     blastIncomplete: evidence.blastRadius.incomplete ?? false,
     testsUnknown: (evidence.blastRadius.testsUnknown ?? []).slice(0, 5).map(short),
     counts: { base: evidence.tests.base, head: evidence.tests.head },
-    regressions: tests(evidence.tests.regressions), removedTests: tests(evidence.tests.removed),
+    regressions: tests(evidence.tests.regressions), newFailures: tests(evidence.tests.newFailures ?? evidence.tests.regressions), removedTests: tests(evidence.tests.removed),
     editedTests: evidence.tests.editedFiles.slice(0, 5).map(short),
     api: evidence.api.changes.filter(change => change.breaking).slice(0, 5).map(change => ({ file: short(change.file), name: short(change.name), kind: change.kind })),
     packageChanges: evidence.api.packageChanges.map(change => change.field), withoutTests: evidence.blastRadius.withoutTests.slice(0, 5).map(short),
     mutationSurvivors: (evidence.mutation?.survived ?? []).slice(0, 5).map(item => short(`${item.file}:${item.line} ${item.operator}`)),
     mutation: evidence.mutation ? { candidates: evidence.mutation.candidates, attempted: evidence.mutation.attempted, killed: evidence.mutation.killed, invalid: evidence.mutation.invalid, survived: evidence.mutation.survived.length } : undefined,
-    totals: { regressions: evidence.tests.regressions.length, removedTests: evidence.tests.removed.length, editedTests: evidence.tests.editedFiles.length,
+    totals: { regressions: evidence.tests.regressions.length, newFailures: (evidence.tests.newFailures ?? evidence.tests.regressions).length, removedTests: evidence.tests.removed.length, editedTests: evidence.tests.editedFiles.length,
       breakingApi: evidence.api.changes.filter(change => change.breaking).length, withoutTests: evidence.blastRadius.withoutTests.length } };
-  const lists = [summary.mutationSurvivors, summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests, summary.testsUnknown];
+  const lists = [summary.mutationSurvivors, summary.reasons, summary.apiNotes, summary.unscanned, summary.regressions, summary.newFailures, summary.removedTests, summary.editedTests, summary.api, summary.packageChanges, summary.withoutTests, summary.testsUnknown];
   while (Buffer.byteLength(JSON.stringify(summary)) > 4096) {
     const largest = [...lists].sort((a, b) => b.length - a.length)[0];
     if (!largest?.length) break;
@@ -226,7 +232,7 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
   const editedFiles = editedTestFiles(context.touchedFiles, reports.base, reports.head, [...testPresence.base].filter(file => testPresence.head.has(file)));
   const tests = compareTests(reports.base, reports.head, editedFiles);
   const api = compareApi(sources.base, sources.head, packages.base, packages.head);
-  api.notes.push(...notes);
+  for (const note of notes) api.notes.push(note);
   api.incomplete ||= notes.length > 0;
   const evidence = { ...(mutation ? { mutation } : {}), available: reasons.length === 0, reasons, tests, api, blastRadius };
   return { ...evidence, summary: summarizeEvidence(evidence) };

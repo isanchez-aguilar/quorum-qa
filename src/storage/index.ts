@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { homedir } from 'node:os';
 import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { QuotaSnapshot } from '../catalog/groups.js';
@@ -179,21 +180,76 @@ export function cacheKey(payload: string, prompt: string, ref: string): string {
   return createHash('sha256').update(JSON.stringify([payload, prompt, ref])).digest('hex');
 }
 
-export function diskCache(root: string, warn: (message: string) => void, repoRoot = process.cwd()) {
+export function diskCache(root: string, warn: (message: string) => void, repoRoot = process.cwd(), home = homedir()) {
   const pending = new Map<string, { rawOutput: string; model: string }>();
   const file = (key: string) => path.join(root, 'v1', key.slice(0, 2), `${key}.json`);
+  let userKey: Promise<Buffer | undefined> | undefined;
+  const secret = () => userKey ??= (async () => {
+    const keyFile = path.join(home, '.quorum', 'cache.key');
+    try {
+      await mkdir(path.dirname(keyFile), { recursive: true, mode: 0o700 });
+      const readKey = () => readFile(keyFile).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return Buffer.alloc(0);
+      });
+      let key = await readKey();
+      if (key.length === 32) return key;
+      // Recheck under a cross-process lock: a late repair must never replace a valid key
+      // already returned to another caller. Atomic rename also avoids partial creation.
+      const lockPath = `${keyFile}.lock`;
+      const deadline = Date.now() + 10_000;
+      let lock;
+      while (!lock) {
+        try { lock = await open(lockPath, 'wx', 0o600); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= deadline) throw error;
+          try { await retireStaleLock(lockPath, deadline); }
+          catch (staleError) { if ((staleError as NodeJS.ErrnoException).code !== 'ENOENT') throw staleError; }
+          await sleep(10);
+        }
+      }
+      try {
+        key = await readKey();
+        if (key.length !== 32) {
+          const temporary = `${keyFile}.${randomUUID()}.tmp`;
+          try {
+            await writeFile(temporary, randomBytes(32), { mode: 0o600, flag: 'wx' });
+            await renameWithRetry(temporary, keyFile);
+          } finally { await rm(temporary, { force: true }); }
+        }
+        key = await readFile(keyFile);
+      } finally {
+        try { await lock.close(); } finally { await removeWithRetry(lockPath, Date.now() + 10_000); }
+      }
+      if (key.length !== 32) throw new Error('invalid cache key');
+      return key;
+    } catch {
+      // Never expose the secret or filesystem error details.
+      warn('Cache disabled: user authentication key could not be created or read.');
+      return undefined;
+    }
+  })();
+  const mac = (secret: Buffer, key: string, model: string, rawOutput: string) =>
+    createHmac('sha256', secret).update(JSON.stringify([1, key, model, rawOutput])).digest();
   return {
     async read(key: string): Promise<string | undefined> {
+      const authentication = await secret();
+      if (!authentication) return undefined;
       try {
         const value = JSON.parse(await readFile(file(key), 'utf8')) as Record<string, unknown>;
-        if (value.version === 1 && value.key === key && typeof value.rawOutput === 'string') return value.rawOutput;
+        if (value.version === 1 && value.key === key && typeof value.model === 'string' && typeof value.rawOutput === 'string'
+          && typeof value.mac === 'string' && /^[a-f0-9]{64}$/.test(value.mac)
+          && timingSafeEqual(Buffer.from(value.mac, 'hex'), mac(authentication, key, value.model, value.rawOutput))) return value.rawOutput;
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warn(`Cache read failed: ${String(error)}`); }
       return undefined;
     },
     stage(key: string, rawOutput: string, model: string) { pending.set(key, { rawOutput, model }); },
     async flush() {
+      const authentication = await secret();
+      if (!authentication) { pending.clear(); return; }
       for (const [key, value] of pending) {
-        try { await atomicWrite(file(key), JSON.stringify({ version: 1, key, createdAt: new Date().toISOString(), ...value }), repoRoot); }
+        try { await atomicWrite(file(key), JSON.stringify({ version: 1, key, createdAt: new Date().toISOString(), ...value,
+          mac: mac(authentication, key, value.model, value.rawOutput).toString('hex') }), repoRoot); }
         catch (error) { warn(`Cache write failed: ${String(error)}`); }
       }
     },

@@ -5,7 +5,8 @@ export interface RefactorReport extends RefactorEvidence {
   allowApiChange: boolean;
   modelReview: boolean;
 }
-export const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').replace(/</g, '&lt;');
+export const cell = (text: string) => text.replace(/\\/g, '\\\\').replace(/[\[\]]/g, '\\$&')
+  .replace(/\|/g, '\\|').replace(/\r\n?|\n/g, ' ').replace(/</g, '&lt;');
 const list = (rows: string[], cap = 50): string => rows.slice(0, cap).map(row => `- ${cell(row)}`).join('\n')
   + (rows.length > cap ? `\n\n+${rows.length - cap} more` : '') || 'None.';
 const json = (value: unknown) => JSON.stringify(value) ?? '(absent)';

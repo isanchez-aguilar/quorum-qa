@@ -1,16 +1,16 @@
 import type { Finding } from '../types/index.js';
 import { levenshtein } from '../verifier/quote.js';
 
-// Function words and "absence" words. Absence words (missing, never, without...) say that something
-// is wrong, not what, so sharing them is no evidence that two findings are the same defect.
+// Function words only. Negation changes the condition under which a defect occurs.
 const STOP_WORDS: ReadonlySet<string> = new Set([
   'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for', 'from', 'by', 'with', 'and', 'or', 'is',
   'are', 'was', 'were', 'be', 'been', 'it', 'its', 'this', 'that', 'these', 'those', 'as', 'so',
   'can', 'could', 'will', 'would', 'may', 'might', 'if', 'when', 'then', 'than', 'which', 'who',
   'has', 'have', 'had', 'do', 'does', 'into', 'over', 'under', 'before', 'after', 'because',
   'while', 'each', 'every', 'any', 'all', 'more', 'most', 'other', 'such', 'only', 'also', 'one',
-  'missing', 'lack', 'lacks', 'without', 'never', 'no', 'not', 'omitted', 'instead',
+  'lack', 'lacks', 'omitted',
 ]);
+const NEGATIONS = new Set(['not', 'no', 'never', 'without', 'disabled', 'cannot', "can't", "isn't", "doesn't", 'fails to', 'missing', 'unless', 'except', 'instead', 'otherwise']);
 
 // Light stemming: enough to put retries/retried/retry and documentation/documented close together.
 function stem(token: string): string {
@@ -31,9 +31,11 @@ export function tokenize(text: string): string[] {
   const words = text
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word.length > 0 && !STOP_WORDS.has(word));
-  return words.map(stem).filter((word) => word.length > 1);
+    .match(/fails\s+to|[a-z0-9]+(?:'[a-z]+)?/g) ?? [];
+  return words
+    .map(word => word.replace(/\s+/g, ' '))
+    .filter(word => !STOP_WORDS.has(word))
+    .map(word => NEGATIONS.has(word) ? word : stem(word)).filter(word => word.length > 1);
 }
 
 function toSet(tokens: readonly string[]): Set<string> {
@@ -57,8 +59,9 @@ export function tokenJaccard(a: string, b: string): number {
 
 /** |A n B| / min(|A|, |B|) over stemmed word tokens. */
 export function tokenOverlap(a: string, b: string): number {
-  const first = toSet(tokenize(a));
-  const second = toSet(tokenize(b));
+  // Shared absence alone is not evidence that two defects are related.
+  const first = toSet(tokenize(a).filter(word => !NEGATIONS.has(word)));
+  const second = toSet(tokenize(b).filter(word => !NEGATIONS.has(word)));
   const smallest = Math.min(first.size, second.size);
   return smallest === 0 ? 0 : intersectionSize(first, second) / smallest;
 }
@@ -126,6 +129,7 @@ export type TokenSet = ReadonlySet<string>;
 // The word tokens of a finding: the trigger and the impact apart (the merge compares them one by
 // one), and both together (the related annotation compares the whole text).
 export interface FindingTokens {
+  negationParity: number;
   trigger: TokenSet;
   impact: TokenSet;
   all: TokenSet;
@@ -135,7 +139,8 @@ export interface FindingTokens {
 export function findingTokens(finding: Pick<Finding, 'trigger' | 'impact'>): FindingTokens {
   const trigger = toSet(tokenize(finding.trigger));
   const impact = toSet(tokenize(finding.impact));
-  return { trigger, impact, all: new Set([...trigger, ...impact]) };
+  const negations = finding.trigger.toLowerCase().match(/\b(?:not|no|never|without|disabled|cannot|can't|isn't|doesn't|fails\s+to|missing|unless|except|instead|otherwise)\b/g) ?? [];
+  return { trigger, impact, all: new Set([...trigger, ...impact]), negationParity: negations.length % 2 };
 }
 
 // Jaccard of two token sets. Two sets without a single content word say nothing different from
@@ -152,15 +157,18 @@ function jaccard(a: TokenSet, b: TokenSet): number {
  * MIN_SHARED_TOKENS words in total.
  */
 export function strongSimilarity(a: FindingTokens, b: FindingTokens): number {
+  if (a.negationParity !== b.negationParity) return 0;
   if (intersectionSize(a.all, b.all) < MIN_SHARED_TOKENS) return 0;
   return Math.min(jaccard(a.trigger, b.trigger), jaccard(a.impact, b.impact));
 }
 
 /** Overlap coefficient of the whole text of two findings, or 0 under MIN_SHARED_TOKENS shared words. */
 export function relatedSimilarity(a: FindingTokens, b: FindingTokens): number {
-  const shared = intersectionSize(a.all, b.all);
+  const first = new Set([...a.all].filter(word => !NEGATIONS.has(word)));
+  const second = new Set([...b.all].filter(word => !NEGATIONS.has(word)));
+  const shared = intersectionSize(first, second);
   if (shared < MIN_SHARED_TOKENS) return 0;
-  return shared / Math.min(a.all.size, b.all.size);
+  return shared / Math.min(first.size, second.size);
 }
 
 /** The merge score of two findings (see strongSimilarity). */
