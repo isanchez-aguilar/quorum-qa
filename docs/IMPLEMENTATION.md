@@ -23,6 +23,8 @@ process groups with SIGKILL; fake-spawn regressions verify both paths.
 
 ## Review fixes batch A
 
+- **C1 diff-marker recall fix:** verification removes quote-side hunk and numbered prompt prefixes (`123: `, `123 | ` and `file:123: `), and first-column added/context markers only when the resulting line matches HEAD. Existing leading unary plus is preserved. Removed-only quotes report `quote is removed code from the diff`; mixed quotes must retain at least 60% of their original non-space characters. Successful normalization records `stripped diff markers from the quote`, preserving the original evidence and C1 semantic checks. Regression tests cover the five benchmark snippets and a fake-provider cascade.
+
 - **C1:** semantic verification retains grouping brackets and operators, including ternary punctuation; ordinary quote style and trailing separators remain tolerated, while template literals retain their meaning.
 - **C2:** negation tokens are retained and trigger negation parity gates strong merges. Shared absence alone does not establish a possibly-related annotation.
 - **C3:** disk cache entries carry HMAC-SHA256 over `[version, key, model, rawOutput]`, checked with `timingSafeEqual`. A lazily created, exclusive 32-byte user key lives at `~/.quorum/cache.key` (0600 where supported); unavailable keys disable caching with a warning. Unsigned or forged entries miss. Cache home is injectable for synthetic tests.
