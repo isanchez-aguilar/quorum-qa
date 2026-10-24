@@ -53,35 +53,61 @@ function showCode(text: string): string {
 // over interpreting its first character as a diff marker.
 function stripQuoteMarkers(raw: string, lines: string[], file: string): { quote: string; stripped: boolean; reason?: string } {
   let source: Set<string> | undefined;
+  const lineKey = (line: string) => line.replace(/\t/g, '  ').trimEnd();
+  const isSource = (line: string): boolean => {
+    source ??= new Set(lines.filter(value => value.length <= MAX_LINE).map(lineKey));
+    return source.has(lineKey(line));
+  };
+  const filePrefix = `${file.replace(/\\/g, '/')}:`;
+  const withoutPrefix = (line: string): string => {
+    const numbered = line.replace(/\\/g, '/').startsWith(filePrefix) ? line.slice(filePrefix.length) : line;
+    const prefix = /^\d+(?:: | \| )/.exec(numbered);
+    return prefix ? numbered.slice(prefix[0].length) : line;
+  };
+  const codeChars = (line: string) => line.replace(/\s/g, '').length;
   const diff = /^(?:[+-]|@@ .* @@)/m.test(raw);
   let stripped = false;
   let removed = false;
-  let started = false;
+  let removedChars = 0;
   const kept: string[] = [];
   for (let line of raw.replace(/\r\n?/g, '\n').split('\n')) {
-    if (!started && /^@@ .* @@/.test(line)) {
-      stripped = true;
-      continue;
-    }
-    // Contract prompts use file:line: text; bughunt uses zero-padded line: text.
-    const numbered = line.startsWith(`${file}:`) ? line.slice(file.length + 1) : line;
-    const prefix = /^\d+(?:: | \| )/.exec(numbered);
-    if (prefix) { line = numbered.slice(prefix[0].length); stripped = true; }
-    if (line.startsWith('-')) { removed = true; stripped = true; continue; }
-    if (line.startsWith('+') || (diff && line.startsWith(' '))) {
-      source ??= new Set(lines.filter(value => value.length <= MAX_LINE).map(normalizeQuote));
-      const candidate = line.slice(1);
-      if ((line.startsWith(' ') || !source.has(normalizeQuote(line))) && source.has(normalizeQuote(candidate))) {
-        line = candidate;
+    // Preserve real lines before interpreting any part of them as presentation.
+    if (/^(?:[+\- @]|\d)/.test(line) || line.replace(/\\/g, '/').startsWith(filePrefix)) {
+      if (isSource(line)) {
+        kept.push(line);
+        continue;
+      }
+      if (/^@@ .* @@/.test(line)) {
         stripped = true;
+        continue;
+      }
+      const numbered = withoutPrefix(line);
+      if (numbered !== line && isSource(numbered)) {
+        line = numbered;
+        stripped = true;
+      } else if (line.startsWith('-')) {
+        removed = true;
+        stripped = true;
+        removedChars += codeChars(withoutPrefix(line.slice(1)));
+        continue;
+      } else if (line.startsWith('+') || (diff && line.startsWith(' '))) {
+        // Prefer the single marker; an extra presentation space is stripped only
+        // when that first candidate is not itself a real source line.
+        const candidates = [line.slice(1)];
+        if (line[1] === ' ') candidates.push(line.slice(2));
+        const candidate = candidates.flatMap(value => [value, withoutPrefix(value)]).find(isSource);
+        if (candidate !== undefined) {
+          line = candidate;
+          stripped = true;
+        }
       }
     }
     kept.push(line);
-    if (line.trim() !== '') started = true;
   }
   const quote = normalizeQuote(kept.join('\n'));
   if (removed && quote === '') return { quote, stripped, reason: 'quote is removed code from the diff' };
-  if (removed && quote.replace(/\s/g, '').length < raw.replace(/\s/g, '').length * 0.6) {
+  const keptChars = codeChars(quote);
+  if (removed && keptChars < (keptChars + removedChars) * 0.6) {
     return { quote, stripped, reason: 'quote retains less than 60% after removing deleted diff lines' };
   }
   return { quote, stripped };
@@ -195,9 +221,11 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     quoteLines = quote.split('\n').length;
     if (alphanumeric === 0) return reject('empty evidence quote after stripping diff markers');
     const notes: string[] = presentation.stripped ? ['stripped diff markers from the quote'] : [];
-    // Store the cleaned quote only when the original, as written, is not in the file: a line that really
-    // starts with "1234:" or "+" keeps its text.
-    const cleaned = presentation.stripped && !normalizeQuote(content).includes(normalizeQuote(raw)) ? { evidence_quote: presentation.quote } : {};
+    // Compare only at the accepted match, never normalize/search the whole file
+    // again just to decide which evidence to store.
+    const cleanedAt = (line: number) => presentation.stripped &&
+      matchAtLine(lines, normalizeQuote(raw), line) === null
+      ? { evidence_quote: presentation.quote } : {};
 
     // Weak evidence counts only where it was cited: no window, no correction, no fuzzy match.
     if (alphanumeric < MIN_ALNUM) {
@@ -209,7 +237,7 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
             `does not appear on line ${String(finding.line)} of "${finding.file}"`,
         );
       }
-      const correctedFinding: Finding = { ...finding, line: here.line, verified: true, ...cleaned };
+      const correctedFinding: Finding = { ...finding, line: here.line, verified: true, ...cleanedAt(here.line) };
       if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
       return { verified: true, correctedFinding };
     }
@@ -279,7 +307,7 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     }
 
     // Diff markers and line-number prefixes are presentation, not evidence: keep the code as found.
-    const correctedFinding: Finding = { ...finding, line: match.line, verified: true, ...cleaned };
+    const correctedFinding: Finding = { ...finding, line: match.line, verified: true, ...cleanedAt(match.line) };
     if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
     return { verified: true, correctedFinding };
   } catch {
