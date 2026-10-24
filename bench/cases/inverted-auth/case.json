@@ -2,7 +2,7 @@
   "id": "inverted-auth",
   "title": "Allow administrators to export",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

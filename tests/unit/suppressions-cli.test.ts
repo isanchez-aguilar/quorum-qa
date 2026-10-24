@@ -81,7 +81,8 @@ async function invoke(args: string[]) {
 const review = (extra: string[] = []) => invoke(['review', '--mode', 'redesign', '--diff', 'base...HEAD', '--no-checks', '--no-cache', '--json', ...extra]);
 const entry = { id: 's1', file: 'sample.ts', quote: 'export const value = compute(input);', reason: 'Reviewed and intentional.' };
 
-it('runs main with fake providers, adds from its JSON, trusts only base, and reports suppressions without verdict, SARIF or count contributions', async () => {
+it.each(['general', 'redesign'])('runs %s main with fake providers, adds from its JSON, trusts only base, and reports suppressions without verdict, SARIF or count contributions', async mode => {
+  const review = (extra: string[] = []) => invoke(['review', '--mode', mode, '--diff', 'base...HEAD', '--no-checks', '--no-cache', '--json', ...extra]);
   const first = await review(); expect(first.code, first.err).toBe(1);
   await writeFile(path.join(root, 'report.json'), first.out);
   const add = await invoke(['suppress', 'add', '--from', 'report.json', '--finding', '1', '--reason', entry.reason]);

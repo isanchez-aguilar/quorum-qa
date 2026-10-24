@@ -13,7 +13,7 @@ export function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
-    if (!['--cases', '--out', '--repeat', '--config', '--timeout-ms'].includes(arg)) throw new Error(`Unknown argument: ${arg}`);
+    if (!['--cases', '--out', '--repeat', '--config', '--timeout-ms', '--mode'].includes(arg)) throw new Error(`Unknown argument: ${arg}`);
     const value = args[++i];
     if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}`);
     if (arg === '--cases') options.cases = value.split(',');
@@ -22,6 +22,7 @@ export function parseArgs(args) {
     else options[arg.slice(2)] = value;
   }
   for (const key of ['repeat', 'timeoutMs']) if (!Number.isSafeInteger(options[key]) || options[key] < 1) throw new Error(`${key} must be a positive integer`);
+  if (options.mode && !['general', 'feature'].includes(options.mode)) throw new Error('mode must be general or feature');
   return options;
 }
 
@@ -75,7 +76,7 @@ export async function runBench(options = {}, dependencies = {}) {
   const runner = dependencies.runner ?? runCommand;
   const print = dependencies.print ?? (value => console.log(value));
   const selected = await loadCases(options.cases);
-  const raw = JSON.parse((await readFile(path.resolve(options.config ?? path.join(root, 'quorum.config.json')), 'utf8')).replace(/^﻿/, ''));
+  const raw = JSON.parse((await readFile(path.resolve(options.config ?? path.join(root, 'quorum.config.json')), 'utf8')).replace(/^\uFEFF/, ''));
   const config = { base: 'main', checks: [], setup: [], context: { provider: 'git' },
     tiers: raw.tiers, ...(raw.budget ? { budget: raw.budget } : {}), ...(raw.escalate ? { escalate: raw.escalate } : {}) };
   const rows = [], plans = [];
@@ -84,8 +85,10 @@ export async function runBench(options = {}, dependencies = {}) {
     let start, result, report, failure, wallMs = 0;
     try {
       const { cwd, env } = await prepare(testCase, config, tmp);
-      const args = [path.join(root, 'bin', 'quorum.js'), 'review', '--mode', testCase.mode,
-        '--spec', 'spec.md', '--diff', 'main...HEAD', '--json', '--no-cache', '--out', path.join(tmp, 'report.md')];
+      const mode = options.mode ?? testCase.mode;
+      if (!['general', 'feature'].includes(mode)) throw new Error('mode must be general or feature');
+      const args = [path.join(root, 'bin', 'quorum.js'), 'review', '--mode', mode,
+        ...(mode === 'feature' ? ['--spec', 'spec.md'] : []), '--diff', 'main...HEAD', '--json', '--no-cache', '--out', path.join(tmp, 'report.md')];
       if (options.dryRun) args.push('--dry-run');
       start = performance.now();
       result = await runner(process.execPath, args, { cwd, env, timeoutMs: options.timeoutMs ?? 1_320_000, maxOutputBytes: 16 * 1024 * 1024 });

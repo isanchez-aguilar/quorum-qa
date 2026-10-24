@@ -2,7 +2,7 @@
   "id": "regex-redos",
   "title": "Validate compound labels",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

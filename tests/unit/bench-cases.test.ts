@@ -26,7 +26,7 @@ it('ships twelve valid, changed, syntactically valid synthetic projects', async 
     expect(item.title).toEqual(expect.any(String));
     expect(item.title.length).toBeGreaterThan(0);
     expect(['seeded', 'control']).toContain(item.kind);
-    expect(item.mode).toBe('feature');
+    expect(item.mode).toBe('general');
     expect(item.spec).toBe('spec.md');
     const spec = await readFile(path.join(dir, item.spec), 'utf8');
     const criteria = spec.match(/^- \[[ x]\] .+/gm) ?? [];

@@ -2,7 +2,7 @@
   "id": "resource-leak",
   "title": "Send progress during a fetch",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

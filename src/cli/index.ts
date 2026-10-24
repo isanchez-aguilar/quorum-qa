@@ -7,6 +7,7 @@ import { parseArgs, UsageError } from './args.js';
 import { proposeRules, renderRuleProposals } from '../rules/mining.js';
 import { atomicWrite } from '../storage/index.js';
 import { suppressCommand } from '../suppressions/commands.js';
+import { init } from './init.js';
 
 export const EXIT_OK = 0;
 export const EXIT_BLOCKERS = 1;
@@ -19,6 +20,7 @@ export interface CliIo {
 }
 
 export interface CliDependencies extends ReviewDependencies {
+  homedir?: string;
   repoRoot?: string;
   loadConfig?: typeof loadConfig;
   runDoctor?: typeof runDoctor;
@@ -33,6 +35,7 @@ const defaultIo: CliIo = {
 export const USAGE = `Usage: quorum <command> [options]
 
 Commands:
+  init      Generate repository configuration and .gitignore entry
   review    Run a quorum of AI reviewers over a change
   doctor    Check which providers and models are usable
   rules propose  Propose deterministic rules from recurring verified findings (no model calls)
@@ -42,7 +45,8 @@ Commands:
 
 Options for review:
   --verbose                Print completion timing even when stderr is not a terminal
-  --mode <feature|redesign|bughunt|contract|refactor|runtime>  Review mode
+  --mode <general|feature|redesign|bughunt|contract|refactor|runtime>  Review mode
+                            Default: general; --spec alone selects feature
   --deterministic-only      Refactor evidence only; no provider calls or logins
   --mutation               Refactor only: sample changed lines; up to maxMutants extra suite runs (default 8)
   --allow-api-change        List breaking API changes without failing refactor review
@@ -77,6 +81,13 @@ Options for review:
 Options for doctor:
   --probe                    Run one read probe per provider (spends quota)
   --json                     Print the diagnostic check list as JSON
+
+Options for init:
+  --dry-run                  Print proposed configuration; change nothing
+  --force                    Replace an existing quorum.config.json
+  Detects package manager/scripts, ignores .quorum/, and runs doctor without probes.
+  Prints the agy read permission; never edits home settings. Commit the config and
+  .gitignore on the base branch before review (trusted merge-base configuration).
 
 Options for rules propose:
   --min <n>                  Minimum findings (default 3; range 2-50)
@@ -130,7 +141,7 @@ export async function main(
     const { command, flags, positionals } = parseArgs(argv);
 
     if (command === 'doctor' && flags.dryRun && flags.probe) throw new UsageError('--dry-run cannot be combined with --probe: a dry run never calls a provider');
-    if (flags.dryRun && (command !== 'review' || flags.help || flags.version)) throw new UsageError('--dry-run is only supported by review.');
+    if (flags.dryRun && (!['review', 'init'].includes(command) || flags.help || flags.version)) throw new UsageError('--dry-run is only supported by review and init.');
 
     if (flags.help || command === 'help') {
       io.out(USAGE);
@@ -141,6 +152,8 @@ export async function main(
       return EXIT_OK;
     }
 
+    if (flags.force && command !== 'init') throw new UsageError('--force requires init.');
+
     if (command !== 'suppress' && ['from', 'finding', 'reason', 'expires'].some(key => flags[key as keyof typeof flags] !== undefined)) {
       throw new UsageError('--from, --finding, --reason and --expires require suppress.');
     }
@@ -149,6 +162,8 @@ export async function main(
     if (flags.strictFlows && (command !== 'review' || flags.mode !== 'runtime')) throw new UsageError('--strict-flows requires runtime mode.');
     if (flags.visual && (command !== 'review' || flags.mode !== 'runtime')) throw new UsageError('--visual requires runtime mode.');
     switch (command) {
+      case 'init':
+        return await init(flags, positionals, io, dependencies);
       case 'suppress': {
         const root = path.resolve(dependencies.repoRoot ?? process.cwd());
         io.out(await suppressCommand(positionals, flags, root, new Date((dependencies.now ?? Date.now)()).toISOString().slice(0, 10)));

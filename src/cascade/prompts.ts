@@ -130,7 +130,7 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; n
     + (context.mode === 'refactor' ? refactorPrefix(context) : modeInstructions(context.mode)) + JSON.stringify({
     mode: context.mode, diff, touchedFiles: files,
     criteria: context.mode === 'feature' ? acceptanceCriteria(context.specContent ?? '').map((criterion, index) => `AC${index + 1}: ${criterion}`) : undefined,
-    checks: checksEvidence(context), spec: context.specContent, inventory: context.inventoryContent, rules: context.rulesContent,
+    checks: checksEvidence(context), spec: context.mode === 'general' ? undefined : context.specContent, inventory: context.inventoryContent, rules: context.rulesContent,
     providerContext,
   });
   const fits = (diff: string, files: string[]) => render(diff, files).length <= MAX_PROMPT_CHARACTERS;

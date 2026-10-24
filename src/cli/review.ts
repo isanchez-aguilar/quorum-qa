@@ -100,7 +100,7 @@ async function copyImages(directory: string, destination: string): Promise<strin
 }
 
 export async function review(flags: ParsedFlags, io: CliIo, dependencies: ReviewDependencies): Promise<number> {
-  const mode = flags.mode ?? 'feature';
+  const mode = flags.mode ?? (flags.spec ? 'feature' : 'general');
   if (flags.visual && mode !== 'runtime') throw new UsageError('--visual requires runtime mode.');
   if (flags.strictFlows && mode !== 'runtime') throw new UsageError('--strict-flows requires runtime mode.');
   if (flags.format && mode !== 'runtime') throw new UsageError('--format requires runtime mode.');
@@ -222,7 +222,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (flags.author) config.author = flags.author;
   if (config.author) context.authorFamily = resolveAuthorFamily(config.author);
   for (const [flag, property] of [['spec', 'specContent'], ['inventory', 'inventoryContent'], ['rules', 'rulesContent']] as const) {
-    if (flags[flag]) {
+    if (flags[flag] && !(mode === 'general' && flag === 'spec')) {
       const file = path.resolve(root, flags[flag]);
       if (mode === 'contract') await assertNoLinks(file);
       const stat = await lstat(file);
@@ -423,7 +423,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
       result = { ...cascade, suppressed, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
         ...(evidence && verdict ? { refactor: { ...evidence, ...verdict, allowApiChange: flags.allowApiChange === true, modelReview: !deterministicOnly } } : {}),
         ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
-        criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
+        criteria: mode === 'feature' ? acceptanceCriteria(context.specContent ?? '') : [], inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
       if (cache && !baseline.status.trim() && clean && !cascade.errors.length && !cascade.calls.some(call => call.status === 'dirty')) await cache.flush();
       const entries = cascade.ledgerDraft.flatMap(draft => Array.from({ length: draft.callsUsed }, (_, index) => ({ ...draft,
         ...(index < draft.callsUsed - 1 ? { rawFindingsCount: 0, verifiedFindingsCount: 0, rejectedFindingsCount: 0, tokensReported: undefined, durationMs: 0, timedOutCalls: 0, rejectionReasons: {} } : {}),

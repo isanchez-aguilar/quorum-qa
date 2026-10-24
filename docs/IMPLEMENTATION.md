@@ -3750,3 +3750,43 @@ notes, protected BLOCKERs, reports/counts/exit/SARIF, commands, doctor and minin
 A synthetic end-to-end `main()` test uses fake providers and fake Git: review,
 add from its real JSON, reject untrusted HEAD additions, then trust the entry and
 verify exit zero plus visible suppression and ledger history.
+
+## Repository adoption (decision 28)
+
+General review is the default when neither `--mode` nor `--spec` is supplied.
+An implicit mode with `--spec` remains feature, and explicit feature still
+requires a specification with detected acceptance criteria. General uses the
+ordinary diff chunks and cascade with real-defect instructions, preserving the
+untrusted-data boundaries and omitting the specification and criteria payloads.
+An explicit general mode ignores a supplied spec. It has no criteria or bughunt
+summary table. Verification, dedupe, confirmation, origin labels, rules,
+suppressions, budgets, coverage and Markdown/JSON/SARIF retain the same pipeline.
+
+`quorum init [--dry-run] [--force]` requires the repository root. It reads
+package.json and lockfiles, preferring packageManager over lockfile detection
+(pnpm, npm, Yarn, Bun order). Without either it proposes npm with a missing-lock
+note. Yarn major 2+ or a Berry lockfile selects immutable installation. Setup
+uses the manager's frozen installation; checks are existing typecheck, lint and
+test scripts invoked with `run`. Build is detected but not scheduled. No
+package.json produces empty setup/checks and a note. Default tiers come from
+`defaultConfig()`; a test script adds `budget.checkTimeoutSeconds: 600` without
+pinning the automatic call budget.
+
+Init refuses existing configuration unless forced, appends `.quorum/` to
+gitignore idempotently, and preserves its line endings. Reads/writes refuse
+symlinks and non-regular files; replacement uses the existing atomic writer.
+No home settings are written: the printed agy permission uses doctor's same
+path normalization. A successful write runs doctor with `probe: false`, prints
+diagnostics and next steps, and returns 2 if any diagnostic fails. Dry-run
+prints the proposal even over an existing config, writes nothing and skips
+doctor. The next steps require committing configuration and gitignore on the
+base branch before reviewing, because config remains trusted at merge-base.
+
+All twelve synthetic benchmarks now select general mode. `bench/run.mjs
+--mode feature` keeps spec-based comparisons available; the original specs are
+retained. Tests exercise mode selection and prompt boundaries, fake-provider
+findings/coverage/SARIF/exit status, init package managers/scripts, forced and
+preview runs, gitignore preservation, outside-file containment and diagnostics.
+They use temporary repositories and injected diagnostics, without real provider
+calls. The adoption guide documents installation, trust, permissions, cost,
+reports, suppressions and the limitations of local-only review.

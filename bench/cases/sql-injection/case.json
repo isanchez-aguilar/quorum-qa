@@ -2,7 +2,7 @@
   "id": "sql-injection",
   "title": "Find a customer by name",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

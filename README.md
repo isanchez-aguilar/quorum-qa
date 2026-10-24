@@ -4,7 +4,7 @@ Quorum runs several AI coding CLIs over a git diff and reports only findings ver
 
 ## Status
 
-The [synthetic benchmark suite](docs/BENCHMARKS.md) measures recall, clean-change noise, severity, calls and wall time. Preview its cost with `node bench/run.mjs --dry-run` after building.
+The [synthetic benchmark suite](docs/BENCHMARKS.md) measures recall, clean-change noise, severity, calls and wall time. Preview its cost with `node bench/run.mjs --dry-run` after building. Its twelve cases use general review by default; `--mode feature` retains the specifications for feature audits.
 
 Milestones M0 through M6 are implemented and merged (v1).
 
@@ -52,7 +52,31 @@ claude plugin install quorum@quorum
 
 ## Quick start
 
-Add `quorum.config.json` to the repository root:
+For a new repository, follow [Using Quorum on a repository](docs/USING-QUORUM-ON-A-REPO.md). From that repository's root, generate the configuration:
+
+```sh
+quorum init --dry-run
+quorum init
+```
+
+Use `npm link` in the Quorum checkout after building, or invoke
+`node <quorum-checkout>/bin/quorum.js` from the target repository.
+`init` detects the package manager and existing typecheck, lint and test scripts,
+adds `.quorum/` to `.gitignore`, prints the agy read permission to add manually,
+and runs doctor without probes. It never edits home settings. `--force` replaces
+an existing config; `--dry-run` writes nothing and skips diagnostics.
+When a test script exists it sets `budget.checkTimeoutSeconds` to 600.
+Commit `quorum.config.json` and `.gitignore` **on the base branch first**:
+reviews trust configuration from the merge-base. Then preview the first review:
+
+```sh
+quorum review --diff origin/main...HEAD --dry-run
+```
+
+General review is the default without `--mode` or `--spec`; it reviews real
+defects without acceptance criteria. `--spec <file>` alone selects feature mode,
+and explicit `--mode feature` still requires a specification.
+You can also edit the generated configuration, for example:
 
 ```json
 {
@@ -229,7 +253,7 @@ omitted.
 
 | Command | Flag | Description |
 |---|---|---|
-| `review` | `--mode <feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Review mode (runtime: deterministic base/head comparison; optional advisory visual review) |
+| `review` | `--mode <general\|feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Default general; `--spec` alone selects feature. Runtime: deterministic base/head comparison; optional advisory visual review |
 | `review` | `--deterministic-only` | Refactor evidence without provider calls |
 | `review` | `--mutation` | Refactor only: up to maxMutants extra suite runs (default 8); survivors yield SUSPECT |
 | `review` | `--allow-api-change` | List refactor API breakage without failing for it |
@@ -258,6 +282,8 @@ omitted.
 | `review` | `--trust-head-config` | Use committed HEAD config (own repos only) |
 | `doctor` | `--probe` | Run one read probe per provider (spends quota) |
 | `doctor` | `--json` | Print the diagnostic check list as JSON |
+| `init` | `--dry-run` | Print the proposed config and gitignore change without writing or diagnostics |
+| `init` | `--force` | Replace an existing config; preserve existing gitignore entries |
 | General | `--help` | Print this help |
 | General | `--version` | Print the version |
 

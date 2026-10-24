@@ -12,7 +12,7 @@ export interface ReviewResult extends CascadeResult {
   suppressed?: SuppressedFinding[];
   runId: string;
   timestamp: string;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
+  mode: 'general' | 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
   refactor?: RefactorReport;
   runtime?: RuntimeReport;
   range: string;
@@ -101,7 +101,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
         const count = all.filter(f => f.verified && f.clause === `R${i + 1}`).length;
         return `| R${i + 1}: ${cell(text)} | ${count ? 'contradicted' : 'no finding'} | ${count} |`;
       })]
-      : result.mode === 'redesign' ? ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)] : refactor ? [] : ['## Pre-existing bugs', 'Only pre-existing findings count toward this bughunt summary and exit status.']),
+      : result.mode === 'redesign' ? ['## Inventory', '| Feature | Status |', '|---|---|', ...result.inventory.map(feature => `| ${cell(feature)} | ${all.some(f => (f.trigger + '\n' + f.impact).toLowerCase().includes(feature.toLowerCase())) ? 'reported missing' : 'no finding'} |`)] : result.mode === 'bughunt' ? ['## Pre-existing bugs', 'Only pre-existing findings count toward this bughunt summary and exit status.'] : []),
     '## Blockers', findingDetails(result.findings.filter(f => f.severity === 'BLOCKER')),
     '## Important Findings', findingDetails(result.findings.filter(f => f.severity === 'IMPORTANT')),
     '## Optional Findings', findingDetails(result.findings.filter(f => f.severity === 'OPTIONAL')),

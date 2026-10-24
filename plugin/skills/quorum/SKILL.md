@@ -1,7 +1,7 @@
 ---
 name: quorum
 description: Review a change with Quorum, which runs several AI reviewers (Gemini through Antigravity, Codex, Claude Code, a local model) over a git diff and reports only findings verified against the code. Use when the user asks for a multi-model review, a review "with Quorum", a feature-parity check of a redesign, or wants a BLOCKER proven with a failing test.
-argument-hint: "[feature|redesign|bughunt|contract|refactor|runtime] [diff range]"
+argument-hint: "[general|feature|redesign|bughunt|contract|refactor|runtime] [diff range]"
 ---
 
 # /quorum
@@ -14,6 +14,16 @@ Use `quorum` if it is on PATH. Otherwise ask the user where Quorum is checked ou
 
 ## 2. Check the setup (no quota)
 
+For a repository without configuration, run `quorum init --dry-run` to inspect
+the detected package manager, setup and checks, then `quorum init` to write
+`quorum.config.json` and add `.quorum/` to `.gitignore`. Existing config is refused
+unless `--force` is requested. Init prints the exact agy `read_file(...)` rule to
+add to `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`; it never
+edits that file. It runs doctor without probes. Commit the generated config and
+gitignore on the base branch first, since review trusts the merge-base.
+See [the adoption guide](../../../docs/USING-QUORUM-ON-A-REPO.md) for setup,
+costs, privacy and the first review.
+
 For model review, run `quorum doctor` in the repository to review. Skip provider diagnostics for `--mode runtime` without `--visual`, which makes no provider calls; runtime needs Docker and the pinned Playwright image. A FAIL line comes with a fix; show it to the user. The repository needs a committed `quorum.config.json`: Quorum reads it from the merge-base of the range, never from the change itself.
 
 `quorum doctor --probe` spends one call per provider. Run it only if the user agrees.
@@ -22,6 +32,7 @@ For model review, run `quorum doctor` in the repository to review. Skip provider
 
 Pick the mode from what the user asked:
 
+- `--mode general`: review real defects in the diff, with no spec or criteria table. This is the default when neither `--mode` nor `--spec` is given. `--spec <file>` without a mode still selects feature.
 - `--mode feature --spec <file>`: the spec must have acceptance criteria as Markdown checkboxes or a list under a heading that contains "acceptance".
 - `--mode redesign --inventory <file>`, optionally with `--images <dir>` and `--rules <file>`.
 - `--mode runtime --diff <base>...HEAD`: runs the configured flows against the merge-base and the head in locked-down containers and reports problems that are NEW at head (console errors, 5xx, blank pages, technical text). Exit 1 means new problems, 0 clean or suspect, 2 unknown (never read 2 as clean). `--dry-run` validates the runtime config and prints the app/flow plan without field values; `--strict-flows` makes a newly broken flow fail. Runtime executes the change's code, so it rejects `--no-checks`; the first run downloads a 3.6 GB image.
@@ -55,8 +66,8 @@ prints total elapsed time and checks/triage overlap.
 default 120), in both concurrent and sequential modes. For a slow suite, set
 `"budget": { "checkTimeoutSeconds": 600 }` in the trusted config. A timeout is
 `TIMED OUT after <N>s`, counted separately from failed checks; it makes coverage
-INCOMPLETE and exits 2 unless a BLOCKER, error-severity rule match or real failed
-check requires exit 1. Report the warning
+INCOMPLETE and exits 2 unless a BLOCKER or error-severity rule match requires
+exit 1; a failed check never changes the exit code. Report the warning
 `check "<argv>" timed out after <N>s; raise budget.checkTimeoutSeconds`.
 JSON/SARIF include `timedOut` and the applied `timeoutMs` on each check; confirmation
 prompts say `timed out`. Refactor and runtime keep their separate timeouts.

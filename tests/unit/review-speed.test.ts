@@ -73,7 +73,8 @@ it('matches sequential calls, coverage and findings across seeded small-budget s
       }
     }
   }
-});
+  // About 8 s alone; leave headroom for a loaded full-suite run.
+}, 120_000);
 
 it('keeps retries and review fallbacks when a funded wave becomes sequential', async () => {
   const sequential = await scriptedBudgetRun(3, 12, 1, [7, 7, 7]);

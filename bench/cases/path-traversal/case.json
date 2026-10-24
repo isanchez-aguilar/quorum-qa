@@ -2,7 +2,7 @@
   "id": "path-traversal",
   "title": "Serve nested public assets",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

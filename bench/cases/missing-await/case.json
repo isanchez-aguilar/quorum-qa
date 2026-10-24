@@ -2,7 +2,7 @@
   "id": "missing-await",
   "title": "Return a receipt after saving",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

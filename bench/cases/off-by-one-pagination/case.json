@@ -2,7 +2,7 @@
   "id": "off-by-one-pagination",
   "title": "Page catalog results",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

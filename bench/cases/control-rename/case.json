@@ -2,7 +2,7 @@
   "id": "control-rename",
   "title": "Clarify local naming",
   "kind": "control",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": []
 }

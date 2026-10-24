@@ -15,7 +15,7 @@ it('builds isolated commits, uses the CLI flags, disables setup and saves summar
   const runner: CommandRunner = async (command, args, options) => {
     repo = options!.cwd!;
     expect(command).toBe(process.execPath);
-    expect(args).toEqual([expect.stringMatching(/bin[\\/]quorum.js$/), 'review', '--mode', 'feature', '--spec', 'spec.md',
+    expect(args).toEqual([expect.stringMatching(/bin[\\/]quorum.js$/), 'review', '--mode', 'general',
       '--diff', 'main...HEAD', '--json', '--no-cache', '--out', expect.stringMatching(/report.md$/)]);
     expect(options!.timeoutMs).toBe(5000);
     const config = JSON.parse(await readFile(path.join(repo, 'quorum.config.json'), 'utf8'));
@@ -75,4 +75,16 @@ it.each([['--repeat', '0'], ['--repeat', '1.5'], ['--cases'], ['--unknown'], ['-
 
 it('rejects unknown case IDs before running commands', async () => {
   await expect(runBench({ cases: ['../outside'] })).rejects.toThrow(/selection/);
+});
+
+it('keeps feature benchmarks available with their specifications', async () => {
+  expect(parseArgs(['--mode', 'feature']).mode).toBe('feature');
+  expect(parseArgs(['--mode', 'general']).mode).toBe('general');
+  expect(() => parseArgs(['--mode', 'runtime'])).toThrow(/mode/);
+  let calls = 0;
+  await runBench({ cases: ['control-docs'], mode: 'feature', dryRun: true }, { print: () => {}, runner: async (_command: string, args: string[]) => {
+    calls++; expect(args.slice(1, 6)).toEqual(['review', '--mode', 'feature', '--spec', 'spec.md']);
+    return { exitCode: 0, stdout: 'Review chunks: 1\nMax API Calls: 12\n', stderr: '' };
+  } });
+  expect(calls).toBe(1);
 });

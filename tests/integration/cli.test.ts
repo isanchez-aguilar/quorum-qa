@@ -50,7 +50,7 @@ describe('router (in process)', () => {
   });
 
   it('requires a specification for feature review', async () => {
-    const result = await run(['review']);
+    const result = await run(['review', '--mode', 'feature']);
     expect(result.code).toBe(2);
     expect(result.err).toMatch(/--spec is required/);
   });

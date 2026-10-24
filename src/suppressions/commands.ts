@@ -3,7 +3,7 @@ import path from 'node:path';
 import { assertNoLinks } from '../context/contract.js';
 import { CONFIG_MAX_BYTES } from '../config/trusted-file.js';
 import { atomicWrite } from '../storage/index.js';
-import { UsageError, type ParsedFlags } from '../cli/args.js';
+import { REVIEW_MODES, UsageError, type ParsedFlags } from '../cli/args.js';
 import type { Finding } from '../types/index.js';
 import { expired, matchesSuppression, object, SUPPRESSIONS_FILE_NAME, validateSuppressions, type Suppression } from './index.js';
 
@@ -77,7 +77,7 @@ export function validateSuppressionReport(raw: unknown): { findings: Finding[]; 
     'reviewedFamilies', 'related', 'durations', 'checksParallel', 'callBudget', 'refactor', 'runtime', 'clauses', 'contractFiles', 'copyFiles'];
   if (!object(raw) || Object.keys(raw).some(key => !keys.includes(key))) return fail();
   if (!['runId', 'timestamp', 'range', 'headSha', 'baseSha'].every(key => typeof raw[key] === 'string' && raw[key] !== '')
-    || !Number.isFinite(Date.parse(raw.timestamp as string)) || !['feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'].includes((raw.mode as string))
+    || !Number.isFinite(Date.parse(raw.timestamp as string)) || !(REVIEW_MODES as readonly string[]).includes((raw.mode as string))
     || ![0, 1, 2].includes(raw.exitCode as number) || !Number.isSafeInteger(raw.cacheHits) || (raw.cacheHits as number) < 0) return fail();
   for (const key of ['criteria', 'inventory', 'warnings', 'errors', 'families', 'reviewedFamilies']) {
     if (!Array.isArray(raw[key]) || !(raw[key] as unknown[]).every(item => typeof item === 'string')) return fail();

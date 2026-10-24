@@ -11,6 +11,7 @@ Build first with `pnpm build`, then inspect the plan without calling a provider:
 ```sh
 node bench/run.mjs --dry-run
 node bench/run.mjs --cases missing-await,control-feature --dry-run --repeat 2
+node bench/run.mjs --mode feature --dry-run
 ```
 
 The plan lists initial review chunks and the maximum call budget per case and in
@@ -26,6 +27,9 @@ node bench/compare.mjs .quorum/bench/baseline/summary.json .quorum/bench/candida
 ```
 
 Omitting `--cases` selects all cases, sorted by ID. `--repeat` defaults to 1.
+The twelve bundled cases default to `general`; `--mode general|feature`
+overrides the case mode. Specifications are retained and supplied only in
+feature mode. Compare runs using the same mode.
 `--config` defaults to the repository's `quorum.config.json`. The harness copies
 tiers, budget and escalation settings; it forces Git context, empty setup and
 checks, and base `main`. It never installs dependencies. Each repetition gets a
@@ -91,7 +95,7 @@ intended behavior without revealing the seed. Use this metadata structure:
   "id": "example",
   "title": "Describe the intended change",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     { "file": "index.mjs", "lines": [8, 8], "class": "pagination", "minSeverity": "IMPORTANT" }

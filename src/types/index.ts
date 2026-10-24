@@ -85,7 +85,7 @@ export interface ReviewContext {
   contextProvider?: { requested: 'git' | 'codegraph'; available: boolean; effective: string };
   contextNotes?: string[];
   diffTruncated?: boolean;
-  mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
+  mode: 'general' | 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
   diff: string;
   baseCommit: string;
   mergeBaseCommit?: string;

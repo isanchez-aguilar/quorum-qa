@@ -2,7 +2,7 @@
   "id": "money-rounding",
   "title": "Include cents in price quotes",
   "kind": "seeded",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": [
     {

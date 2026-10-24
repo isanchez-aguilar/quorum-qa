@@ -5,9 +5,10 @@ export class UsageError extends Error {
   }
 }
 
-export const REVIEW_MODES = ['feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'] as const;
+export const REVIEW_MODES = ['general', 'feature', 'redesign', 'bughunt', 'contract', 'refactor', 'runtime'] as const;
 
 export interface ParsedFlags {
+  force?: boolean;
   from?: string;
   finding?: string;
   reason?: string;
@@ -54,10 +55,11 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
-type BooleanFlag = 'verbose' | 'sequentialChecks' | 'visual' | 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
+type BooleanFlag = 'force' | 'verbose' | 'sequentialChecks' | 'visual' | 'strictFlows' | 'mutation' | 'help' | 'version' | 'dryRun' | 'reproduce' | 'noHostPrompt' | 'allowUnproven' | 'probe' | 'json' | 'noCache' | 'noChecks' | 'trustHeadConfig' | 'deterministicOnly' | 'allowApiChange';
 type ValueFlag = 'from' | 'finding' | 'reason' | 'expires' | 'mode' | 'radius' | 'min' | 'days' | 'diff' | 'spec' | 'inventory' | 'images' | 'rules' | 'copy' | 'author' | 'since' | 'out' | 'sarif' | 'format';
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlag> = {
+  force: 'force',
   verbose: 'verbose',
   visual: 'visual',
   'strict-flows': 'strictFlows',

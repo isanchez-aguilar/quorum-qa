@@ -2,7 +2,7 @@
   "id": "control-docs",
   "title": "Document greetings",
   "kind": "control",
-  "mode": "feature",
+  "mode": "general",
   "spec": "spec.md",
   "truth": []
 }

@@ -47,6 +47,41 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
 }
 
 describe('M5 zero-quota review CLI', () => {
+  it.each([
+    [[], 'general'], [['--spec', 'spec.md'], 'feature'], [['--mode', 'general', '--spec', 'missing.md'], 'general'],
+    [['--mode', 'feature', '--spec', 'spec.md'], 'feature'], [['--mode', 'redesign'], 'redesign'],
+  ] as const)('selects the review mode for %j', async (args, mode) => {
+    let out = ''; let err = '';
+    const code = await main(['review', '--diff', 'base...HEAD', '--dry-run', ...args],
+      { out: text => { out += text; }, err: text => { err += text; } },
+      { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, providers: new Map([['agy', fake()]]), catalog });
+    expect(code, err).toBe(0); expect(out).toContain(`Review Mode: ${mode}`);
+  });
+  it('still requires a spec for explicit feature mode', async () => {
+    let err = '';
+    expect(await main(['review', '--mode', 'feature'], { out: () => {}, err: text => { err += text; } }, { repoRoot: root })).toBe(2);
+    expect(err).toContain('--spec is required for feature mode');
+  });
+  it.each(['IMPORTANT', 'BLOCKER', 'incomplete'] as const)('general reports findings, SARIF and coverage without criteria: %s', async severity => {
+    const provider = severity === 'incomplete' ? new FakeProvider('agy', 'google', runner, { flash: ['invalid'], pro: ['invalid'] })
+      : fake([JSON.stringify([finding({ severity })])]);
+    const confirmer = new FakeProvider('codex', 'openai', runner, { codex: [JSON.stringify({ decisions: [{ id: 'c1', decision: 'confirm' }], decision: 'confirm' })] });
+    const { code, result, err } = await review(provider, ['--mode', 'general', '--no-cache', '--sarif', '.quorum/report.sarif'],
+      { providers: new Map([['agy', provider], ['codex', confirmer]]) });
+    expect(code, err).toBe(severity === 'BLOCKER' ? 1 : severity === 'incomplete' ? 2 : 0);
+    expect(result?.mode).toBe('general'); expect(result?.criteria).toEqual([]);
+    expect(result?.coverage.complete).toBe(severity !== 'incomplete');
+    const markdown = await readFile(path.join(root, '.quorum/report.md'), 'utf8');
+    expect(markdown).not.toMatch(/## Acceptance criteria|## Pre-existing bugs|unmet criterion/);
+    expect(markdown).toContain('## Coverage');
+    const sarif = JSON.parse(await readFile(path.join(root, '.quorum/report.sarif'), 'utf8'));
+    if (severity !== 'incomplete') {
+      expect([...result!.findings, ...result!.unconfirmed]).toHaveLength(1);
+      expect(sarif.runs[0].results).toHaveLength(1);
+      expect([...result!.findings, ...result!.unconfirmed][0]!.origin).toBe('introduced');
+    }
+    expect(provider.calls[0]!.prompt).not.toMatch(/"spec"|"criteria"|AC1/);
+  });
   it('rejects a confident triage false positive through main without reporting a finding', async () => {
     const provider = fake([JSON.stringify([finding({ confidence: 0.95 })])]);
     const confirmer = new FakeProvider('codex', 'openai', runner, { codex: [JSON.stringify({ decisions: [{ id: 'c1', decision: 'reject' }] })] });
