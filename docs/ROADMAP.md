@@ -35,6 +35,6 @@ See the milestones in [PLAN.md](PLAN.md#v1-milestones).
 ## v3: team use
 - A GitHub Action that posts verified findings as a PR review, with Jules as an optional cloud reviewer.
 - A precision dashboard per provider and per model: real findings against false ones, cost and time.
-- Suppression files, so known false positives stop coming back.
+- [x] Suppression files, so known false positives stop coming back (decision 27): trusted-base matching, visible report entries, local commands, doctor and history/mining support.
 - A "ready for production?" report.
 - Possibly a hosted or team edition (open-core).

@@ -340,6 +340,64 @@ serialized per volume within the process; a cross-process preparation conflict
 reports the volume as in use. Known limit: `budget.maxMinutes` does not bound
 Git/worktree preparation.
 
+## Suppress reviewed false positives
+
+Save the full `quorum review ... --json` output to a JSON file, then:
+
+```sh
+quorum suppress add --from report.json --finding 1 --reason "Reviewed: the caller already validates this input." --expires 2027-01-01
+quorum suppress list
+quorum suppress list --from report.json
+quorum suppress remove <id>
+```
+
+These commands make no provider calls and only edit `quorum.suppress.json` in the
+working tree; commit it yourself. Finding numbers are 1-based in the JSON's
+`findings` order followed by `unconfirmed`. Reports must be regular, non-symlink
+files of at most 8 MiB. Duplicate file/quote fingerprints are refused.
+
+```json
+{
+  "suppressions": [
+    {
+      "id": "validated-input",
+      "file": "src/example.ts",
+      "quote": "const result = compute(input);",
+      "reason": "Reviewed: the caller already validates this input.",
+      "created": "2026-10-22",
+      "expires": "2027-01-01"
+    }
+  ]
+}
+```
+
+`file`, `quote` (1–2000 characters), and `reason` (10–500 characters) are required.
+IDs are optional and otherwise generated from the normalized file/quote. Dates
+are optional ISO calendar dates; expiration is inclusive through that UTC date.
+There is no default expiration. At most 400 entries are allowed; unknown keys,
+control characters and duplicate IDs or fingerprints are rejected. `add` keeps
+up to 400 characters of the evidence quote, collapsing whitespace for multiline
+evidence, and records today's UTC date.
+
+Reviews load the trusted config commit (the range's merge-base), so an entry
+added by the change under review cannot suppress itself. The report notes changes
+to the suppression file and counts added entries. `--trust-head-config` explicitly
+opts into committed HEAD entries. Working-tree edits never affect a review.
+Matching uses the same normalized path and a normalized quote contained in the
+other quote, with at least 12 characters in the shorter quote. Line moves and
+quote-style changes still match; changed code can stop matching and findings
+return. `doctor` warns about expired or unused entries and reports branch additions.
+`list --from` marks entries unused when the report contains no matching finding.
+
+Suppressed findings remain visible in Markdown's **Suppressed (N)** section and
+JSON's `suppressed` array, including location, severity, provider, ID and reason.
+They do not affect verdicts, summary counts or SARIF results. A reproduced BLOCKER
+confirmed by two different families stays active, with an ignored-suppression
+warning. `.quorum/findings.jsonl` retains suppressed findings with
+`suppressed: true`; rule mining ignores those rows. `--no-cache` does not change
+suppression behavior. Suppressions apply to code findings, not deterministic
+rule matches or runtime flow/visual results.
+
 ## Your logins, not ours
 
 Quorum calls each vendor's own CLI, signed in with your own subscription. It never stores, requests or proxies API keys.

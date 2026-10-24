@@ -6,6 +6,7 @@ import { runDoctor } from '../doctor/index.js';
 import { parseArgs, UsageError } from './args.js';
 import { proposeRules, renderRuleProposals } from '../rules/mining.js';
 import { atomicWrite } from '../storage/index.js';
+import { suppressCommand } from '../suppressions/commands.js';
 
 export const EXIT_OK = 0;
 export const EXIT_BLOCKERS = 1;
@@ -35,6 +36,9 @@ Commands:
   review    Run a quorum of AI reviewers over a change
   doctor    Check which providers and models are usable
   rules propose  Propose deterministic rules from recurring verified findings (no model calls)
+  suppress add --from <report.json> --finding <n> --reason <text> [--expires YYYY-MM-DD]
+  suppress list [--from <report.json>]  List active/expired/unused suppressions
+  suppress remove <id>       Remove a working-tree suppression (no model calls)
 
 Options for review:
   --verbose                Print completion timing even when stderr is not a terminal
@@ -82,6 +86,7 @@ Options for rules propose:
 
 Files:
   quorum.rules.json          Accepted deterministic rules; read from the trusted config commit
+  quorum.suppress.json       Reviewed false positives; trusted base (HEAD with --trust-head-config)
   .quorum/findings.jsonl     Local verified-finding history, including code quotes (never commit)
 
 General:
@@ -99,6 +104,10 @@ Timeouts report TIMED OUT, make coverage INCOMPLETE and suggest raising that lim
 Refactor and runtime retain their own timeouts.
 --spec, --inventory and --rules require regular non-symlink files, at most 256 KiB each.
 Feature specs accept Markdown checkboxes or a list under a heading containing "acceptance".
+Suppressions use file and quote, not line; changed code stops matching. Reasons require 10–500
+characters. Finding numbers are 1-based: findings, then unconfirmed, in review --json output.
+Suppressed findings remain visible in Markdown/JSON and history, excluded from verdict/SARIF.
+Reproduced two-family BLOCKERs cannot be suppressed. Commit the file for future reviews.
 
 Exit codes: 0 = complete coverage with no failing BLOCKER or error-severity rule match;
 1 = a BLOCKER or error-severity rule match remains;
@@ -132,10 +141,19 @@ export async function main(
       return EXIT_OK;
     }
 
+    if (command !== 'suppress' && ['from', 'finding', 'reason', 'expires'].some(key => flags[key as keyof typeof flags] !== undefined)) {
+      throw new UsageError('--from, --finding, --reason and --expires require suppress.');
+    }
+
     if (flags.mutation && (command !== 'review' || flags.mode !== 'refactor')) throw new UsageError('--mutation requires refactor mode.');
     if (flags.strictFlows && (command !== 'review' || flags.mode !== 'runtime')) throw new UsageError('--strict-flows requires runtime mode.');
     if (flags.visual && (command !== 'review' || flags.mode !== 'runtime')) throw new UsageError('--visual requires runtime mode.');
     switch (command) {
+      case 'suppress': {
+        const root = path.resolve(dependencies.repoRoot ?? process.cwd());
+        io.out(await suppressCommand(positionals, flags, root, new Date((dependencies.now ?? Date.now)()).toISOString().slice(0, 10)));
+        return EXIT_OK;
+      }
       case 'rules': {
         if (positionals.length !== 1 || positionals[0] !== 'propose') throw new UsageError('Use quorum rules propose.');
         for (const key of Object.keys(flags)) {

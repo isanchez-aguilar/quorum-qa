@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir as userHome } from 'node:os';
 import { resolveCommand } from '../checks/resolver.js';
@@ -13,6 +12,8 @@ import type { DoctorCheck } from './checks.js';
 import { ConfigError, hasConfiguredTestCommand } from '../config/schema.js';
 import { RULES_FILE_NAME, validateRules } from '../rules/index.js';
 import { DEFAULT_RUNTIME_IMAGE } from '../runtime/image.js';
+import { checkSuppressions } from '../suppressions/doctor.js';
+import { readBoundedFile } from '../suppressions/commands.js';
 
 export type { DoctorCheck } from './checks.js';
 export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
@@ -20,6 +21,7 @@ export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
   const results: DoctorCheck[] = [];
+  results.push(...await checkSuppressions(context.repoRoot, context.runner, config?.base));
   if (!hasConfiguredTestCommand(config)) {
     results.push({ id: 'refactor.testCommand', status: 'WARN', message: 'Refactor mode cannot find a test command.',
       fix: 'Configure refactor.testCommand or reproduce.testCommand as an argv array.' });
@@ -27,10 +29,7 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   try {
     const rulesPath = path.join(context.repoRoot, RULES_FILE_NAME);
     // Review reads this file from git and refuses a symlink; doctor must say the same thing.
-    const stat = await lstat(rulesPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new ConfigError([`${RULES_FILE_NAME} must be a regular file, not a symlink`], 'Invalid quorum rules');
-    const text = await readFile(rulesPath, 'utf8');
-    const rules = validateRules(JSON.parse(text.replace(/^\uFEFF/, '')));
+    const rules = validateRules(JSON.parse(await readBoundedFile(rulesPath)));
     results.push({ id: 'rules', status: 'PASS', message: `${RULES_FILE_NAME} is valid (${rules.length} rules).` });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {

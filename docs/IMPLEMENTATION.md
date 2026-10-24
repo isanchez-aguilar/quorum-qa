@@ -3693,3 +3693,58 @@ uses `tests/helpers/timing.ts`: six 50 ms chunks, best of three runs for each
 setting, with parallel elapsed time below 60% of serial time. A fake Git runner
 checks the mutex without Git writes, and the integration suite also creates and
 cleans six real temporary worktrees concurrently.
+
+## Suppressions (decision 27)
+
+`quorum.suppress.json` stores reviewed false positives as `{ "suppressions": [] }`.
+Each entry requires a repository-relative `file`, a 1–2000 character `quote`, and
+a 10–500 character `reason`. Optional `id`, `created` and `expires` are preserved;
+dates must be real ISO calendar dates. Strings reject control characters, keys
+are strict, and the list is capped at 400 entries with unique IDs and normalized
+file/quote fingerprints. Missing IDs use the first ten hex characters of SHA-256
+over `normalizedPath + "\n" + normalizedQuote`. Expiration is inclusive through
+the specified UTC date and defaults to none.
+
+Rules and suppressions share the Git-backed trusted JSON reader: regular blobs
+only, no symlinks, bounded to 8 MiB. Reviews select the trusted config commit
+(merge-base, including the existing `--since` trust policy), or committed HEAD
+with `--trust-head-config`. A changed suppression file yields
+`quorum.suppress.json changed in this change; its new entries are not applied until merged`
+with the added-fingerprint count. Invalid untrusted HEAD content never replaces
+trusted entries; the note says when its count is unavailable.
+
+After confirmation/reproduction, partition findings before computing verdicts.
+Match normalized paths and whitespace/quote-style-normalized evidence using
+shorter-inside-longer containment, minimum 12 characters. Ignore lines. Expired
+entries warn and never match. Reproduced BLOCKERs with two distinct confirmation
+families remain active with `suppression <id> ignored: reproduced BLOCKER`.
+Suppressions do not affect provider prompts or cached raw results. `--no-cache`
+continues to bypass cache reads/writes independently.
+
+Markdown includes `## Suppressed (N)`; JSON includes `suppressed` findings with
+`suppression: { id, reason }`, preserving the source provider, severity and
+location. Active arrays alone feed counts, verdicts and SARIF. History still
+receives verified suppressed findings with `suppressed: true`; rule mining
+ignores those rows. Deterministic rules, refactor evidence and runtime evidence
+are not suppressible code findings.
+
+`suppress add --from <report.json> --finding <n> --reason <text> [--expires YYYY-MM-DD]`
+validates a Quorum report, takes the 1-based item in findings then unconfirmed,
+and writes its evidence (trimmed, whitespace collapsed, at most 400 characters)
+with today's UTC `created` date. `suppress list [--from <report.json>]` reports
+active/expired/unused status; `suppress remove <id>` removes an entry. Reads reject
+symlinks and oversized files. Writes use atomic replacement, stable key order,
+two-space indentation and a trailing newline. Commands never call providers or
+commit files; duplicate fingerprints and invalid reasons are errors.
+
+Doctor shares validation and bounded working-file reads with the commands. It
+reports validity/count, expiration, and `unused suppression <id>` when the quote
+is no longer in the file: changed code stops matching and findings return. It
+compares working entries with the configured base's merge-base to report branch
+additions. An unavailable base produces an explicit warning rather than a count.
+
+Tests cover schema boundaries, normalized IDs/matching, trusted reads and change
+notes, protected BLOCKERs, reports/counts/exit/SARIF, commands, doctor and mining.
+A synthetic end-to-end `main()` test uses fake providers and fake Git: review,
+add from its real JSON, reject untrusted HEAD additions, then trust the entry and
+verify exit zero plus visible suppression and ledger history.

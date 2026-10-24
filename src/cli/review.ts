@@ -27,6 +27,7 @@ import { generateMarkdownReport, generateSarifReport, type ReviewResult } from '
 import { appendLedger, atomicWrite, diskCache, readQuota } from '../storage/index.js';
 import { appendFindings, historyEntries } from '../storage/findings.js';
 import { loadRulesAt, runRules } from '../rules/index.js';
+import { applySuppressions, loadSuppressionsAt, suppressionChanges } from '../suppressions/index.js';
 import type { CatalogEntry, CommandRunner, QuorumConfig } from '../types/index.js';
 import { checkoutDifference, checkoutSnapshot } from '../worktree/checkout.js';
 import { createReviewWorktree, isClean } from '../worktree/index.js';
@@ -216,6 +217,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const config = headConfig ?? await configAt(trustBase, root, runner);
   const rulesCommit = flags.trustHeadConfig ? head : trustBase;
   const deterministicRules = await loadRulesAt(rulesCommit, root, runner);
+  const suppressions = await loadSuppressionsAt(rulesCommit, root, runner);
+  const suppressionNotes = flags.trustHeadConfig ? [] : await suppressionChanges(trustBase, head, root, runner);
   if (flags.author) config.author = flags.author;
   if (config.author) context.authorFamily = resolveAuthorFamily(config.author);
   for (const [flag, property] of [['spec', 'specContent'], ['inventory', 'inventoryContent'], ['rules', 'rulesContent']] as const) {
@@ -395,6 +398,14 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         for (const family of [f.family, ...(f.confirmationFamilies ?? [])]) if (!families.includes(family)) families.push(family);
       }
       if (context.authorFamily && families.length === 1 && families[0] === context.authorFamily) warn('Independence warning: the author family was the only reviewer available.');
+      const today = new Date(now()).toISOString().slice(0, 10);
+      const confirmed = applySuppressions(cascade.findings, suppressions, today);
+      const unconfirmed = applySuppressions(cascade.unconfirmed, suppressions, today);
+      const points = applySuppressions(cascade.pointsAtChange ?? [], suppressions, today);
+      cascade.findings = confirmed.active; cascade.unconfirmed = unconfirmed.active;
+      if (cascade.pointsAtChange) cascade.pointsAtChange = points.active;
+      const suppressed = [...confirmed.suppressed, ...unconfirmed.suppressed, ...points.suppressed];
+      for (const note of new Set([...suppressionNotes, ...confirmed.warnings, ...unconfirmed.warnings, ...points.warnings])) warn(note);
       const failingBlocker = [...cascade.findings, ...cascade.unconfirmed.filter(f => f.family !== 'local' || (f.confirmationFamilies?.length ?? 0) >= 2)]
         .some(f => f.severity === 'BLOCKER' && (!flags.allowUnproven || (f.confirmationFamilies?.length ?? 0) >= 2));
       const verdict = evidence ? evaluateRefactorVerdict(evidence, cascade, flags.allowApiChange === true, ruleChecks) : undefined;
@@ -409,7 +420,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
       // A check that exits non-zero is evidence shown in the report; it does not decide the exit code (the
       // repository's own CI does). Only a timeout acts: it makes coverage incomplete above.
       const exitCode = verdict ? verdict.exitCode : failingBlocker || ruleChecks?.passed === false ? 1 : cascade.errors.length || !cascade.coverage.complete ? 2 : 0;
-      result = { ...cascade, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
+      result = { ...cascade, suppressed, runId, timestamp, mode, range, headSha: head, baseSha: context.baseCommit, checks, ruleChecks,
         ...(evidence && verdict ? { refactor: { ...evidence, ...verdict, allowApiChange: flags.allowApiChange === true, modelReview: !deterministicOnly } } : {}),
         ...(mode === 'contract' ? { clauses: contractClauses(context.rulesContent ?? ''), contractFiles: context.contract!.groups.map(group => ({ file: group.file.file, imports: group.imports.map(file => file.file) })), copyFiles: context.contract!.copy.map(file => file.file) } : {}),
         criteria: acceptanceCriteria(context.specContent ?? ''), inventory: inventoryFeatures(context.inventoryContent ?? ''), families, exitCode };
@@ -421,7 +432,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
       catch (error) { warn(`Ledger write failed: ${String(error)}`); }
       try {
         await (dependencies.appendFindings ?? appendFindings)(
-          historyEntries([...result.findings, ...result.unconfirmed, ...(result.pointsAtChange ?? [])], { runId, timestamp, mode }),
+          [...historyEntries([...result.findings, ...result.unconfirmed, ...(result.pointsAtChange ?? [])], { runId, timestamp, mode }),
+            ...historyEntries(suppressed, { runId, timestamp, mode }).map(entry => ({ ...entry, suppressed: true }))],
           path.join(root, '.quorum', 'findings.jsonl'), root);
       } catch (error) { warn(`Findings history write failed: ${String(error)}`); }
     } finally {
@@ -445,6 +457,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
 }
 
 async function outputReview(result: ReviewResult, flags: ParsedFlags, root: string, io: CliIo): Promise<number> {
+  result.suppressed ??= [];
   async function save(file: string, render: () => string, label: string): Promise<void> {
     try { await atomicWrite(path.resolve(root, file), render(), root); }
     catch (error) {

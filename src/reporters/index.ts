@@ -4,10 +4,12 @@ import type { CascadeResult } from '../cascade/index.js';
 import type { runDeterministicChecks } from '../checks/index.js';
 import type { Family, Finding } from '../types/index.js';
 import type { RuleRun } from '../rules/index.js';
+import type { SuppressedFinding } from '../suppressions/index.js';
 import { cell, refactorMarkdown, refactorSarif, type RefactorReport } from './refactor.js';
 import { runtimeMarkdown, runtimeSarif, type RuntimeReport } from './runtime.js';
 
 export interface ReviewResult extends CascadeResult {
+  suppressed?: SuppressedFinding[];
   runId: string;
   timestamp: string;
   mode: 'feature' | 'redesign' | 'bughunt' | 'contract' | 'refactor' | 'runtime';
@@ -103,6 +105,8 @@ export function generateMarkdownReport(result: ReviewResult): string {
     '## Blockers', findingDetails(result.findings.filter(f => f.severity === 'BLOCKER')),
     '## Important Findings', findingDetails(result.findings.filter(f => f.severity === 'IMPORTANT')),
     '## Optional Findings', findingDetails(result.findings.filter(f => f.severity === 'OPTIONAL')),
+    `## Suppressed (${result.suppressed?.length ?? 0})`, result.suppressed?.length ? result.suppressed.map(f =>
+      `- ${cell(f.file)}:${f.line} — ${f.severity} — ${cell(f.provider)}:${cell(f.model)} — suppression ${cell(f.suppression.id)}: ${cell(f.suppression.reason)}`).join('\n') : 'None.',
     '## Rejected on confirmation', result.rejectedOnConfirmation?.length ? result.rejectedOnConfirmation.map(({ finding, sources, confirmer }) =>
       `- **${cell(finding.trigger)}** — ${cell(finding.file)}:${finding.line} — ${sources.map(source => cell(`${source.provider}:${source.model}`)).join(', ')}; rejected by ${cell(`${confirmer.provider}:${confirmer.model}`)}`).join('\n') : 'None.',
     '## Unconfirmed (local model only)', findingDetails(result.unconfirmed.filter(f => f.family === 'local')),
