@@ -1,0 +1,18 @@
+{
+  "id": "off-by-one-pagination",
+  "title": "Page catalog results",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        4,
+        4
+      ],
+      "class": "pagination",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

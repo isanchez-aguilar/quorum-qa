@@ -1,0 +1,18 @@
+{
+  "id": "sql-injection",
+  "title": "Find a customer by name",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        2,
+        2
+      ],
+      "class": "sql-injection",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

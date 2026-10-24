@@ -1,0 +1,18 @@
+{
+  "id": "path-traversal",
+  "title": "Serve nested public assets",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        3,
+        3
+      ],
+      "class": "path-traversal",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

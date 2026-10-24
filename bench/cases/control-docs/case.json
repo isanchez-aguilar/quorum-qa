@@ -1,0 +1,8 @@
+{
+  "id": "control-docs",
+  "title": "Document greetings",
+  "kind": "control",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": []
+}
