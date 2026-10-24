@@ -167,5 +167,6 @@ it('verifies multiline numbered evidence in the review tier', async () => {
   const fake = new FakeProvider('agy', 'google', originRunner(root), { pro: [raw] });
   const config = validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: [], visual: [] }, escalate: { focus: [], belowConfidence: 0.6 } });
   const result = await runCascade(ctx, config, new Map([['agy', fake]]), { catalog, gitRunner: originRunner(root) });
-  expect(result.findings).toMatchObject([{ verified: true, evidence_quote: 'const first = read(input);\nconst second = consume(first);' }]);
+  expect(result.findings).toMatchObject([{ verified: true, evidence_quote: 'const first = read(input);\nconst second = consume(first);',
+    verification_note: expect.stringContaining('stripped diff markers from the quote') }]);
 });

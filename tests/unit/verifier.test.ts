@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Finding } from '../../src/types/index.js';
 import { verifyFinding, MAX_FILE_BYTES } from '../../src/verifier/index.js';
+import { fastest } from '../helpers/timing.js';
 import { isCitableLine, localWindow, splitLines } from '../../src/verifier/lines.js';
 import { normalizePath } from '../../src/verifier/path.js';
 import {
@@ -79,6 +80,170 @@ async function put(relative: string, content: string): Promise<void> {
 async function verify(over: Partial<Finding> = {}) {
   return verifyFinding(root, finding(over));
 }
+
+describe('diff marker round 2', () => {
+  it.each(['--count;', '-value;', '-1,', '- item', '-[a-z]'])('preserves real minus code %s', async code => {
+    await put('src/auth.ts', code);
+    const result = await verify({ line: 1, evidence_quote: code });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+  });
+
+  it.each(['404: return notFound();', '12: true', '12 | value', 'src/auth.ts:12: true'])('preserves real numeric/pathed code %s', async code => {
+    await put('src/auth.ts', code);
+    const result = await verify({ line: 1, evidence_quote: code });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+    expect(result.correctedFinding?.verification_note).toBeUndefined();
+  });
+
+  it('strips plus-space and context markers without changing relative indentation', async () => {
+    const code = 'const x = 1;\nif (x) return x;';
+    await put('src/auth.ts', code);
+    const result = await verify({ line: 1, evidence_quote: '+ const x = 1;\n if (x) return x;' });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+    expect(result.correctedFinding?.verification_note).not.toContain('fuzzy');
+  });
+
+  it.each(['+ ', '  '])('prefers real indentation over stripping another space: %j', async prefix => {
+    const code = ' const x = 1;\nif (x) return x;';
+    await put('src/auth.ts', code);
+    const result = await verify({ line: 1, evidence_quote: `${prefix}const x = 1;\n+if (x) return x;` });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+  });
+
+  it('preserves a real context line even when its unindented candidate exists', async () => {
+    const code = ' const x = 1;\nif (x) return x;';
+    await put('src/auth.ts', `${code}\nconst x = 1;`);
+    const result = await verify({ line: 1, evidence_quote: ' const x = 1;\n+if (x) return x;' });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+  });
+
+  it.each([
+    ['src\\auth.ts', 'src/auth.ts:12: '],
+    ['src/auth.ts', 'src\\auth.ts:12: '],
+  ])('normalizes path separators for %s and %s', async (file, prefix) => {
+    await put('src/auth.ts', QUOTE);
+    const result = await verify({ file, line: 1, evidence_quote: prefix + QUOTE });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(QUOTE);
+  });
+
+  it('excludes hunk metadata and numbered prefixes from the retained-code ratio', async () => {
+    await put('src/auth.ts', 'return currentValue;');
+    const result = await verify({ line: 1, evidence_quote: '@@ -123456,1 +123456,1 @@\n-src/auth.ts:12: old();\n+src/auth.ts:12: return currentValue;' });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe('return currentValue;');
+  });
+
+  it('stores the code at the match even when a comment elsewhere contains the raw quote', async () => {
+    await put('src/auth.ts', `const value = 1;\n// +const value = 1;`);
+    const result = await verify({ line: 1, evidence_quote: '+const value = 1;' });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.line).toBe(1);
+    expect(result.correctedFinding?.evidence_quote).toBe('const value = 1;');
+  });
+
+  it('rejects fabricated added code', async () => {
+    await put('src/auth.ts', 'return actualValue;');
+    expect((await verify({ line: 1, evidence_quote: '+return fabricatedValue;' })).verified).toBe(false);
+  });
+
+  it('keeps real minus and plus lines together', async () => {
+    const code = '-value;\n+value;';
+    await put('src/auth.ts', code);
+    const result = await verify({ line: 1, evidence_quote: code });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+  });
+
+  it.each(['0005: ', 'src/auth.ts:12: '])('stores clean code from prompt prefix %s', async prefix => {
+    await put('src/auth.ts', QUOTE);
+    const result = await verify({ line: 1, evidence_quote: prefix + QUOTE });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(QUOTE);
+  });
+
+  it('scales 50 findings from 0.5 MiB to 2 MiB below eightfold', async () => {
+    const run = async () => {
+      for (let i = 0; i < 50; i++) {
+        const result = await verify({ line: 1, evidence_quote: '+const value = 1;' });
+        expect(result.verified).toBe(true);
+      }
+    };
+    const measure = async (bytes: number) => {
+      const head = 'const value = 1;\n';
+      const filler = '// padding for timing\n';
+      await put('src/auth.ts', head + filler.repeat(Math.floor((bytes - head.length) / filler.length)));
+      return fastest(run);
+    };
+    const smallMs = await measure(MAX_FILE_BYTES / 4);
+    const largeMs = await measure(MAX_FILE_BYTES);
+    expect(largeMs / Math.max(smallMs, 1)).toBeLessThan(8);
+    expect(largeMs).toBeLessThan(10_000);
+  });
+});
+
+describe('quotes copied from diff and numbered prompts', () => {
+  const samples = [
+    "const isAdmin = user.role === 'admin';\nif (isAdmin) throw new Error('Forbidden');",
+    'store.save(profile).catch(() => {});\nreturn { saved: true };',
+    'return read(path.join(root, name));',
+    'return /^([a-z]+)+(-[a-z]+)*$/.test(value);',
+    "setInterval(() => progress('waiting'), 1000);",
+  ];
+  it.each(samples.flatMap(code => ['+', '+ '].map(prefix => ({ code, prefix }))))('verifies $prefix $code', async ({ code, prefix }) => {
+    await put('src/auth.ts', code);
+    const evidence_quote = code.split('\n').map(line => prefix + line).join('\n');
+    const result = await verify({ line: 1, evidence_quote });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.evidence_quote).toBe(code);
+    expect(result.correctedFinding?.verification_note).toContain('stripped diff markers from the quote');
+  });
+  it.each(['123: ', '0001: ', '123 | ', 'src/auth.ts:1: ', ' '])('accepts the prefix %j', async prefix => {
+    await put('src/auth.ts', samples[0]!);
+    const result = await verify({ line: 1, evidence_quote: '@@ -1,2 +1,2 @@\n' + samples[0]!.split('\n').map(line => prefix + line).join('\n') });
+    expect(result.verified).toBe(true);
+    expect(result.correctedFinding?.verification_note).toContain('stripped diff markers from the quote');
+  });
+  it('rejects removed-only evidence even when HEAD contains the same code', async () => {
+    await put('src/auth.ts', samples[0]!);
+    const result = await verify({ line: 1, evidence_quote: samples[0]!.split('\n').map(line => '-' + line).join('\n') });
+    expect(result).toMatchObject({ verified: false, reason: 'quote is removed code from the diff' });
+  });
+  it.each([true, false])('requires 60 percent retained evidence (enough: %s)', async enough => {
+    const code = 'return read(path.join(root, name));';
+    await put('src/auth.ts', code);
+    const result = await verify({ line: 1, evidence_quote: `-${enough ? 'old();' : 'removedCallWithManyMoreCharactersThanTheRemainingEvidence();'}\n+${code}` });
+    expect(result.verified).toBe(enough);
+  });
+  // Six kept code characters: 6 / (6 + 4) is 60%; diff markers are metadata.
+  it.each([['abcd', true], ['abcde', false]] as const)('checks the inclusive 60 percent boundary: %s', async (removed, accepted) => {
+    await put('src/auth.ts', 'abcdef');
+    expect((await verify({ line: 1, evidence_quote: `-${removed}\n+abcdef` })).verified).toBe(accepted);
+  });
+  it.each([
+    ['a + b', '+ a - b'],
+    ['return (alpha + beta) * gamma;', '+return alpha + beta * gamma;'],
+    ['return !value;', '+return value;'],
+    ['return a + b;', 'return a - b;'],
+  ])('keeps semantic differences significant: %s / %s', async (code, evidence_quote) => {
+    await put('src/auth.ts', code);
+    expect((await verify({ line: 1, evidence_quote })).verified).toBe(false);
+  });
+  it.each(['+value', '++value', '+ +value'])('preserves a leading unary plus: %s', async evidence_quote => {
+    await put('src/auth.ts', '+value');
+    expect((await verify({ line: 1, evidence_quote })).verified).toBe(true);
+  });
+  it('preserves plus operators inside code and handles markers per line', async () => {
+    const code = '+value;\nx++;\nconst sign = "+";\nreturn a + b;';
+    await put('src/auth.ts', code);
+    expect((await verify({ line: 1, evidence_quote: '+value;\n+x++;\n const sign = "+";\n+ return a + b;' })).verified).toBe(true);
+  });
+});
 
 describe('verifyFinding: table 4.4', () => {
   it('row 1: exact line and quote', async () => {

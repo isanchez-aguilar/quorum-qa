@@ -29,7 +29,8 @@ export interface VerifyResult {
   verified: boolean;
   // Present when verified: a copy of the finding with `verified: true`, the real line, and a
   // `verification_note` when the line was corrected or the match was fuzzy. `evidence_quote`
-  // stays the ORIGINAL quote; a fuzzy note carries the text actually found in the code.
+  // stays the ORIGINAL quote (minus diff markers or line-number prefixes); a fuzzy note carries the
+  // text actually found in the code.
   correctedFinding?: Finding;
   reason?: string;
   readError?: boolean;
@@ -46,6 +47,70 @@ function formatSimilarity(similarity: number): string {
 function showCode(text: string): string {
   const shown = text.length > FOUND_NOTE_CHARS ? `${text.slice(0, FOUND_NOTE_CHARS)}...` : text;
   return JSON.stringify(shown);
+}
+
+// Only quote-side presentation is removed. Prefer an existing code line (notably unary +)
+// over interpreting its first character as a diff marker.
+function stripQuoteMarkers(raw: string, lines: string[], file: string): { quote: string; stripped: boolean; reason?: string } {
+  let source: Set<string> | undefined;
+  const lineKey = (line: string) => line.replace(/\t/g, '  ').trimEnd();
+  const isSource = (line: string): boolean => {
+    source ??= new Set(lines.filter(value => value.length <= MAX_LINE).map(lineKey));
+    return source.has(lineKey(line));
+  };
+  const filePrefix = `${file.replace(/\\/g, '/')}:`;
+  const withoutPrefix = (line: string): string => {
+    const numbered = line.replace(/\\/g, '/').startsWith(filePrefix) ? line.slice(filePrefix.length) : line;
+    const prefix = /^\d+(?:: | \| )/.exec(numbered);
+    return prefix ? numbered.slice(prefix[0].length) : line;
+  };
+  const codeChars = (line: string) => line.replace(/\s/g, '').length;
+  const diff = /^(?:[+-]|@@ .* @@)/m.test(raw);
+  let stripped = false;
+  let removed = false;
+  let removedChars = 0;
+  const kept: string[] = [];
+  for (let line of raw.replace(/\r\n?/g, '\n').split('\n')) {
+    // Preserve real lines before interpreting any part of them as presentation.
+    if (/^(?:[+\- @]|\d)/.test(line) || line.replace(/\\/g, '/').startsWith(filePrefix)) {
+      if (isSource(line)) {
+        kept.push(line);
+        continue;
+      }
+      if (/^@@ .* @@/.test(line)) {
+        stripped = true;
+        continue;
+      }
+      const numbered = withoutPrefix(line);
+      if (numbered !== line && isSource(numbered)) {
+        line = numbered;
+        stripped = true;
+      } else if (line.startsWith('-')) {
+        removed = true;
+        stripped = true;
+        removedChars += codeChars(withoutPrefix(line.slice(1)));
+        continue;
+      } else if (line.startsWith('+') || (diff && line.startsWith(' '))) {
+        // Prefer the single marker; an extra presentation space is stripped only
+        // when that first candidate is not itself a real source line.
+        const candidates = [line.slice(1)];
+        if (line[1] === ' ') candidates.push(line.slice(2));
+        const candidate = candidates.flatMap(value => [value, withoutPrefix(value)]).find(isSource);
+        if (candidate !== undefined) {
+          line = candidate;
+          stripped = true;
+        }
+      }
+    }
+    kept.push(line);
+  }
+  const quote = normalizeQuote(kept.join('\n'));
+  if (removed && quote === '') return { quote, stripped, reason: 'quote is removed code from the diff' };
+  const keptChars = codeChars(quote);
+  if (removed && keptChars < (keptChars + removedChars) * 0.6) {
+    return { quote, stripped, reason: 'quote retains less than 60% after removing deleted diff lines' };
+  }
+  return { quote, stripped };
 }
 
 // Reads at most size + 1 bytes from the descriptor that was already checked with fstat. A file
@@ -120,16 +185,16 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
           `limit ${MAX_RAW_QUOTE})`,
       );
     }
-    const quote = normalizeQuote(raw);
+    let quote = normalizeQuote(raw);
     if (quote === '') return reject('empty evidence quote');
-    const alphanumeric = countAlphanumeric(quote);
+    let alphanumeric = countAlphanumeric(quote);
     if (alphanumeric === 0) {
       return reject(
         'evidence quote too short to verify: it has no letters or digits, so it says nothing ' +
           'about the code',
       );
     }
-    const quoteLines = quote.split('\n').length;
+    let quoteLines = quote.split('\n').length;
     if (quoteLines > MAX_QUOTE_LINES || quote.length > MAX_QUOTE_CHARS) {
       return reject(
         `evidence quote too large to verify (${quoteLines} lines, ${quote.length} characters; ` +
@@ -149,6 +214,19 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
     const lines = splitLines(content);
     if (lines.length === 0) return reject(`"${finding.file}" is empty, so the quote cannot be there`);
 
+    const presentation = stripQuoteMarkers(raw, lines, finding.file);
+    if (presentation.reason) return reject(presentation.reason);
+    quote = presentation.quote;
+    alphanumeric = countAlphanumeric(quote);
+    quoteLines = quote.split('\n').length;
+    if (alphanumeric === 0) return reject('empty evidence quote after stripping diff markers');
+    const notes: string[] = presentation.stripped ? ['stripped diff markers from the quote'] : [];
+    // Compare only at the accepted match, never normalize/search the whole file
+    // again just to decide which evidence to store.
+    const cleanedAt = (line: number) => presentation.stripped &&
+      matchAtLine(lines, normalizeQuote(raw), line) === null
+      ? { evidence_quote: presentation.quote } : {};
+
     // Weak evidence counts only where it was cited: no window, no correction, no fuzzy match.
     if (alphanumeric < MIN_ALNUM) {
       const here = matchAtLine(lines, quote, finding.line);
@@ -159,12 +237,14 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
             `does not appear on line ${String(finding.line)} of "${finding.file}"`,
         );
       }
-      return { verified: true, correctedFinding: { ...finding, line: here.line, verified: true } };
+      const correctedFinding: Finding = { ...finding, line: here.line, verified: true, ...cleanedAt(here.line) };
+      if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
+      return { verified: true, correctedFinding };
     }
 
     let outcome = findQuote(lines, quote, finding.line, WORK_BUDGET);
     if (outcome.kind === 'none' && (/\/[/\*]/.test(raw) || /\/[/\*]/.test(content))) {
-      const strippedQuote = normalizeQuote(withoutComments(raw));
+      const strippedQuote = normalizeQuote(withoutComments(quote));
       if (countAlphanumeric(strippedQuote) >= MIN_ALNUM) {
         const strippedLines = splitLines(withoutComments(content));
         // Removing a comment must not make an over-long source line eligible for search.
@@ -211,7 +291,6 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
       }
     }
 
-    const notes: string[] = [];
     if (match.line !== finding.line) {
       const cited = isCitableLine(finding.line)
         ? `line ${finding.line}`
@@ -227,7 +306,8 @@ export async function verifyFinding(worktreeRoot: string, finding: Finding): Pro
       );
     }
 
-    const correctedFinding: Finding = { ...finding, line: match.line, verified: true };
+    // Diff markers and line-number prefixes are presentation, not evidence: keep the code as found.
+    const correctedFinding: Finding = { ...finding, line: match.line, verified: true, ...cleanedAt(match.line) };
     if (notes.length > 0) correctedFinding.verification_note = notes.join('; ');
     return { verified: true, correctedFinding };
   } catch {

@@ -27,6 +27,15 @@ describe('fake provider cascade', () => {
   }
   const yes = (fields = {}) => JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote, ...fields });
 
+  it('retains a fake provider finding quoted with a diff marker', async () => {
+    const evidence_quote = '+' + finding().evidence_quote;
+    const result = await runCascade(context(root), config(), providers({ agy: { flash: [JSON.stringify([finding({ evidence_quote })])] } }),
+      { catalog, gitRunner: originRunner(root), clock: new FakeClock() });
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject({ verified: true, evidence_quote: finding().evidence_quote,
+      verification_note: expect.stringContaining('stripped diff markers from the quote') });
+  });
+
   it('warns once for an exhausted quota group and never retries its sibling model', async () => {
     const pool = providers({ agy: { flash: [{ error: 'quota' }], pro: ['[]'] }, codex: { codex: ['[]'] } });
     const cfg = config({ tiers: { triage: ['agy:flash', 'agy:pro', 'codex'], review: ['agy:pro', 'codex'], confirm: ['codex'], visual: [] } });
