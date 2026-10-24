@@ -1,0 +1,8 @@
+{
+  "id": "control-rename",
+  "title": "Clarify local naming",
+  "kind": "control",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": []
+}

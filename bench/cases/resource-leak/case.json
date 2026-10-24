@@ -1,0 +1,18 @@
+{
+  "id": "resource-leak",
+  "title": "Send progress during a fetch",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        2,
+        2
+      ],
+      "class": "resource-leak",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

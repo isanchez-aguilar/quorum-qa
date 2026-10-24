@@ -1,0 +1,8 @@
+{
+  "id": "control-extract",
+  "title": "Extract label formatting",
+  "kind": "control",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": []
+}

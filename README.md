@@ -4,6 +4,8 @@ Quorum runs several AI coding CLIs over a git diff and reports only findings ver
 
 ## Status
 
+The [synthetic benchmark suite](docs/BENCHMARKS.md) measures recall, clean-change noise, severity, calls and wall time. Preview its cost with `node bench/run.mjs --dry-run` after building.
+
 Milestones M0 through M6 are implemented and merged (v1).
 
 Verified on a real machine (Windows 11, agy 1.2.x, codex 0.160.0, Claude Code 2.1.285, a local Qwen server):

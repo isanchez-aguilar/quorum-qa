@@ -1,0 +1,8 @@
+{
+  "id": "control-feature",
+  "title": "Add optional greeting punctuation",
+  "kind": "control",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": []
+}
