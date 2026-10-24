@@ -1,0 +1,18 @@
+{
+  "id": "money-rounding",
+  "title": "Include cents in price quotes",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        2,
+        2
+      ],
+      "class": "money-rounding",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

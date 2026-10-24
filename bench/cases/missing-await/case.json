@@ -1,0 +1,18 @@
+{
+  "id": "missing-await",
+  "title": "Return a receipt after saving",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        2,
+        2
+      ],
+      "class": "async-error-handling",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

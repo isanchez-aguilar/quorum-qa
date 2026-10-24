@@ -1,0 +1,18 @@
+{
+  "id": "inverted-auth",
+  "title": "Allow administrators to export",
+  "kind": "seeded",
+  "mode": "feature",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "index.mjs",
+      "lines": [
+        3,
+        3
+      ],
+      "class": "authorization",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}
