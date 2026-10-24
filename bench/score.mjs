@@ -5,7 +5,7 @@ const normalize = file => path.posix.normalize(file.replaceAll('\\', '/'));
 const ratio = (a, b) => b ? a / b : null;
 
 export function hits(finding, truth) {
-  return typeof finding.file === 'string' && Number.isInteger(finding.line)
+  return typeof finding.file === 'string' && Number.isInteger(finding.line) && finding.line > 0
     && normalize(finding.file) === normalize(truth.file)
     && finding.line >= truth.lines[0] - 3 && finding.line <= truth.lines[1] + 3;
 }

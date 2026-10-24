@@ -75,7 +75,7 @@ export async function runBench(options = {}, dependencies = {}) {
   const runner = dependencies.runner ?? runCommand;
   const print = dependencies.print ?? (value => console.log(value));
   const selected = await loadCases(options.cases);
-  const raw = JSON.parse(await readFile(path.resolve(options.config ?? path.join(root, 'quorum.config.json')), 'utf8'));
+  const raw = JSON.parse((await readFile(path.resolve(options.config ?? path.join(root, 'quorum.config.json')), 'utf8')).replace(/^﻿/, ''));
   const config = { base: 'main', checks: [], setup: [], context: { provider: 'git' },
     tiers: raw.tiers, ...(raw.budget ? { budget: raw.budget } : {}), ...(raw.escalate ? { escalate: raw.escalate } : {}) };
   const rows = [], plans = [];

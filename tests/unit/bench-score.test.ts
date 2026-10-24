@@ -51,3 +51,11 @@ it('records severity misses and undefined denominators', () => {
   const row = { kind: 'control', score: scoreCase({ truth: [] }, {}), calls: null, wallMs: 5, status: 'timeout', exitCode: null };
   expect(summarize([row])).toMatchObject({ unknownCallRuns: 1, failedRuns: 1, wallMs: 5, exitCodes: { null: 1 } });
 });
+it('never counts a finding with a non-positive line as a hit', async () => {
+  // scoreCase is imported at the top of this file (the path is a variable so tsc does not need .d.ts).
+  const truth = [{ file: 'index.mjs', lines: [2, 2], class: 'x', minSeverity: 'IMPORTANT' }];
+  for (const line of [0, -1]) {
+    const report = { findings: [{ file: 'index.mjs', line, severity: 'IMPORTANT', confirmed: true }], unconfirmed: [], rejectedOnConfirmation: [] };
+    expect((scoreCase as (c: unknown, r: unknown) => { all: { TP: number } })({ kind: "seeded", truth }, report).all.TP).toBe(0);
+  }
+});
