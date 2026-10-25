@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import type { CommandRunner, QuorumConfig } from '../types/index.js';
-import { summarizeCheckOutput } from './output.js';
+import { cacheReplay, summarizeCheckOutput } from './output.js';
 import { CommandOutputLimitError, CommandTimeoutError } from '../process/runner.js';
 import { resolveCommand } from './resolver.js';
 
@@ -8,7 +8,8 @@ export async function runDeterministicChecks(
   checks: QuorumConfig['checks'], cwd: string, runner: CommandRunner,
   { timeoutMs = 120_000 }: { timeoutMs?: number } = {},
 ) {
-  const results = [];
+  const results: Array<{ argv: string[]; exitCode: number; durationMs: number; timedOut: boolean; timeoutMs: number;
+    stdoutTail: string; stderrTail: string; cached?: string }> = [];
   for (const argv of checks) {
     const start = performance.now();
     let exitCode = 1;
@@ -33,6 +34,9 @@ export async function runDeterministicChecks(
     }
     results.push({ argv: [...argv], exitCode, durationMs: performance.now() - start, timedOut, timeoutMs,
       stdoutTail: summarizeCheckOutput(stdout, exitCode !== 0 || timedOut), stderrTail: summarizeCheckOutput(stderr, exitCode !== 0 || timedOut) });
+    // Read the full output: the kept tail may no longer hold the runner's cache summary.
+    const cached = exitCode === 0 && !timedOut ? cacheReplay(`${stdout}\n${stderr}`) : undefined;
+    if (cached) results.at(-1)!.cached = cached;
   }
   return { passed: results.every(result => result.exitCode === 0 && !result.timedOut), results };
 }

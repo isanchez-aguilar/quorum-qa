@@ -102,6 +102,12 @@ BLOCKER or error-severity rule match requires exit 1; a check that exits non-zer
 The warning says `check "<argv>" timed out after <N>s; raise budget.checkTimeoutSeconds`.
 Confirmation prompts identify the timeout; JSON and SARIF retain `timedOut` and
 include `timeoutMs` on every check. SARIF also includes timeout notifications.
+When a task runner replayed its cache (a Turbo `Cached: N cached` summary or `>>> FULL TURBO`,
+Nx "read the output from the cache"), a passed check reads
+`passed (exit 0; cached: N of M tasks replayed from the Turbo cache)`. Detection reads the full
+output; a failed check is never labelled. A shared cache (for example a
+main checkout's `.turbo/cache`) is hash-correct; add `--force` to the check command in
+`quorum.config.json` if the repository wants a fresh run every time.
 Refactor uses `refactor.timeoutSeconds`; runtime keeps its own timeouts.
 
 Review speed: `budget.concurrency` is an integer from 1 to 6 (default 3).

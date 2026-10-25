@@ -32,3 +32,18 @@ export function checkEvidence(checks: Array<{ argv: string[]; exitCode: number; 
   }
   return JSON.stringify(rows);
 }
+
+/**
+ * Detect a task runner that replayed cached results instead of running them
+ * (Turbo, Nx). Hash-correct, but the report must not imply a fresh run.
+ */
+export function cacheReplay(output: string): string | undefined {
+  const text = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+  const turbo = /^\s*Cached:\s+(\d+) cached, (\d+) total/m.exec(text);
+  // A summary line is authoritative: "0 cached" means a real run, whatever else the output says.
+  if (turbo) return Number(turbo[1]) > 0 ? `${turbo[1]} of ${turbo[2]} tasks replayed from the Turbo cache` : undefined;
+  if (/>>>\s+FULL TURBO\b/.test(text)) return 'replayed from the Turbo cache';
+  const nx = /from the cache instead of running the command for (\d+) out of (\d+) tasks?\b/.exec(text);
+  if (nx && Number(nx[1]) > 0) return `${nx[1]} of ${nx[2]} tasks replayed from the Nx cache`;
+  return undefined;
+}

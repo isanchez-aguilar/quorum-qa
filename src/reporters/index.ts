@@ -39,8 +39,12 @@ const details = (findings: Finding[], refactor = false) => findings.length ? fin
   `- **Proposed Fix:** ${cell(f.fix)}`, f.severity === 'BLOCKER' ? `- **Reproduction Proof:** ${f.reproduction?.status ?? 'unproven'} (${cell(f.reproduction?.failureReason ?? 'reproduction not requested')}).` : '',
 ].filter(Boolean).join('\n')).join('\n\n') : 'None.';
 
-const checkStatus = (check: NonNullable<ReviewResult['checks']>['results'][number]) => check.timedOut
-  ? `TIMED OUT after ${check.timeoutMs / 1000}s (exit ${check.exitCode})` : `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode})`;
+const checkStatus = (check: NonNullable<ReviewResult['checks']>['results'][number]) => {
+  if (check.timedOut) return `TIMED OUT after ${check.timeoutMs / 1000}s (exit ${check.exitCode})`;
+  // Recorded only for passed checks: a failure ran at least its failing task here.
+  const cached = check.exitCode === 0 && check.cached ? `; cached: ${check.cached}` : '';
+  return `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode}${cached})`;
+};
 
 function reproductionDetails(findings: Finding[]): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

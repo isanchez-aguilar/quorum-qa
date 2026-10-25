@@ -72,3 +72,23 @@ it('documents the check limit in help and check documentation', async () => {
     expect(await readFile(new URL(`../../${file}`, import.meta.url), 'utf8')).toContain('budget.checkTimeoutSeconds');
   }
 });
+
+it('labels a check that the task runner replayed from its cache', () => {
+  const cached = { ...timeout, argv: ['pnpm', 'run', 'typecheck'], exitCode: 0, timedOut: false, cached: '13 of 13 tasks replayed from the Turbo cache' };
+  const fresh = { ...timeout, argv: ['pnpm', 'test:scripts'], exitCode: 0, timedOut: false };
+  const failed = { ...timeout, argv: ['pnpm', 'run', 'lint'], timedOut: false, cached: 'ignored on failure' };
+  const markdown = generateMarkdownReport(report([cached, fresh, failed]));
+  expect(markdown).toContain('pnpm run typecheck: passed (exit 0; cached: 13 of 13 tasks replayed from the Turbo cache)');
+  expect(markdown).toContain('pnpm test:scripts: passed (exit 0)');
+  expect(markdown).toContain('pnpm run lint: FAILED (exit 1)');
+});
+
+it('detects the replay from the full output, not the kept tail', async () => {
+  const stdout = ['Tasks:    13 successful, 13 total', 'Cached:    13 cached, 13 total', '  Time:    1s >>> FULL TURBO',
+    ...Array.from({ length: 20 }, (_, i) => `later line ${i}`)].join('\n');
+  const passed = await runDeterministicChecks([[process.execPath]], process.cwd(), async () => ({ exitCode: 0, stdout, stderr: '' }));
+  expect(passed.results[0]?.stdoutTail).not.toContain('Cached:');
+  expect(passed.results[0]?.cached).toBe('13 of 13 tasks replayed from the Turbo cache');
+  const failed = await runDeterministicChecks([[process.execPath]], process.cwd(), async () => ({ exitCode: 1, stdout, stderr: '' }));
+  expect(failed.results[0]?.cached).toBeUndefined();
+});
