@@ -38,7 +38,7 @@ const PLAN_EXAMPLE = {
     confirm: ['codex', 'agy:claude-opus-5-5-high', 'claude:opus'],
     visual: ['agy:gemini-4-argon-high'],
   },
-  escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true },
+  escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true, sensitiveSecondPass: true },
   budget: { maxCalls: 12, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
   reproduce: {
     allowInstallScripts: false,

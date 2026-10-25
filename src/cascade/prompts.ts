@@ -99,11 +99,14 @@ export function boundedPrompt(instructions: string, data: Record<string, unknown
 }
 
 export interface ReviewChunk {
+  diffText?: string;
   prompt: string;
   files: string[];
   windows?: ReviewWindow[];
 }
 export interface ReviewCoverage {
+  sensitiveChunks?: number;
+  sensitiveSecondPasses?: number;
   reviewedWindows?: ReviewWindow[];
   skippedWindows?: ReviewWindow[];
   reviewedFiles: string[];
@@ -149,7 +152,7 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; n
         if (enriched.length <= MAX_PROMPT_CHARACTERS) { extra.push({ file, content }); prompt = enriched; }
         else notes.add(`${file}: provider context dropped to preserve diff within the 24,000-character prompt cap.`);
       }
-      chunks.push({ prompt, files });
+      chunks.push({ prompt, files, diffText: pending });
     }
     pending = '';
     files = [];

@@ -1,3 +1,6 @@
+import { homedir } from 'node:os';
+import { checksWorktreePath } from './paths.js';
+import { cleanupWorktree } from './cleanup.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, realpath, lstat, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -21,11 +24,11 @@ async function serializeCreation<T>(repoRoot: string, action: () => Promise<T>):
   }
 }
 
-export async function createReviewWorktree(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn): Promise<{ path: string; cleanup: () => Promise<void> }> {
-  return serializeCreation(repoRoot, () => createUnlocked(repoRoot, sha, runner, warn));
+export async function createReviewWorktree(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn, options: { checks?: boolean } = {}): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  return serializeCreation(repoRoot, () => createUnlocked(repoRoot, sha, runner, warn, options));
 }
 
-async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn): Promise<{ path: string; cleanup: () => Promise<void> }> {
+async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunner, warn: (message: string) => void = console.warn, options: { checks?: boolean } = {}): Promise<{ path: string; cleanup: () => Promise<void> }> {
   validateRef(sha, false);
   await requireWorktreeRoot(repoRoot, runner);
   // Check the link first: on Linux `git check-ignore` fails for a path beyond a symlink, which would
@@ -38,8 +41,11 @@ async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunn
   }
   const ignored = await git(['check-ignore', '--quiet', '--', '.quorum/'], repoRoot, runner);
   if (ignored.exitCode !== 0) throw new Error('Review worktrees require .quorum/ to be git-ignored. Add .quorum/ to .gitignore.');
-  const parent = path.join(repoRoot, '.quorum', 'worktrees');
-  for (const directory of [path.join(repoRoot, '.quorum'), parent]) {
+  const selected = options.checks ? checksWorktreePath(repoRoot, homedir(), randomUUID(), process.platform) : undefined;
+  const parent = selected?.parent ?? path.join(repoRoot, '.quorum', 'worktrees');
+  if (selected?.warning) warn(selected.warning);
+  const anchor = selected?.short ? homedir() : repoRoot;
+  for (const directory of [path.join(anchor, '.quorum'), parent]) {
     try {
       const stat = await lstat(directory);
       if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Review worktree parent must be a real directory inside the repository.');
@@ -48,7 +54,8 @@ async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunn
     }
   }
   await mkdir(parent, { recursive: true });
-  const relative = path.relative(await realpath(repoRoot), await realpath(parent));
+  const actualParent = await realpath(parent);
+  const relative = path.relative(await realpath(anchor), actualParent);
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Review worktree parent must stay inside the repository.');
   const pruned = await git(['worktree', 'prune'], repoRoot, runner);
   if (pruned.exitCode !== 0) throw new Error(`git worktree prune failed: ${pruned.stderr}`);
@@ -56,7 +63,7 @@ async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunn
   if (listed.exitCode !== 0) throw new Error(`git worktree list failed: ${listed.stderr}`);
   const normalize = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
   const registered = new Set(listed.stdout.split('\0').filter(item => item.startsWith('worktree ')).map(item => normalize(item.slice(9))));
-  for (const entry of await readdir(parent, { withFileTypes: true })) {
+  for (const entry of selected?.short ? [] : await readdir(parent, { withFileTypes: true })) {
     const candidate = path.resolve(parent, entry.name);
     if (path.dirname(candidate) !== path.resolve(parent) || registered.has(normalize(candidate))) continue;
     try {
@@ -70,23 +77,16 @@ async function createUnlocked(repoRoot: string, sha: string, runner: CommandRunn
       warn(`Stale worktree cleanup failed: ${candidate}: ${(error as Error).message}`);
     }
   }
-  const location = path.join(parent, randomUUID());
+  const location = selected?.location ?? path.join(parent, randomUUID());
   const added = await git(['worktree', 'add', '--detach', location, sha], repoRoot, runner);
   if (added.exitCode !== 0) throw new Error(`git worktree add failed: ${added.stderr}`);
-  let removed = false;
   let cleaned = false;
   let pending: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
     if (cleaned) return Promise.resolve();
     if (pending) return pending;
     pending = (async () => {
-      if (!removed) {
-        const result = await git(['worktree', 'remove', '--force', location], repoRoot, runner);
-        if (result.exitCode !== 0) throw new Error(`git worktree remove failed: ${result.stderr}`);
-        removed = true;
-      }
-      const result = await serializeCreation(repoRoot, () => git(['worktree', 'prune'], repoRoot, runner));
-      if (result.exitCode !== 0) throw new Error(`git worktree prune failed: ${result.stderr}`);
+      await serializeCreation(repoRoot, () => cleanupWorktree(repoRoot, parent, location, runner, { expectedParent: actualParent, latePrune: action => serializeCreation(repoRoot, action) }));
       cleaned = true;
     })().finally(() => { pending = undefined; });
     return pending;

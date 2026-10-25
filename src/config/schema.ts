@@ -53,7 +53,7 @@ export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' 
       confirm: ['codex', 'agy:claude-opus-5-5-high', 'claude:opus'],
       visual: ['agy:gemini-4-argon-high'],
     },
-    escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true },
+    escalate: { focus: ['money', 'auth', 'permissions'], belowConfidence: 0.7, confirmImportant: true, sensitiveSecondPass: true },
     budget: { concurrency: 3, sequentialChecks: false, checkTimeoutSeconds: 120, maxCalls: 12, maxCallsExplicit: false, maxMinutes: 20, maxCallSeconds: 300, quotaFloorPercent: 15 },
     reproduce: {
       allowInstallScripts: false,
@@ -229,8 +229,9 @@ export function validateConfig(raw: unknown): QuorumConfig {
     }
   }
 
-  const escalateRaw = r.object(top.escalate, 'escalate', ['focus', 'belowConfidence', 'routes', 'confirmImportant']) ?? {};
+  const escalateRaw = r.object(top.escalate, 'escalate', ['focus', 'belowConfidence', 'routes', 'confirmImportant', 'sensitiveSecondPass']) ?? {};
   const escalate: QuorumConfig['escalate'] = {
+    sensitiveSecondPass: typeof escalateRaw.sensitiveSecondPass === 'boolean' ? escalateRaw.sensitiveSecondPass : true,
     confirmImportant: typeof escalateRaw.confirmImportant === 'boolean' ? escalateRaw.confirmImportant : true,
     focus: r.stringArray(escalateRaw.focus, 'escalate.focus', defaults.escalate.focus, true),
     belowConfidence: r.number(
@@ -241,6 +242,9 @@ export function validateConfig(raw: unknown): QuorumConfig {
     ),
   };
 
+  if (escalateRaw.sensitiveSecondPass !== undefined && typeof escalateRaw.sensitiveSecondPass !== 'boolean') {
+    r.issues.push('escalate.sensitiveSecondPass must be a boolean');
+  }
   if (escalateRaw.confirmImportant !== undefined && typeof escalateRaw.confirmImportant !== 'boolean') {
     r.issues.push('escalate.confirmImportant must be a boolean');
   }

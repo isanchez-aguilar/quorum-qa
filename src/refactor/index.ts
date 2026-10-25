@@ -138,7 +138,7 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
     let tree: Awaited<ReturnType<typeof createReviewWorktree>> | undefined;
     const reportPath = path.join(os.tmpdir(), `quorum-refactor-${randomUUID()}.json`);
     try {
-      tree = await createReviewWorktree(options.root, side === 'base' ? context.mergeBaseCommit ?? context.baseCommit : context.headCommit, options.gitRunner, options.warn);
+      tree = await createReviewWorktree(options.root, side === 'base' ? context.mergeBaseCommit ?? context.baseCommit : context.headCommit, options.gitRunner, options.warn, { checks: true });
       const read = async (file: string, apiSource = false): Promise<string | undefined> => {
         const problem = (message: string) => (apiSource ? notes : reasons).push(`${side}: ${message}`);
         try {

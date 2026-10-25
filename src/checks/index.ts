@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import type { CommandRunner, QuorumConfig } from '../types/index.js';
-import { byteTail, CommandOutputLimitError, CommandTimeoutError } from '../process/runner.js';
+import { summarizeCheckOutput } from './output.js';
+import { CommandOutputLimitError, CommandTimeoutError } from '../process/runner.js';
 import { resolveCommand } from './resolver.js';
 
 export async function runDeterministicChecks(
@@ -26,12 +27,12 @@ export async function runDeterministicChecks(
       stderr = error instanceof CommandTimeoutError ? error.stderr : String(error);
       if (error instanceof CommandOutputLimitError) {
         exitCode = error.exitCode;
-        stdout = error.stdoutTail;
-        stderr = error.stderrTail;
+        stdout = [error.stdout, error.stdoutTail].filter(Boolean).join('\n');
+        stderr = [error.stderr, error.stderrTail].filter(Boolean).join('\n');
       }
     }
     results.push({ argv: [...argv], exitCode, durationMs: performance.now() - start, timedOut, timeoutMs,
-      stdoutTail: byteTail(stdout, 4096), stderrTail: byteTail(stderr, 4096) });
+      stdoutTail: summarizeCheckOutput(stdout, exitCode !== 0 || timedOut), stderrTail: summarizeCheckOutput(stderr, exitCode !== 0 || timedOut) });
   }
   return { passed: results.every(result => result.exitCode === 0 && !result.timedOut), results };
 }

@@ -109,6 +109,10 @@ Call budget defaults to clamp(3 x review chunks, 12, 40); budget.maxCalls pins i
 Runtime and refactor --deterministic-only keep the default of 12. Quota floors still apply.
 Triage concurrency: budget.concurrency (1–6, default 3; 1 restores sequential triage).
 Checks overlap triage by default; confirmation waits for their evidence.
+Sensitive chunks with no surviving triage findings get a review-tier pass within remaining
+budget, preserving confirmation reserve (escalate.sensitiveSecondPass: true; false disables).
+Coverage reports sensitive chunks and second passes; budget omissions only warn.
+Windows checks use a short per-user worktree when needed; doctor paths.length diagnoses risk.
 Checks execute the reviewed change's code in a disposable worktree.
 Setup/check timeout: budget.checkTimeoutSeconds (integer 30–3600, default 120), per command.
 Timeouts report TIMED OUT, make coverage INCOMPLETE and suggest raising that limit.

@@ -116,7 +116,7 @@ it.each([false, true].flatMap(sequential => ['setup.cjs', 'test.cjs'].map(comman
     expect(actual.markdown).not.toContain('FAILED');
     expect(actual.result.warnings.join('\n')).not.toContain('checks failed');
     const prompt = test.prompts[1]!;
-    expect(prompt).toContain('timed out');
+    expect(prompt).toContain('TIMED OUT');
     expect(prompt).not.toContain('failed');
     expect(runner).toHaveBeenCalledTimes(command === 'setup.cjs' ? 1 : 2);
   });
@@ -178,7 +178,7 @@ it('overlaps checks with triage, joins before confirmation, and preserves failed
   expect(sequential.prompts[0]).toContain('synthetic failed check');
   expect(sequential.prompts[0]).toBe(REVIEW_INSTRUCTIONS + modeInstructions('redesign') + JSON.stringify({
     mode: 'redesign', diff: context(root).diff, touchedFiles: context(root).touchedFiles,
-    checks: JSON.stringify([{ name: 'node test.cjs', stdout: 'synthetic failed check', stderr: 'expected true' }]),
+    checks: JSON.stringify([{ name: 'node test.cjs', exitCode: 1, stdout: 'synthetic failed check', stderr: 'expected true' }]),
   }));
   expect(sequential.prompts.join('')).not.toContain(running);
   expect(sequential.prompts[1]).toContain('UNTRUSTED DETERMINISTIC CHECKS');

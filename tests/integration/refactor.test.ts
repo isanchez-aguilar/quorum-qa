@@ -1,5 +1,6 @@
+import { checksWorktreePath } from '../../src/worktree/paths.js';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { main, type CliDependencies } from '../../src/cli/index.js';
@@ -134,7 +135,7 @@ it('runs real setup and JSON tests in base and head worktrees with no provider a
   expect(contextProvider.enrich).not.toHaveBeenCalled();
   expect(r.err).toContain('install scripts');
   expect((await git('worktree', 'list', '--porcelain')).match(/^worktree /gm)).toHaveLength(1);
-  expect(await readdir(path.join(root, '.quorum', 'worktrees'))).toEqual([]);
+  expect(await readdir(checksWorktreePath(root, homedir(), '0'.repeat(36), process.platform).parent)).toEqual([]);
 });
 it('reports an export rename as NOT EQUIVALENT, or a note when explicitly allowed', async () => {
   await writeFile(path.join(root, 'sample.ts'), source.replace('value', 'renamed'));

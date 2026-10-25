@@ -38,7 +38,7 @@ const details = (findings: Finding[], refactor = false) => findings.length ? fin
 ].filter(Boolean).join('\n')).join('\n\n') : 'None.';
 
 const checkStatus = (check: NonNullable<ReviewResult['checks']>['results'][number]) => check.timedOut
-  ? `TIMED OUT after ${check.timeoutMs / 1000}s` : `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode})`;
+  ? `TIMED OUT after ${check.timeoutMs / 1000}s (exit ${check.exitCode})` : `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode})`;
 
 function reproductionDetails(findings: Finding[]): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -81,6 +81,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     `| Total | ${['introduced', 'pre-existing', 'improvement'].map(origin => all.filter(f => f.origin === origin).length).join(' | ')} | ${all.length} |`]),
     ...(result.refactor ? refactorMarkdown(result.refactor) : []),
     '## Coverage', coverage.complete ? '**COMPLETE**' : '> **INCOMPLETE — this run did not review everything. A run without BLOCKERs or error-severity rule matches exits 2.**',
+    `- Sensitive chunks: ${coverage.sensitiveChunks ?? 0}; second passes: ${coverage.sensitiveSecondPasses ?? 0}`,
     `- Reviewed: ${coverage.reviewedFiles.map(cell).join(', ') || 'none'}`,
     ...(result.mode === 'bughunt' ? [
       `- Windows reviewed: ${(coverage.reviewedWindows ?? []).map(window => `${cell(window.file)}:${window.start}-${window.end}`).join(', ') || 'none'}`,

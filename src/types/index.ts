@@ -114,6 +114,7 @@ export interface QuorumConfig {
   tiers: Record<Tier, string[]>;
   escalate: {
     confirmImportant?: boolean;
+    sensitiveSecondPass?: boolean;
     routes?: Record<string, string[]>;
     focus: string[];
     belowConfidence: number;

@@ -264,7 +264,11 @@ describe('M4 regressions', () => {
   });
   it.each(['agy', 'codex'])('warns without failing a successful %s call when cleanup fails', async provider => {
     const warnings: string[] = [];
-    const locked: CommandRunner = async (command, args, options) => args.includes('remove') ? success('', 1, 'locked') : runner(command, args, options);
+    let removing = false;
+    const locked: CommandRunner = async (command, args, options) => {
+      if (args.includes('remove')) removing = true;
+      return removing && (args.includes('remove') || args.includes('prune')) ? success('', 1, 'locked') : runner(command, args, options);
+    };
     answer = async (_command, args) => {
       if (provider === 'codex') await writeFile(args[args.indexOf('-o') + 1]!, '[]');
       return success(envelope);
@@ -299,7 +303,11 @@ describe('M4 regressions', () => {
   });
   it.each(['agy', 'codex'])('preserves %s error with cleanup warning', async provider => {
     answer = async () => { throw new CommandTimeoutError('', ''); };
-    const locked: CommandRunner = async (command, args, options) => args.includes('remove') ? success('', 1, 'locked') : runner(command, args, options);
+    let removing = false;
+    const locked: CommandRunner = async (command, args, options) => {
+      if (args.includes('remove')) removing = true;
+      return removing && (args.includes('remove') || args.includes('prune')) ? success('', 1, 'locked') : runner(command, args, options);
+    };
     const adapter = provider === 'agy' ? new AgyProvider({ ...settings(), runner: locked }) : new CodexProvider({ ...settings(), runner: locked });
     await expect(adapter.executeReview(context, 'model', 'p', { deadlineMs: 5000 })).rejects.toMatchObject({ kind: 'timeout', warnings: [expect.stringContaining('locked')] });
   });

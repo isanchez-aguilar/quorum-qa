@@ -3790,3 +3790,32 @@ preview runs, gitignore preservation, outside-file containment and diagnostics.
 They use temporary repositories and injected diagnostics, without real provider
 calls. The adoption guide documents installation, trust, permissions, cost,
 reports, suppressions and the limitations of local-only review.
+
+
+### 29. Sensitive second review and large Windows check trees
+
+The first real-repository trial exposed clean triage on sensitive code, long
+Windows dependency paths, slow worktree deletion, and failure names lost behind
+install progress. A pure boundary-aware matcher detects sensitivity from chunk
+diffs and file paths (never prompt instructions). `escalate.sensitiveSecondPass`
+is a validated boolean, default true. Empty surviving triage results receive one
+successful review-tier pass with normal fallback, family independence, verifier,
+dedupe and prompt-keyed cache. Mandatory escalations run first; optional calls
+leave the confirmation reserve intact. Budget omissions warn without making
+coverage incomplete. Coverage records sensitive chunk and second-pass counts;
+all successful review families are reported even when they return no findings.
+
+Checks alone may use `homedir/.quorum/wt/<8-character id>` on Windows when the
+normal worktree root plus 150 exceeds 260 characters. Provider worktrees retain
+their existing permission paths. Shared short roots are never swept using one
+repository's registry. Directory/link checks and creation/prune serialization
+remain mandatory. Cleanup uses recursive force removal, ten retries and a
+five-minute deadline before Git removal; prune with `--expire now` runs even on
+failure, and a late filesystem completion schedules another serialized prune.
+Doctor exposes a `paths.length` warning with a Git long-path fix.
+
+Check evidence is compacted before byte limits: progress redraws collapse,
+up to 40 failure identifier lines precede the tail, and passed checks retain a
+short summary. Model evidence preserves metadata while shrinking output fields;
+Markdown retains exit codes and timeout labels. Dry-run payload wording reflects
+the mode and only supplied documents. Tests are synthetic and call no providers.

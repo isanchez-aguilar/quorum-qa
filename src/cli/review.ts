@@ -1,3 +1,4 @@
+import { checkEvidence } from '../checks/output.js';
 import { completionTiming } from '../cascade/timing.js';
 import { randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -303,7 +304,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     try {
       if (!flags.noChecks && mode !== 'refactor') {
         if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
-        const checksTree = await createReviewWorktree(root, head, runner, warn);
+        const checksTree = await createReviewWorktree(root, head, runner, warn, { checks: true });
         try {
           const options = { timeoutMs: (config.budget.checkTimeoutSeconds ?? 120) * 1000 };
           const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand, options);
@@ -323,8 +324,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const joinChecks = async () => {
     const settled = await checksPending!;
     if (!settled.ok) throw settled.error;
-    context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : JSON.stringify(checks?.results.filter(check => check.exitCode !== 0 || check.timedOut)
-      .map(check => ({ name: check.argv.join(' '), ...(check.timedOut ? { status: `timed out after ${check.timeoutMs / 1000}s` } : {}), stdout: check.stdoutTail, stderr: check.stderrTail })) ?? []).slice(0, 8192);
+    context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : checkEvidence(checks?.results ?? []);
     if (parallelChecks && checks?.results.some(check => !check.timedOut && check.exitCode !== 0)) warn('Deterministic checks failed after triage had started; triage ran without that context.');
   };
   try {

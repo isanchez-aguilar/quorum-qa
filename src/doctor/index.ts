@@ -1,3 +1,4 @@
+import { pathLengthCheck } from '../worktree/paths.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { homedir as userHome } from 'node:os';
@@ -16,7 +17,7 @@ import { checkSuppressions } from '../suppressions/doctor.js';
 import { readBoundedFile } from '../suppressions/commands.js';
 
 export type { DoctorCheck } from './checks.js';
-export interface DoctorOptions { runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
+export interface DoctorOptions { platform?: string; runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
 
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
   const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
@@ -61,6 +62,9 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   const run = async (name: string, args: string[]) => {
     try { return await command(context, name, args); } catch { return undefined; }
   };
+  const platform = options.platform ?? process.platform;
+  const longpaths = platform === 'win32' ? await run('git', ['config', '--get', 'core.longpaths']) : undefined;
+  results.push(pathLengthCheck(context.repoRoot, platform, longpaths?.stdout));
   const git = await run('git', ['rev-parse', '--is-inside-work-tree']);
   results.push({ id: 'git.repo', status: git?.exitCode === 0 && git.stdout.trim() === 'true' ? 'PASS' : 'FAIL',
     message: git?.exitCode === 0 && git.stdout.trim() === 'true' ? 'Git repository detected.' : 'Git repository not detected. Run quorum from a valid repository root.' });

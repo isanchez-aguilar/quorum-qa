@@ -109,3 +109,25 @@ Markdown/JSON but leave verdict counts and SARIF. Reproduced two-family BLOCKERs
 remain active. History retains `suppressed: true`, excluded from rule mining;
 `--no-cache` does not affect this. Runtime and deterministic rule results are
 not code findings and are not suppressed.
+
+
+### Sensitive chunks and large check worktrees
+
+`escalate.sensitiveSecondPass` defaults to `true` (set it to `false` to opt out).
+After mandatory escalation, sensitive chunks with no surviving triage findings
+receive a review-tier pass using remaining calls while preserving the confirmation
+reserve. Matching uses case-insensitive words and identifier components in the
+chunk diff and paths: money includes billing, payment, charge, refund, price,
+invoice, webhook and lock; auth/permissions include auth, token, session, role
+and permission. Custom focus terms also match. Budget omissions are warnings,
+not incomplete coverage. Dry-run shows the policy; Markdown and JSON coverage
+report sensitive chunks and second passes, and successful reviewers appear in
+Families that reviewed, including cached responses.
+
+On Windows, checks use a short per-user `.quorum/wt/<8-char id>` worktree when
+its normal root length plus 150 exceeds 260. A still-long root emits its length;
+`quorum doctor` reports `paths.length` and recommends `git config core.longpaths true`
+when appropriate. Cleanup removes files with retries before unregistering and
+pruning the worktree. Check output collapses progress, puts failure identifiers
+before the bounded tail, and retains exit codes and TIMED OUT labels. Failed
+checks remain evidence and do not change the established exit-code contract.

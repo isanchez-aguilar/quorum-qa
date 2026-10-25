@@ -37,7 +37,7 @@ it('renders the applied timeout rather than elapsed time or a failed exit', () =
   const markdown = generateMarkdownReport(report());
   expect(markdown).toContain('pnpm test: TIMED OUT after 600s');
   expect(markdown).toContain('0 failed deterministic checks · 1 check timed out');
-  expect(markdown).not.toContain('exit 1');
+  expect(markdown).toContain('exit 1');
   expect(markdown).not.toContain('600.13');
   expect(JSON.parse(JSON.stringify(report())).checks.results[0]).toMatchObject({ timedOut: true, timeoutMs: 600_000 });
 });
@@ -52,10 +52,10 @@ it('exposes check timeout evidence in SARIF without claiming a defect', () => {
   const sarif = JSON.parse(generateSarifReport([], report()));
   expect(sarif.runs[0].properties.checks.results[0]).toMatchObject({ timedOut: true, timeoutMs: 600_000 });
   expect(sarif.runs[0].invocations[0].toolExecutionNotifications).toContainEqual(expect.objectContaining({
-    level: 'warning', message: { text: 'pnpm test: TIMED OUT after 600s' },
+    level: 'warning', message: { text: 'pnpm test: TIMED OUT after 600s (exit 1)' },
   }));
   expect(sarif.runs[0].results).toEqual([]);
-  expect(JSON.stringify(sarif)).not.toContain('exit 1');
+  expect(JSON.stringify(sarif)).toContain('exit 1');
 });
 
 it('sets the self-review timeout to ten minutes', async () => {
