@@ -9,7 +9,7 @@ export function isSensitiveChunk(diff: string, files: readonly string[], focus: 
   const authStems = / (?:authenticat|authoriz|authoris)\w*(?= )/;
   return focus.some(term => {
     const normalized = words(term).join(' ');
-    const authLike = ['auth', 'permissions'].includes(normalized);
+    const authLike = ['auth', 'permission', 'permissions'].includes(normalized);
     const terms = [normalized, ...(normalized === 'money' ? money : authLike ? auth : [])];
     // Plurals count: payments, tokens, webhooks, sessions.
     return terms.some(value => value.length > 0 && [value, `${value}s`, `${value}es`].some(form => text.includes(` ${form} `)))

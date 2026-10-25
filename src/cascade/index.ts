@@ -174,7 +174,7 @@ export async function runCascade(
   }
 
   async function invoke(tier: Tier, prompt: string, purpose: CascadeCall['purpose'], settings: {
-    optionalSecondPass?: boolean;
+    optionalSecondPass?: boolean; requireIndependent?: boolean;
     excludeLocal?: boolean; attempted?: Set<string>; preferOtherThan?: ReadonlySet<string>;
     refs?: readonly string[]; label?: string; firstOnly?: boolean;
     diagnostics?: { calls: CascadeCall[]; ledger: LedgerDraft[]; warnings: string[] };
@@ -195,8 +195,10 @@ export async function runCascade(
         refs: settings.refs, label: settings.label,
         available: entry => (tier !== 'visual' || entry.supportsImages === true) && providers.has(entry.provider) && !unavailable.has(modelRef(entry)) && !attempted.has(modelRef(entry)),
       });
-      resolved.warnings.forEach(warn);
       const independent = resolved.models.filter(entry => !settings.preferOtherThan?.has(entry.family));
+      // A declined probe leaves no warning behind: a later route may still meet the rule.
+      if (settings.requireIndependent && !independent.length) return null;
+      resolved.warnings.forEach(warn);
       let entry = (independent.length ? independent : resolved.models)[0];
       if (!entry) return null;
       if (settings.preferOtherThan?.size && !independent.length) {
@@ -604,15 +606,26 @@ export async function runCascade(
         else warn('Sensitive chunk got no second review: review tier unavailable.');
         continue;
       }
+      // One attempted set across routes: a model that failed this chunk is not called again.
       const attempted = new Set<string>();
-      let reviewed: Finding[] | null = null;
-      while (reviewed === null) {
-        const response = await invoke('review', chunk.prompt, 'review', {
-          attempted, excludeLocal: true, preferOtherThan: new Set([family]), optionalSecondPass: true,
-        });
-        if (!response) break;
-        reviewed = await readReview(response);
-      }
+      const author = config.author ? resolveAuthorFamily(config.author) : context.authorFamily;
+      // resolveTier falls back to the author's family when nothing else is left, so the
+      // independent routes must exclude it explicitly.
+      const strict = new Set(author ? [family, author] : [family]);
+      const secondPass = async (tier: 'review' | 'confirm', requireIndependent: boolean) => {
+        let result: Finding[] | null = null;
+        while (result === null) {
+          const response = await invoke(tier, chunk.prompt, 'review', {
+            attempted, excludeLocal: true, preferOtherThan: requireIndependent ? strict : new Set([family]), optionalSecondPass: true, requireIndependent,
+          });
+          if (!response) break;
+          result = await readReview(response);
+        }
+        return result;
+      };
+      // A second look from the triage's own family adds little: borrow a confirm-tier
+      // model from another family before settling for the same one.
+      const reviewed = await secondPass('review', true) ?? await secondPass('confirm', true) ?? await secondPass('review', false);
       if (reviewed === null) {
         if (!budget.allowed || budget.calls >= triageLimit) skippedBudget++;
         else warn('Sensitive chunk got no second review: review tier unavailable.');

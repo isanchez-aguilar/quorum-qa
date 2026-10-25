@@ -3804,6 +3804,11 @@ dedupe and prompt-keyed cache. Mandatory escalations run first; optional calls
 leave the confirmation reserve intact. Budget omissions warn without making
 coverage incomplete. Coverage records sensitive chunk and second-pass counts;
 all successful review families are reported even when they return no findings.
+When the review tier offers only the triage family (for example review is Gemini
+plus Claude and the author is Claude), the pass borrows a confirm-tier model from
+another family before falling back to the same family with the independence
+warning; a same-family second look adds little. Plurals and the
+authorize/authenticate forms count as sensitive; author and authority do not.
 
 Checks alone may use `homedir/.quorum/wt/<8-character id>` on Windows when the
 normal worktree root plus 150 exceeds 260 characters. Provider worktrees retain

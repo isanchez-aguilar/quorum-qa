@@ -119,7 +119,9 @@ receive a review-tier pass using remaining calls while preserving the confirmati
 reserve. Matching uses case-insensitive words and identifier components in the
 chunk diff and paths: money includes billing, payment, charge, refund, price,
 invoice, webhook and lock; auth/permissions include auth, token, session, role
-and permission. Custom focus terms also match. Budget omissions are warnings,
+and permission, plus plurals and authorize/authenticate forms. Custom focus
+terms also match. When the review tier has no family other than triage's, the
+pass uses a confirm-tier model from another family first. Budget omissions are warnings,
 not incomplete coverage. Dry-run shows the policy; Markdown and JSON coverage
 report sensitive chunks and second passes, and successful reviewers appear in
 Families that reviewed, including cached responses.
