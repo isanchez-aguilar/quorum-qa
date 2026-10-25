@@ -28,6 +28,8 @@ export interface ReviewResult extends CascadeResult {
   families: Family[];
   exitCode: number;
 }
+const droppedCell = (text: string) => cell(text.replace(/&/g, '&amp;')).replace(/[`*_~]/g, '\\$&');
+
 const details = (findings: Finding[], refactor = false) => findings.length ? findings.map((f, i) => [
   `### ${i + 1}. ${cell(f.trigger)}`, `- **Location:** ${cell(f.file)}:${f.line}${refactor ? ' (suspected behaviour change)' : ` (${f.origin})`}`,
   `- **Severity:** ${f.severity} · **Confidence:** ${f.confidence} · ${cell(f.provider)}:${cell(f.model)} (${f.family})`,
@@ -112,6 +114,15 @@ export function generateMarkdownReport(result: ReviewResult): string {
       `- **${cell(finding.trigger)}** — ${cell(finding.file)}:${finding.line} — ${sources.map(source => cell(`${source.provider}:${source.model}`)).join(', ')}; rejected by ${cell(`${confirmer.provider}:${confirmer.model}`)}`).join('\n') : 'None.',
     '## Unconfirmed (local model only)', findingDetails(result.unconfirmed.filter(f => f.family === 'local')),
     '## Unconfirmed (other reviewers)', findingDetails(result.unconfirmed.filter(f => f.family !== 'local')),
+    `## Dropped model output (${result.dropped?.length ?? 0})`,
+    'These entries were NOT verified. They are untrusted model output, shown so a human can re-check them.',
+    result.dropped?.length ? result.dropped.map(item => [
+      `- **Source:** ${droppedCell(item.provider)}:${droppedCell(item.model)} | ${droppedCell(item.tier)} | ${droppedCell(item.purpose)} | chunk ${item.chunkIndex ?? 'not applicable'}`,
+      `  **Reason:** ${droppedCell(item.reason)}`,
+      ...Object.entries(item.excerpt ?? {}).map(([field, value]) => `  **${field}:** ${droppedCell(value)}`),
+      ...(item.rawExcerpt !== undefined ? [`  **Raw excerpt:** ${droppedCell(item.rawExcerpt)}`] : []),
+      `  **Raw file:** ${item.rawFile ? droppedCell(item.rawFile) : 'not saved (unavailable or run limit reached)'}`,
+    ].join('\n')).join('\n\n') : 'None.',
     ...(result.mode === 'bughunt' ? ['## Points at the change (use feature mode)', details(result.pointsAtChange ?? [])] : []),
     '## Reproduction', reproductionDetails([...result.findings, ...result.unconfirmed]),
     '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',

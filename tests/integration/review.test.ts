@@ -47,6 +47,28 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
 }
 
 describe('M5 zero-quota review CLI', () => {
+  it('preserves dropped raw output with --no-cache and leaves exit semantics unchanged', async () => {
+    const raw = JSON.stringify([{ ...finding(), severity: 'severe', trigger: 'synthetic dropped finding' }]);
+    const { code, result } = await review(fake([raw]), ['--no-cache', '--sarif', '.quorum/dropped.sarif']);
+    expect(code).toBe(2);
+    expect(result?.dropped).toHaveLength(1);
+    const dropped = result!.dropped![0]!;
+    expect(dropped).toMatchObject({ provider: 'agy', model: 'flash', chunkIndex: 0, reason: 'invalid severity: "severe"' });
+    expect(dropped.rawFile).toBe(`.quorum/raw/${result!.runId}/1.txt`);
+    expect(await readFile(path.join(root, dropped.rawFile!), 'utf8')).toBe(raw);
+    expect(await readFile(path.join(root, '.quorum/report.md'), 'utf8')).toContain(dropped.rawFile);
+    expect(await readFile(path.join(root, '.quorum/dropped.sarif'), 'utf8')).not.toContain('synthetic dropped finding');
+    expect(result?.coverage.lostFindings).toContainEqual({ reason: 'malformed finding', count: 1 });
+    expect(result?.findings).toEqual([]);
+    expect(result?.unconfirmed).toEqual([]);
+  });
+  it('dry-run writes no raw output and calls no provider', async () => {
+    const provider = fake(['malformed response']);
+    expect((await review(provider, ['--dry-run', '--no-cache'])).code).toBe(0);
+    expect(provider.calls).toEqual([]);
+    await expect(readdir(path.join(root, '.quorum/raw'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.each([
     [[], 'general'], [['--spec', 'spec.md'], 'feature'], [['--mode', 'general', '--spec', 'missing.md'], 'general'],
     [['--mode', 'feature', '--spec', 'spec.md'], 'feature'], [['--mode', 'redesign'], 'redesign'],

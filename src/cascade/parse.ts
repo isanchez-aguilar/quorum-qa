@@ -2,12 +2,25 @@ import type { CatalogEntry, Finding, ReproductionProposal } from '../types/index
 
 export interface ParseResult {
   findings: Finding[];
-  dropped: Array<{ index: number; reason: string }>;
+  dropped: Array<{ index: number; reason: string; excerpt?: DroppedExcerpt }>;
   rawCount: number;
   error?: string;
 }
 
 export const MAX_FINDINGS_PER_RESPONSE = 100;
+
+export type DroppedExcerpt = Partial<Record<'file' | 'line' | 'severity' | 'trigger' | 'impact', string>>;
+
+function excerpt(value: unknown): DroppedExcerpt {
+  if (!isRecord(value)) return {};
+  const result: DroppedExcerpt = {};
+  for (const field of ['file', 'line', 'severity', 'trigger', 'impact'] as const) {
+    if (typeof value[field] === 'string' || typeof value[field] === 'number') {
+      result[field] = String(value[field]).replace(/[\r\n\u2028\u2029]+/g, ' ').slice(0, 300);
+    }
+  }
+  return result;
+}
 
 export function extractJson(raw: string, accept: (value: unknown) => boolean = () => true): unknown {
   if (raw.length > 1_048_576) throw new Error('Provider output exceeds 1 MiB character limit');
@@ -115,9 +128,9 @@ export function parseFindings(raw: string, entry: CatalogEntry): ParseResult {
   const findings: Finding[] = [];
   const dropped: ParseResult['dropped'] = [];
   entries.forEach((item, index) => {
-    if (index >= MAX_FINDINGS_PER_RESPONSE) { dropped.push({ index, reason: 'too many findings' }); return; }
+    if (index >= MAX_FINDINGS_PER_RESPONSE) { dropped.push({ index, reason: 'too many findings', ...(dropped.length < 20 ? { excerpt: excerpt(item) } : {}) }); return; }
     try { findings.push(findingFrom(item, entry)); } catch (error) {
-      dropped.push({ index, reason: error instanceof Error ? error.message : String(error) });
+      dropped.push({ index, reason: error instanceof Error ? error.message : String(error), ...(dropped.length < 20 ? { excerpt: excerpt(item) } : {}) });
     }
   });
   return { findings, dropped, rawCount: entries.length, ...(entries.length && !findings.length ? { error: 'All findings were invalid' } : {}) };

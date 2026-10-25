@@ -1,3 +1,4 @@
+import { rawOutputWriter } from '../storage/raw.js';
 import { checkEvidence } from '../checks/output.js';
 import { completionTiming } from '../cascade/timing.js';
 import { randomUUID } from 'node:crypto';
@@ -383,7 +384,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
         callBudget: callBudgetMetadata(config.budget),
         reviewedFamilies: [], cacheHits: 0, findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [], ledgerDraft: [],
         coverage: { reviewedFiles: [...context.touchedFiles], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [], complete: evidence?.available === true },
-      } : await runCascade(context, config, providers, { ...(parallelChecks ? { beforeConfirmation: joinChecks } : {}), budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree?.path, copyVerificationRoot: copyDirectory, cache,
+      } : await runCascade(context, config, providers, { saveDroppedOutput: rawOutputWriter(root, runId), ...(parallelChecks ? { beforeConfirmation: joinChecks } : {}), budget, catalog, quotaSnapshot: snapshot, gitRunner: runner, verificationRoot: verificationTree?.path, copyVerificationRoot: copyDirectory, cache,
         ...(flags.reproduce ? { reproduce: (finding, proposal, remainingMs) => reproduceBlocker(finding, proposal, context, config,
           dependencies.containerRunner ?? runCommand, { ...dependencies.reproductionOptions, gitRunner: runner, deadlineMs: remainingMs,
             noHostPrompt: flags.noHostPrompt, warn, display: text => io.err(text) }) } : {}) });
@@ -458,6 +459,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
 
 async function outputReview(result: ReviewResult, flags: ParsedFlags, root: string, io: CliIo): Promise<number> {
   result.suppressed ??= [];
+  result.dropped ??= [];
   async function save(file: string, render: () => string, label: string): Promise<void> {
     try { await atomicWrite(path.resolve(root, file), render(), root); }
     catch (error) {

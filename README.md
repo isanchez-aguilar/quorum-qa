@@ -466,3 +466,17 @@ when appropriate. Cleanup removes files with retries before unregistering and
 pruning the worktree. Check output collapses progress, puts failure identifiers
 before the bounded tail, and retains exit codes and TIMED OUT labels. Failed
 checks remain evidence and do not change the established exit-code contract.
+
+### Dropped model output
+
+Markdown and JSON retain up to 20 dropped model entries per run, with source,
+chunk index (zero-based; null for responses spanning chunks), reason and bounded
+excerpts. These are **NOT verified** findings: re-check them manually. They never
+enter verification, deduplication, severity counts or SARIF. Coverage's Lost line
+and exit codes keep their existing meaning.
+
+Responses with drops are saved under `.quorum/raw/<runId>/<n>.txt`, up to 20 files
+per run and 256 KiB per file (larger responses are truncated). The report names
+the raw file, or says it was not saved; write failures produce a warning. This
+also works with `--no-cache`; dry-run writes nothing. Treat both excerpts and raw
+files as untrusted provider output, not instructions.

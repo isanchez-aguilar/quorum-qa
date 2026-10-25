@@ -37,7 +37,22 @@ export interface CascadeCall {
 
 export type LedgerDraft = Omit<LedgerEntry, 'runId' | 'timestamp'> & { rejectionReasons: Record<string, number> };
 
+export interface DroppedModelOutput {
+  provider: string;
+  model: string;
+  tier: Tier;
+  purpose: CascadeCall['purpose'];
+  /** Zero-based review chunk; null for a response spanning chunks (for example visual review). */
+  chunkIndex: number | null;
+  reason: string;
+  entryIndex?: number;
+  excerpt?: import('./parse.js').DroppedExcerpt;
+  rawExcerpt?: string;
+  rawFile?: string;
+}
+
 export interface CascadeResult {
+  dropped?: DroppedModelOutput[];
   durations?: PhaseDurations;
   checksParallel?: boolean;
   callBudget?: { maxCalls: number; auto: boolean };
@@ -106,7 +121,7 @@ export async function runCascade(
   context: ReviewContext,
   config: QuorumConfig,
   providers: ReadonlyMap<string, ProviderAdapter>,
-  options: { beforeConfirmation?: () => Promise<void>; budget?: RunBudget; clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; copyVerificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
+  options: { saveDroppedOutput?: (raw: string) => Promise<string | undefined>; beforeConfirmation?: () => Promise<void>; budget?: RunBudget; clock?: Clock; catalog?: readonly CatalogEntry[]; quotaSnapshot?: QuotaSnapshot; gitRunner?: CommandRunner; verificationRoot?: string; copyVerificationRoot?: string; cache?: ReviewCache; reproduce?: ReproduceFinding } = {},
 ): Promise<CascadeResult> {
   const reviewedFamilies: import('../types/index.js').Family[] = [];
   let cacheHits = 0;
@@ -124,6 +139,28 @@ export async function runCascade(
   const callBudget = callBudgetMetadata(config.budget);
   const phaseStarted = budget.clock.now();
   const durations: PhaseDurations = { checks: 0, triage: 0, escalation: 0, confirmation: 0, total: 0 };
+  const dropped: DroppedModelOutput[] = [];
+  const savedResponses = new WeakMap<CallResult, string | undefined>();
+  const findingChunks = new WeakMap<Finding, number | null>();
+  async function retainDropped(response: CallResult, parsed: ReturnType<typeof parseFindings>, chunkIndex: number | null): Promise<void> {
+    if (!parsed.dropped.length && !parsed.error) return;
+    if (!savedResponses.has(response)) {
+      let file: string | undefined;
+      try { file = await options.saveDroppedOutput?.(response.result.rawOutput); }
+      catch (error) { warn(`Raw output write failed: ${String(error)}`); }
+      savedResponses.set(response, file);
+    }
+    const metadata = { provider: response.entry.provider, model: response.entry.id,
+      tier: response.call.tier, purpose: response.call.purpose, chunkIndex,
+      ...(savedResponses.get(response) ? { rawFile: savedResponses.get(response)! } : {}) };
+    if (parsed.dropped.length) {
+      for (const item of parsed.dropped.slice(0, Math.max(0, 20 - dropped.length))) {
+        dropped.push({ ...metadata, reason: item.reason, entryIndex: item.index, excerpt: item.excerpt ?? {} });
+      }
+    } else if (dropped.length < 20) {
+      dropped.push({ ...metadata, reason: parsed.error!, rawExcerpt: response.result.rawOutput.slice(0, 1000) });
+    }
+  }
   const warnings: string[] = [];
   const pointsAtChange: Finding[] = [];
   const errors: string[] = [];
@@ -235,6 +272,9 @@ export async function runCascade(
             cacheHits++;
             return { entry, result: { rawOutput: cached, durationMs: 0, worktreeClean: true }, call, ledger, cached: true };
           }
+          const chunkIndex = payload.chunks.findIndex(chunk => chunk.prompt === prompt);
+          await retainDropped({ entry, result: { rawOutput: cached, durationMs: 0, worktreeClean: true }, call, ledger },
+            parsed, chunkIndex < 0 ? null : chunkIndex);
         }
       }
       if (settings.optionalSecondPass && budget.calls >= triageLimit) return null;
@@ -269,6 +309,8 @@ export async function runCascade(
         if (!result.worktreeClean) {
           call.status = 'dirty';
           const parsed = parseFindings(result.rawOutput, entry);
+          const chunkIndex = payload.chunks.findIndex(chunk => chunk.prompt === prompt);
+          await retainDropped({ entry, result, call, ledger }, parsed, chunkIndex < 0 ? null : chunkIndex);
           ledger.rawFindingsCount = parsed.rawCount;
           for (let index = 0; index < parsed.rawCount; index++) rejection(ledger, 'provider changed worktree');
           warn(`${ref}: provider changed worktree; output discarded.`);
@@ -356,8 +398,9 @@ export async function runCascade(
     return corrected;
   }
 
-  async function readReview(response: CallResult): Promise<Finding[] | null> {
+  async function readReview(response: CallResult, chunkIndex: number | null): Promise<Finding[] | null> {
     const parsed = parseFindings(response.result.rawOutput, response.entry);
+    await retainDropped(response, parsed, chunkIndex);
     response.ledger.rawFindingsCount = parsed.rawCount;
     for (const dropped of parsed.dropped) {
       rejection(response.ledger, `parse: ${dropped.reason}`);
@@ -373,6 +416,7 @@ export async function runCascade(
     if (response.cacheKey && !parsed.dropped.length) options.cache?.stage(response.cacheKey, response.result.rawOutput, modelRef(response.entry));
     const verified: Finding[] = [];
     for (const finding of parsed.findings) {
+      findingChunks.set(finding, chunkIndex);
       if (budget.deadlineExceeded || budget.remainingMs <= 0) {
         rejection(response.ledger, 'run deadline');
         lost('run deadline', finding.file);
@@ -381,6 +425,7 @@ export async function runCascade(
       }
       const result = await verify(finding, response);
       if (result) {
+        findingChunks.set(result, chunkIndex);
         if (context.mode === 'bughunt' && result.origin === 'introduced') pointsAtChange.push(result);
         else verified.push(result);
       }
@@ -454,7 +499,7 @@ export async function runCascade(
     const triage = index >= waveEnd ? await invoke('triage', chunk.prompt, 'review')
       : outcome.response ?? (outcome.diagnostics.calls.at(-1)?.status === 'timeout' ? null
         : await invoke('triage', chunk.prompt, 'review', { attempted: outcome.attempted }));
-    let reviewed = triage ? await readReview(triage) : null;
+    let reviewed = triage ? await readReview(triage, index) : null;
     let reviewFamily = triage?.entry.family;
     if (triage && reviewed?.length === 0 && sensitive.has(chunk)) sensitiveEmpty.push({ chunk, family: triage.entry.family });
     if (reviewed === null) {
@@ -462,7 +507,7 @@ export async function runCascade(
       while (reviewed === null) {
         const response = await invoke('review', chunk.prompt, 'review', { attempted, excludeLocal: true });
         if (!response) break;
-        reviewed = await readReview(response);
+        reviewed = await readReview(response, payload.chunks.indexOf(chunk));
         reviewFamily = response.entry.family;
       }
     }
@@ -484,7 +529,7 @@ export async function runCascade(
     while (reviewed === null) {
       const response = await invoke('review', chunk.prompt, 'review', { attempted, excludeLocal: true });
       if (!response) break;
-      reviewed = await readReview(response);
+      reviewed = await readReview(response, payload.chunks.indexOf(chunk));
     }
     if (reviewed === null) for (const file of chunk.files) localOnlyFiles.add(file);
     else { localReviewedChunks.add(chunk); for (const finding of reviewed) initial.push(finding); coverage.reviewedWindows?.push(...(chunk.windows ?? [])); }
@@ -497,7 +542,7 @@ export async function runCascade(
       || (context.rulesContent !== undefined && !prompt.includes(JSON.stringify(context.rulesContent)));
     if (omitted) lost('visual context truncated');
     const response = omitted ? null : await invoke('visual', prompt, 'review');
-    const findings = response ? await readReview(response) : null;
+    const findings = response ? await readReview(response, null) : null;
     if (findings === null) { lost('visual review unavailable'); warn('Visual coverage INCOMPLETE: screenshots were not reviewed.'); }
     else {
       for (const finding of findings) initial.push(finding);
@@ -562,6 +607,7 @@ export async function runCascade(
         if (decision[field] !== undefined) candidate[field] = decision[field];
       }
       const parsed = parseFindings(JSON.stringify([candidate]), response.entry);
+      await retainDropped(response, parsed, findingChunks.get(finding) ?? null);
       response.ledger.rawFindingsCount = 1;
       for (const dropped of parsed.dropped) rejection(response.ledger, `parse: ${dropped.reason}`);
       const corroborated = parsed.findings[0] ? await verify(parsed.findings[0], response, false, finding) : null;
@@ -619,7 +665,7 @@ export async function runCascade(
             attempted, excludeLocal: true, preferOtherThan: requireIndependent ? strict : new Set([family]), optionalSecondPass: true, requireIndependent,
           });
           if (!response) break;
-          result = await readReview(response);
+          result = await readReview(response, payload.chunks.indexOf(chunk));
         }
         return result;
       };
@@ -812,6 +858,7 @@ export async function runCascade(
           const candidate = { ...node.finding, line: decision.line ?? node.finding.line,
             evidence_quote: decision.evidence_quote ?? node.finding.evidence_quote };
           const parsed = parseFindings(JSON.stringify([candidate]), response.entry);
+          await retainDropped(response, parsed, findingChunks.get(node.sources[0]!) ?? null);
           for (const dropped of parsed.dropped) rejection(response.ledger, `parse: ${dropped.reason}`);
           const corroborated = parsed.findings[0] ? await verify(parsed.findings[0], response, true) : null;
           if (!corroborated) continue;
@@ -855,9 +902,9 @@ export async function runCascade(
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
   if (errors.length) {
     coverage.complete = false;
-    return { durations, callBudget, ...(context.mode === 'bughunt' ? { pointsAtChange: [] } : {}), reviewedFamilies, cacheHits, findings: [], unconfirmed: [], related: [], warnings, errors, calls, ledgerDraft, coverage };
+    return { dropped, durations, callBudget, ...(context.mode === 'bughunt' ? { pointsAtChange: [] } : {}), reviewedFamilies, cacheHits, findings: [], unconfirmed: [], related: [], warnings, errors, calls, ledgerDraft, coverage };
   }
-  return { durations, callBudget, ...(context.mode === 'bughunt' ? { pointsAtChange: dedupeFindings(pointsAtChange) } : {}), rejectedOnConfirmation, reviewedFamilies, cacheHits, findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
+  return { dropped, durations, callBudget, ...(context.mode === 'bughunt' ? { pointsAtChange: dedupeFindings(pointsAtChange) } : {}), rejectedOnConfirmation, reviewedFamilies, cacheHits, findings, unconfirmed, related, warnings, errors, calls, ledgerDraft, coverage };
 }
 
 export { createExecutionPlan, formatDryRun } from './planner.js';

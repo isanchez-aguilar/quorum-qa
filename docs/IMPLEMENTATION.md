@@ -3838,3 +3838,23 @@ OPTIONAL. No synonym maps to BLOCKER, so only an explicit BLOCKER label can make
 a run exit 1, and confirmation still decides whether a finding survives. Unknown
 labels are still rejected, and the rejection reason now names the value
 (`invalid severity: "severe"`). The Qwen JSON schema keeps the three-value enum.
+
+### 31. Preserve dropped model output as untrusted diagnostics
+
+Parser drops retain provider/model, tier, purpose, zero-based chunk index (null
+for responses spanning chunks), reason and best-effort file, line, severity,
+trigger and impact excerpts. Only string/number fields are retained, with
+newlines collapsed and each field capped at 300 characters. Fully unparseable
+review responses retain the first 1000 raw characters instead. Reports cap this
+separate diagnostic array at 20 entries per run. Markdown escapes it after
+Unconfirmed (other reviewers), explicitly marks it NOT verified, and names the
+raw file; JSON exposes `dropped`, while SARIF excludes it.
+
+An independent per-run writer saves responses with drops atomically under
+`.quorum/raw/<runId>/<n>.txt`, using existing parent symlink/junction protections,
+validated run IDs and generated filenames. At most 20 files are saved, each
+truncated at a UTF-8 boundary to 256 KiB. Write failures warn without changing
+review decisions. This applies with --no-cache and never runs in dry-run.
+Diagnostic excerpts never drive verification, dedupe, severity or exit codes.
+Retry, fallback, coverage and cache staging remain unchanged: responses with
+parser drops are not cached. Tests use only synthetic outputs and fake providers.

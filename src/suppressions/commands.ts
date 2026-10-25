@@ -73,7 +73,7 @@ function reportFinding(value: unknown, suppressed = false): value is Finding {
 export function validateSuppressionReport(raw: unknown): { findings: Finding[]; unconfirmed: Finding[]; suppressed: Finding[] } {
   const fail = (): never => { throw new UsageError('Invalid Quorum report JSON. Use the complete output of review --json.'); };
   const keys = ['runId', 'timestamp', 'mode', 'range', 'headSha', 'baseSha', 'checks', 'ruleChecks', 'criteria', 'inventory', 'families', 'exitCode',
-    'findings', 'unconfirmed', 'suppressed', 'pointsAtChange', 'rejectedOnConfirmation', 'warnings', 'errors', 'coverage', 'calls', 'ledgerDraft', 'cacheHits',
+    'findings', 'unconfirmed', 'suppressed', 'dropped', 'pointsAtChange', 'rejectedOnConfirmation', 'warnings', 'errors', 'coverage', 'calls', 'ledgerDraft', 'cacheHits',
     'reviewedFamilies', 'related', 'durations', 'checksParallel', 'callBudget', 'refactor', 'runtime', 'clauses', 'contractFiles', 'copyFiles'];
   if (!object(raw) || Object.keys(raw).some(key => !keys.includes(key))) return fail();
   if (!['runId', 'timestamp', 'range', 'headSha', 'baseSha'].every(key => typeof raw[key] === 'string' && raw[key] !== '')
