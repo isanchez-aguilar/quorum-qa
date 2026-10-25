@@ -88,6 +88,11 @@ export async function init(flags: ParsedFlags, positionals: string[], io: CliIo,
   }
   const nextIgnore = ignored ? ignore : ignore + (ignore && !ignore.endsWith('\n') ? ending : '') + '.quorum/' + ending;
   const { config, notes } = await proposal(root);
+  // The remote's default branch is the usual review base; origin/main is the schema default.
+  const head = await (dependencies.gitRunner ?? runCommand)('git', ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], { cwd: root, timeoutMs: 10_000 });
+  const remoteBase = head.exitCode === 0 ? /^refs\/remotes\/(origin\/[\w./-]+)\s*$/.exec(head.stdout)?.[1] : undefined;
+  if (remoteBase && remoteBase !== defaultConfig().base) config.base = remoteBase;
+  notes.push(`Review base: ${remoteBase ?? `${defaultConfig().base} (origin/HEAD not set; edit base if the default branch differs)`}.`);
   const validated = validateConfig(config);
   const text = JSON.stringify(config, null, 2) + '\n';
   for (const note of notes) io.out(`${note}\n`);

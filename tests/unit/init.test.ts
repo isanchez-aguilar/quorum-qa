@@ -70,6 +70,16 @@ it('detects Berry from the head of a lockfile larger than the bounded-read limit
   expect((await config()).setup).toEqual([['yarn', 'install', '--immutable']]);
 });
 
+it.each([['dev', 'origin/dev'], ['main', undefined]] as const)('takes the review base from origin/HEAD -> %s', async (branch, base) => {
+  const git = (...args: string[]) => runCommand('git', args, { cwd: root });
+  expect((await git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'base')).exitCode).toBe(0);
+  expect((await git('update-ref', `refs/remotes/origin/${branch}`, 'HEAD')).exitCode).toBe(0);
+  expect((await git('symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`)).exitCode).toBe(0);
+  const result = await init();
+  expect(result.code).toBe(0); expect(result.out).toContain(`Review base: origin/${branch}`);
+  expect((await config()).base).toBe(base);
+});
+
 it('requires the repository root before writing files', async () => {
   const child = path.join(root, 'child'); await mkdir(child);
   const result = await init([], { repoRoot: child });
