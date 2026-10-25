@@ -60,13 +60,27 @@ export function parseReproductionProposal(raw: string): ReproductionProposal {
   return { path: proposal.path!, content: proposal.content!, expect: proposal.expect!, status: 'pending' };
 }
 
+// A synonym never reaches BLOCKER: only an explicit BLOCKER label can fail a run.
+const SEVERITY_ALIASES: Record<string, Finding['severity']> = {
+  CRITICAL: 'IMPORTANT', HIGH: 'IMPORTANT', MAJOR: 'IMPORTANT', MEDIUM: 'IMPORTANT', P0: 'IMPORTANT', P1: 'IMPORTANT', P2: 'IMPORTANT',
+  LOW: 'OPTIONAL', MINOR: 'OPTIONAL', INFO: 'OPTIONAL', NIT: 'OPTIONAL', TRIVIAL: 'OPTIONAL', P3: 'OPTIONAL',
+};
+
+export function canonicalSeverity(raw: string): Finding['severity'] | undefined {
+  const label = raw.trim().replace(/^\[(.*)\]$/, '$1').toUpperCase();
+  if (label === 'BLOCKER' || label === 'IMPORTANT' || label === 'OPTIONAL') return label;
+  return SEVERITY_ALIASES[label];
+}
+
 function findingFrom(value: unknown, entry: CatalogEntry): Finding {
   if (!isRecord(value)) throw new Error('finding must be an object');
   const strings = ['file', 'trigger', 'impact', 'evidence_quote', 'fix'] as const;
   for (const field of strings) {
     if (typeof value[field] !== 'string' || !value[field].trim()) throw new Error(`${field} must be a non-empty string`);
   }
-  if (typeof value.severity !== 'string' || !['BLOCKER', 'IMPORTANT', 'OPTIONAL'].includes(value.severity.toUpperCase())) throw new Error('invalid severity');
+  if (typeof value.severity !== 'string') throw new Error('invalid severity');
+  const severity = canonicalSeverity(value.severity);
+  if (!severity) throw new Error(`invalid severity: ${JSON.stringify(value.severity.slice(0, 40))}`);
   // git blame decides introduced vs pre-existing later, and only "improvement" is kept from the model,
   // so an unknown or missing origin (seen from Gemini Flash in a real run) is not a reason to drop the finding.
   const origin: Finding['origin'] = typeof value.origin === 'string' && ['introduced', 'pre-existing', 'improvement'].includes(value.origin)
@@ -82,7 +96,7 @@ function findingFrom(value: unknown, entry: CatalogEntry): Finding {
     reproduction = { path: proposal.path as string, content: proposal.content as string, expect: proposal.expect as string, status: 'pending' };
   }
   const finding: Finding = {
-    severity: value.severity.toUpperCase() as Finding['severity'], origin,
+    severity, origin,
     file: value.file as string, line: value.line as number, trigger: value.trigger as string,
     impact: value.impact as string, evidence_quote: value.evidence_quote as string, fix: value.fix as string,
     provider: entry.provider, model: entry.id, family: entry.family, confidence: Math.max(0, Math.min(1, value.confidence)),

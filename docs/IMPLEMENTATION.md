@@ -3824,3 +3824,17 @@ up to 40 failure identifier lines precede the tail, and passed checks retain a
 short summary. Model evidence preserves metadata while shrinking output fields;
 Markdown retains exit codes and timeout labels. Dry-run payload wording reflects
 the mode and only supplied documents. Tests are synthetic and call no providers.
+
+### 30. Severity synonyms are mapped, never to BLOCKER
+
+Supersedes the last clause of decision 21 ("it still rejects synonyms such as
+high and critical"). In a trial run on a pnpm + Turbo monorepo, a Codex second pass returned one finding with a
+non-canonical severity. It was dropped as malformed, the run became INCOMPLETE,
+and nobody could see what the finding said. Severity parsing now trims the
+label, strips one pair of brackets (`[P1]`) and accepts BLOCKER, IMPORTANT and
+OPTIONAL in any case. `critical`, `high`, `major`, `medium`, `P0`, `P1` and `P2`
+map to IMPORTANT. `low`, `minor`, `info`, `nit`, `trivial` and `P3` map to
+OPTIONAL. No synonym maps to BLOCKER, so only an explicit BLOCKER label can make
+a run exit 1, and confirmation still decides whether a finding survives. Unknown
+labels are still rejected, and the rejection reason now names the value
+(`invalid severity: "severe"`). The Qwen JSON schema keeps the three-value enum.

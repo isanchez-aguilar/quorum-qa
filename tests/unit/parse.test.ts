@@ -74,6 +74,10 @@ it('keeps a finding whose origin is unknown or missing (git blame sets it later)
 it.each(['blocker', 'Important', 'oPtIoNaL'])('canonicalizes severity %s', severity => {
   expect(parseFindings(JSON.stringify([{ ...finding(), severity }]), entry).findings[0]?.severity).toBe(severity.toUpperCase());
 });
-it.each(['high', 'critical'])('rejects severity synonyms %s', severity => {
-  expect(parseFindings(JSON.stringify([{ ...finding(), severity }]), entry).dropped[0]?.reason).toBe('invalid severity');
+it.each([['high', 'IMPORTANT'], ['critical', 'IMPORTANT'], ['P0', 'IMPORTANT'], ['[P1]', 'IMPORTANT'], ['Medium', 'IMPORTANT'],
+  ['p3', 'OPTIONAL'], ['nit', 'OPTIONAL'], ['LOW', 'OPTIONAL']] as const)('maps severity synonym %s to %s, never BLOCKER', (severity, expected) => {
+  expect(parseFindings(JSON.stringify([{ ...finding(), severity }]), entry).findings[0]?.severity).toBe(expected);
+});
+it.each(['severe', 'P4', ''])('rejects unknown severity %j and names it', severity => {
+  expect(parseFindings(JSON.stringify([{ ...finding(), severity }]), entry).dropped[0]?.reason).toBe(`invalid severity: ${JSON.stringify(severity)}`);
 });
