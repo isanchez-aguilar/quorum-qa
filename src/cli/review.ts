@@ -17,7 +17,7 @@ import { selectContextProvider, type ContextProvider } from '../context/provider
 import { CodeGraphContextProvider } from '../context/codegraph.js';
 import { CONCURRENT_CHECKS_CONTEXT, reviewChunks } from '../cascade/prompts.js';
 import { callBudgetMetadata, resolveBudget, RunBudget, systemClock } from '../cascade/budget.js';
-import { git, mergeBase, revParse } from '../context/git.js';
+import { git, mergeBase, revParse, validateRef } from '../context/git.js';
 import { acceptanceCriteria, contractClauses, inventoryFeatures } from '../modes/index.js';
 import { runCommand } from '../process/runner.js';
 import { AgyProvider } from '../providers/agy.js';
@@ -143,6 +143,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     try { defaultBase = await revParse('origin/main', root, runner); }
     catch { throw new UsageError('Cannot discover the trusted base origin/main. Use --diff <base>...HEAD or --trust-head-config for your own repo.'); }
     return configAt(defaultBase, root, runner);
+  }
+  if (flags.since) {
+    try { validateRef(flags.since, false); }
+    catch { throw new UsageError('--since takes one commit (for example HEAD~1), not a range; use --diff for ranges.'); }
   }
   let range = flags.since ? `${flags.since}..HEAD` : flags.diff;
   if (!range) {

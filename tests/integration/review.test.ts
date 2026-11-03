@@ -394,6 +394,16 @@ describe('M5 zero-quota review CLI', () => {
     expect(code).toBe(0); expect(provider.calls[0]?.prompt).toContain('fixed.ts'); expect(provider.calls[0]?.prompt).not.toContain('sample.ts');
     expect(JSON.parse(output).baseSha).toBe(since); expect(since).not.toBe(base);
   });
+  it('accepts an ancestry ref for --since and refuses a range with a usage message', async () => {
+    await writeFile(path.join(root, 'fixed.ts'), 'export const fixed = true;\n'); await git('add', '.'); await git('commit', '-m', 'fix');
+    const parent = await git('rev-parse', 'HEAD~1');
+    let output = '';
+    const code = await main(['review', '--spec', 'spec.md', '--since', 'HEAD~1', '--json'], { out: text => { output += text; }, err() {} }, { repoRoot: root, cacheHome: path.join(root, 'synthetic-home'), gitRunner: runner, providers: new Map([['agy', fake()]]), catalog });
+    expect(code).toBe(0); expect(JSON.parse(output).baseSha).toBe(parent);
+    let errors = '';
+    const refused = await main(['review', '--spec', 'spec.md', '--since', 'HEAD~1...HEAD'], { out() {}, err: text => { errors += text; } }, { repoRoot: root, gitRunner: runner, catalog });
+    expect(refused).toBe(2); expect(errors).toContain('--since takes one commit');
+  });
   it('does not trust checks added by the earlier PR commit during --since', async () => {
     await commitConfig(config([[process.execPath, '-e', 'untrusted-earlier-change']])); await git('add', '.'); await git('commit', '-m', 'earlier PR config');
     const since = await git('rev-parse', 'HEAD');

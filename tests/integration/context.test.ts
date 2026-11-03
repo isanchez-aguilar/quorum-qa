@@ -149,7 +149,11 @@ describe.skipIf(!gitPath)('synthetic git context', () => {
   });
 });
 
-it.each(['--output=x', 'a b', 'a\nb', 'a\0b', 'HEAD~1', 'a....b', 'a..', '..b', 'a..b..c', 'a^{commit}'])('rejects unsafe ref %j', async ref => {
+it.each(['HEAD~1', 'HEAD~1...HEAD', 'main~~', 'origin/main~3..feature/x', 'HEAD~'])('accepts ancestry suffix %j', ref => {
+  expect(() => validateRef(ref)).not.toThrow();
+});
+
+it.each(['--output=x', 'a b', 'a\nb', 'a\0b', 'HEAD^', 'HEAD^1', 'HEAD~1^2', '~1', 'HEAD~-1', 'HEAD~12345', '-~1', 'a....b', 'a..', '..b', 'a..b..c', 'a^{commit}'])('rejects unsafe ref %j', async ref => {
   const runner = vi.fn<CommandRunner>();
   expect(() => validateRef(ref)).toThrow('Invalid git ref');
   await expect(revParse(ref, process.cwd(), runner)).rejects.toThrow('Invalid git ref');

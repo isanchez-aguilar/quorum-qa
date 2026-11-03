@@ -208,7 +208,9 @@ export function diskCache(root: string, warn: (message: string) => void, repoRoo
       // Recheck under a cross-process lock: a late repair must never replace a valid key
       // already returned to another caller. Atomic rename also avoids partial creation.
       const lockPath = `${keyFile}.lock`;
-      const deadline = Date.now() + 10_000;
+      // Only contended first-time creation waits here; 10 s disabled the cache for some of
+      // eight concurrent processes on a loaded Windows machine.
+      const deadline = Date.now() + 30_000;
       let lock;
       while (!lock) {
         try { lock = await open(lockPath, 'wx', 0o600); }

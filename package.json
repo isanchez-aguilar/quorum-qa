@@ -1,6 +1,6 @@
 {
   "name": "quorum-qa",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A quorum of AI reviewers for your pull requests. It reports only findings it can verify in your code.",
   "license": "Apache-2.0",
   "author": "Isaac Sanchez Aguilar",

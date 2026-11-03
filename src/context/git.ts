@@ -4,9 +4,15 @@ import { resolveCommand } from '../checks/resolver.js';
 import { CommandOutputLimitError } from '../process/runner.js';
 
 export function validateRef(ref: string, allowRange = true): void {
-  const plain = (part: string) => /^[a-zA-Z0-9_][a-zA-Z0-9_./-]*$/.test(part)
+  const name = (part: string) => /^[a-zA-Z0-9_][a-zA-Z0-9_./-]*$/.test(part)
     && !part.includes('..') && !part.includes('//') && !part.endsWith('.')
     && !part.endsWith('/') && !part.split('/').some(segment => segment.startsWith('.') || segment.endsWith('.lock'));
+  // Ancestry suffixes like HEAD~1 or main~~ are allowed. '^' stays out: it is cmd.exe's
+  // escape character, and refs reach git through cmd shims on Windows.
+  const plain = (part: string) => {
+    const match = /^(.*?)((?:~\d{0,4})*)$/.exec(part);
+    return match !== null && name(match[1]!);
+  };
   const parts = allowRange ? ref.split(/\.{2,3}/) : [ref];
   if (parts.length > 2 || !parts.every(plain)) throw new Error(`Invalid git ref: ${ref}`);
 }

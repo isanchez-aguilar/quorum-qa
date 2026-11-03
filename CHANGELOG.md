@@ -5,6 +5,16 @@ All notable changes to Quorum are listed here. The format follows
 [Semantic Versioning](https://semver.org/). Until 1.0, a minor version may change
 configuration or report formats; each such change is listed here.
 
+## [0.1.1]
+
+### Fixed
+- `--diff` accepts ranges with ancestry suffixes, such as `HEAD~1...HEAD` and `main~~...HEAD`; `--since` accepts one commit with them, such as `HEAD~1`. `^` stays rejected, because it is the escape character of `cmd.exe` on Windows.
+- `--since` given a range now fails with a usage message instead of an unexpected error.
+
+### Documentation
+- The README is now a short landing page: the problem, a quick start, a report example, how it works, benchmarks and an FAQ. The full reference moves to `docs/REFERENCE.md`.
+- Issue and pull request templates.
+
 ## [0.1.0] — first public release
 
 ### Review

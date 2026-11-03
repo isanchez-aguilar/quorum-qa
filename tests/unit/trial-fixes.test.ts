@@ -92,8 +92,8 @@ it.each(['slow', 'failed', 'timeout'] as const)('prunes even after a %s filesyst
   else await expect(cleaning).rejects.toThrow();
   expect(commands.some(args => args.includes('prune') && args.includes('now'))).toBe(true);
   if (kind === 'timeout') {
-    await new Promise(resolve => setTimeout(resolve, 60));
-    expect(commands.filter(args => args.includes('prune')).length).toBe(2);
+    // The late prune follows the 30 ms remover; poll instead of a fixed wait so a loaded runner passes.
+    await vi.waitFor(() => expect(commands.filter(args => args.includes('prune')).length).toBe(2), { timeout: 5_000, interval: 20 });
   }
 });
 it('refuses cleanup outside its root before touching filesystem or Git', async () => {
