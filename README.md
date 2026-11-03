@@ -7,6 +7,11 @@ A quorum of AI reviewers for your pull requests. It reports only findings it can
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/isanchez-aguilar/quorum-qa/blob/main/LICENSE)
 [![Node >= 22](https://img.shields.io/badge/node-%3E%3D22-green)](https://github.com/isanchez-aguilar/quorum-qa/blob/main/package.json)
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/isanchez-aguilar/quorum-qa/main/docs/demo/quorum-demo.svg" alt="A real run on a synthetic repository: the dry-run plan spends nothing, then the review finds an over-refund bug as a BLOCKER, verified in the code and reviewed by two model families, and exits 1." width="838">
+</p>
+<p align="center"><sub>A real run on a synthetic repository, with excerpts and the 26 s wait sped up. <a href="https://github.com/isanchez-aguilar/quorum-qa/blob/main/docs/demo/README.md">How it was made</a>.</sub></p>
+
 ## The problem
 
 A single AI reviewer can hallucinate files, cite the wrong lines, and flood a pull request with noise.
