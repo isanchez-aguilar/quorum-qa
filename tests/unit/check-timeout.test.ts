@@ -68,7 +68,7 @@ it('documents the check limit in help and check documentation', async () => {
   await main(['--help'], { out: text => { help += text; }, err: () => {} });
   expect(help).toContain('budget.checkTimeoutSeconds');
   expect(help).toContain('30–3600');
-  for (const file of ['README.md', 'docs/IMPLEMENTATION.md', 'plugin/skills/quorum/SKILL.md']) {
+  for (const file of ['docs/REFERENCE.md', 'docs/IMPLEMENTATION.md', 'plugin/skills/quorum/SKILL.md']) {
     expect(await readFile(new URL(`../../${file}`, import.meta.url), 'utf8')).toContain('budget.checkTimeoutSeconds');
   }
 });

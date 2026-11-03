@@ -7,3 +7,16 @@ Thanks for helping.
 - **Branching:** work on a branch and open a PR to `main`.
 - **Tests:** a change comes with its tests (`pnpm test`).
 - **No secrets, no third-party code:** no API keys and no code from other projects. Fixtures must be synthetic.
+
+## Local development
+
+Use Node 22+ and pnpm (the version is pinned in `package.json`). From a checkout:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+pnpm typecheck
+pnpm test
+```
+
+Tests use fake providers and synthetic fixtures; they do not spend provider quota.

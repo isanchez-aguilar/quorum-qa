@@ -1,7 +1,7 @@
 {
   "name": "quorum-qa",
   "version": "0.1.0",
-  "description": "A quorum of AI reviewers for your code. It reports only verified findings.",
+  "description": "A quorum of AI reviewers for your pull requests. It reports only findings it can verify in your code.",
   "license": "Apache-2.0",
   "author": "Isaac Sanchez Aguilar",
   "repository": {
@@ -22,7 +22,11 @@
     "codex",
     "claude",
     "multi-model",
-    "sarif"
+    "sarif",
+    "code-review-bot",
+    "pull-request",
+    "static-analysis",
+    "ai-code-review"
   ],
   "packageManager": "pnpm@9.15.0",
   "type": "module",

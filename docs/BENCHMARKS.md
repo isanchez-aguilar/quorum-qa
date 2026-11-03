@@ -4,6 +4,23 @@ The suite measures detection of eight seeded defects and noise on four clean
 changes. All projects are dependency-free synthetic JavaScript. Ground truth is
 kept outside the reviewed repository and is never supplied to reviewers.
 
+## Results
+
+Reported baseline, **2026-10-24**, on the bundled synthetic suite:
+
+| Seeded defects found | Findings on clean controls | Provider calls | Wall time |
+|---|---|---|---|
+| 8 / 8 | 0 across 4 controls | 22 | About 5 minutes |
+
+This historical result was supplied by the maintainer; it is not a fresh run
+performed for this documentation update. Twelve synthetic cases are a small
+sample and do not establish accuracy on real repositories. Provider availability,
+model versions and configuration can change the outcome. See the scoring rules
+below; matching a seeded location does not validate the diagnosis itself.
+
+To rerun once, follow the build and dry-run steps below, then, after approving
+provider quota use, run `node bench/run.mjs --config quorum.config.json --repeat 1`.
+
 ## Run
 
 Build first with `pnpm build`, then inspect the plan without calling a provider:
@@ -107,7 +124,7 @@ Truth lines refer to head, are one-based and inclusive. Use short ranges at the
 defect; `minSeverity` is IMPORTANT or BLOCKER. Controls use `kind: "control"`
 and an empty truth array. Reserved harness files (`quorum.config.json`,
 `.gitignore`, `spec.md`, `.git`) must not appear in snapshots. New cases should
-make a nonempty diff and remain syntactically valid. The correct-feature control
+make a nonempty diff and remain syntactically valid. The control-feature control
 also contains a Node test runnable with `node --test` from its head directory.
 
 Update the expected case counts in `tests/unit/bench-cases.test.ts`, run
