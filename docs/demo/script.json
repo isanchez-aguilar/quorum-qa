@@ -1,0 +1,48 @@
+{
+  "title": "quorum-qa 0.1.1 — real run on a synthetic repo (excerpts, waits sped up)",
+  "rows": 22,
+  "cols": 96,
+  "steps": [
+    { "type": "pause", "ms": 600 },
+    { "type": "type", "text": "quorum review --diff main...HEAD --author claude --dry-run", "ms": 1400 },
+    { "type": "pause", "ms": 400 },
+    { "type": "out", "each": 70, "ms": 500, "lines": [
+      "=== Quorum Review Plan (Dry Run) ===",
+      "  Review Mode: general",
+      "  Files Changed: 1 files (+6, -1 lines)",
+      "  [1] node --test",
+      "  [Phase 2: Triage]",
+      "    Provider / Model: agy:gemini-3.8-flash-low (google) -> qwen (local) -> ...",
+      "  [Phase 3: Conditional Escalation Paths]",
+      "    Triggers: findings matching [money, auth, permissions] OR confidence < 0.70 OR BLOCKER",
+      "    Confirm: codex (openai)",
+      "    Max API Calls: 12 (auto: 3 x 1 chunks, clamped to 12..40)",
+      "  …",
+      "Nothing was called: dry-run spends no quota."
+    ] },
+    { "type": "pause", "ms": 3200 },
+    { "type": "clear" },
+    { "type": "type", "text": "quorum review --diff main...HEAD --author claude", "ms": 1200 },
+    { "type": "out", "ms": 700, "lines": [
+      "quorum: running 0 setup commands and 1 configured checks from the reviewed change in a disposable"
+    ] },
+    { "type": "note", "text": "… 26 s of triage, verification and cross-family confirmation (sped up) …", "ms": 1600 },
+    { "type": "out", "each": 110, "ms": 600, "lines": [
+      "**Status:** exit 1 · 1 Blockers Found · 0 failed deterministic checks · 0 checks timed out",
+      "",
+      "## Blockers",
+      "### 1. Calling refund() multiple times or when payment.refundedCents > 0 with an amount <= paidCents",
+      "- **Location:** src/refunds.mjs:9 (introduced)",
+      "- **Severity:** BLOCKER · **Confidence:** 0.99 · agy:gemini-3.8-flash-low (google)",
+      "- **Impact:** Allows cumulative refunds to exceed the original paid amount, leading to",
+      "  financial loss / over-refunding.",
+      "- **Evidence Quote:** if (amountCents > payment.paidCents) throw new Error('refund exceeds ...');",
+      "- **Proposed Fix:** if (amountCents > refundableCents(payment)) throw new Error(...);",
+      "  …",
+      "Families that reviewed: google, openai.   ·   Calls: 2"
+    ] },
+    { "type": "pause", "ms": 1200 },
+    { "type": "type", "text": "echo $?", "ms": 400 },
+    { "type": "out", "ms": 5000, "lines": ["1"] }
+  ]
+}
