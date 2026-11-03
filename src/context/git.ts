@@ -1,5 +1,5 @@
+import { canonicalPath } from '../paths.js';
 import type { CommandRunner } from '../types/index.js';
-import { realpath } from 'node:fs/promises';
 import { resolveCommand } from '../checks/resolver.js';
 import { CommandOutputLimitError } from '../process/runner.js';
 
@@ -72,13 +72,13 @@ export async function fileExistsAtCommit(commit: string, file: string, cwd: stri
 }
 
 export async function worktreeRoot(cwd: string, runner: CommandRunner): Promise<string> {
-  return (await output(['rev-parse', '--show-toplevel'], cwd, runner)).trim();
+  return canonicalPath((await output(['rev-parse', '--show-toplevel'], cwd, runner)).trim());
 }
 
 const DIFF_OPTIONS = ['--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--no-renames', '--no-ext-diff', '--no-textconv'];
 
 export async function requireWorktreeRoot(cwd: string, runner: CommandRunner): Promise<string> {
   const root = await worktreeRoot(cwd, runner);
-  if (await realpath(cwd) !== await realpath(root)) throw new Error('cwd must be the repository root');
+  if (canonicalPath(cwd) !== canonicalPath(root)) throw new Error('cwd must be the repository root');
   return root;
 }

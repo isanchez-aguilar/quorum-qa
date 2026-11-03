@@ -126,7 +126,8 @@ it('caps HEAD files at 3000 and matched lines at 2000', async () => {
   const report = await proposeRules(root, { now, runner });
   expect(blobs).toBe(3000);
   expect(report.clusters[0]?.noise).toMatchObject({ matches: 2000, filesCapped: true, matchesCapped: true });
-});
+  // About 8 s alone (3000 synthetic blobs); leave headroom for a loaded full-suite run.
+}, 120_000);
 
 it('uses complete listing records on successful output overflow and reports incomplete coverage', async () => {
   const root = await fixture([finding(1), finding(2), finding(3)]);

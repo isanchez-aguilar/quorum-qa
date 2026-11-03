@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -190,7 +191,7 @@ export async function runMutation(options: {
       const stat = await lstat(full);
       if (!stat.isFile() || stat.nlink !== 1 || await readFile(full, 'utf8') !== original) { note(`${mutant.file}: on-disk content mismatch or not a regular file`); break; }
     } catch { note(`${mutant.file}: target could not be read safely`); break; }
-    const reportPath = path.join(os.tmpdir(), `quorum-mutation-${randomUUID()}.json`);
+    const reportPath = path.join(canonicalPath(os.tmpdir()), `quorum-mutation-${randomUUID()}.json`);
     let restored = false;
     evidence.attempted++;
     try {

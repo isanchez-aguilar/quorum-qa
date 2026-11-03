@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { randomUUID } from 'node:crypto';
 import { lstat, open, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -136,7 +137,7 @@ export async function runRefactorEvidence(context: ReviewContext, config: Quorum
   const testPresence = { base: new Set<string>(), head: new Set<string>() };
   for (const side of ['base', 'head'] as const) {
     let tree: Awaited<ReturnType<typeof createReviewWorktree>> | undefined;
-    const reportPath = path.join(os.tmpdir(), `quorum-refactor-${randomUUID()}.json`);
+    const reportPath = path.join(canonicalPath(os.tmpdir()), `quorum-refactor-${randomUUID()}.json`);
     try {
       tree = await createReviewWorktree(options.root, side === 'base' ? context.mergeBaseCommit ?? context.baseCommit : context.headCommit, options.gitRunner, options.warn, { checks: true });
       const read = async (file: string, apiSource = false): Promise<string | undefined> => {

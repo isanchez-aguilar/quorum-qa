@@ -2,7 +2,7 @@ import { runCascade } from '../../src/cascade/index.js';
 import { FakeProvider } from '../../src/providers/fake.js';
 import { validateConfig } from '../../src/config/schema.js';
 import { catalog } from '../fixtures/cascade.js';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { realpath, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -62,7 +62,7 @@ describe.skipIf(!gitPath)('synthetic git context', () => {
     expect(context.baseCommit).toBe(base);
     expect(context.requestedBaseCommit).toBe(base);
     expect(context.headCommit).toBe(head);
-    expect(path.resolve(context.worktreeRoot)).toBe(path.resolve(cwd));
+    expect(path.resolve(context.worktreeRoot)).toBe(await realpath(cwd));
     expect(context.touchedFiles).toEqual(['deleted.txt', 'new file.txt', 'sample.txt']);
     expect(await changedFiles(`${base}..${head}`, cwd, runner)).toEqual([
       { status: 'D', path: 'deleted.txt' }, { status: 'A', path: 'new file.txt' }, { status: 'M', path: 'sample.txt' },

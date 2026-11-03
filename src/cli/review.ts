@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { rawOutputWriter } from '../storage/raw.js';
 import { checkEvidence } from '../checks/output.js';
 import { completionTiming } from '../cascade/timing.js';
@@ -128,7 +129,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   if (mode === 'feature' && !flags.spec) throw new UsageError('--spec is required for feature mode.');
   if (flags.since && flags.diff) throw new UsageError('--since and --diff cannot be combined.');
   if (mode !== 'redesign' && flags.images) throw new UsageError('--images requires redesign mode.');
-  const root = path.resolve(dependencies.repoRoot ?? process.cwd());
+  const root = canonicalPath(dependencies.repoRoot ?? process.cwd());
   const runner = dependencies.gitRunner ?? runCommand;
   const now = dependencies.now ?? Date.now;
   const reviewStarted = now();

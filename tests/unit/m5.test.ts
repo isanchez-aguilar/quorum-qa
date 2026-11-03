@@ -1,5 +1,5 @@
 import { rmSync, writeFileSync } from 'node:fs';
-import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { realpath, mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -24,7 +24,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   } };
 });
 let root: string;
-beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), 'quorum-m5-unit-')); await writeFile(path.join(root, 'sample.ts'), source); });
+beforeEach(async () => { root = await realpath(await mkdtemp(path.join(tmpdir(), 'quorum-m5-unit-'))); await writeFile(path.join(root, 'sample.ts'), source); });
 afterEach(async () => { locked.path = ''; locked.match = undefined; await rm(root, { recursive: true, force: true }); });
 const config = () => validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
 

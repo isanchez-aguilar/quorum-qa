@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -50,7 +51,7 @@ async function confirmOnStdin(display: (text: string) => void, timeoutMs: number
 // Explicit host consent is needed for every revision execution. The report is read
 // from a fresh temporary file, never from a stale checkout artifact or stdout prose.
 async function runHostTest(worktree: string, testFile: string, config: QuorumConfig['reproduce'], runner: CommandRunner, timeoutMs: number) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'quorum-host-report-'));
+  const directory = await mkdtemp(path.join(canonicalPath(tmpdir()), 'quorum-host-report-'));
   const reportFile = path.join(directory, 'report.json');
   try {
     const argv = machineTestCommand(config.testCommand, reportFile, testFile).slice(1);

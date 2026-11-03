@@ -612,6 +612,17 @@ describe('verifyFinding: more cases', () => {
     expect(normalizePath(root, 'linked/new.ts')).toBeNull();
   });
 
+  it('rejects a path through a dangling directory link that could later point outside', async (ctx) => {
+    try {
+      await symlink(path.join(sandbox, 'not-created-yet'), path.join(root, 'dangling'), process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      ctx.skip(`this OS refused to create a directory link (${(error as Error).message})`);
+      return;
+    }
+    expect(normalizePath(root, 'dangling/new.ts')).toBeNull();
+    expect(normalizePath(root, 'dangling/deeper/new.ts')).toBeNull();
+  });
+
   it('rejects a symlinked file that points outside the root', async (ctx) => {
     const outside = path.join(sandbox, 'outside-file.ts');
     await writeFile(outside, `${QUOTE}\n`, 'utf8');

@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { homedir } from 'node:os';
 import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -75,8 +76,18 @@ export async function atomicWrite(file: string, text: string, repoRoot = process
 }
 
 async function assertRealParents(file: string, repoRoot: string): Promise<void> {
-  const root = path.resolve(repoRoot);
-  let current = path.dirname(path.resolve(file));
+  // Canonicalise only the root (8.3 aliases). The file's own components stay lexical and
+  // are rebased onto it, so the lstat walk below still sees every link instead of its target.
+  const lexicalRoot = path.resolve(repoRoot);
+  const root = canonicalPath(lexicalRoot);
+  const directory = path.dirname(path.resolve(file));
+  const below = (base: string) => {
+    const relative = path.relative(base, directory);
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ? undefined : relative;
+  };
+  const relativeDirectory = below(root) ?? below(lexicalRoot);
+  if (relativeDirectory === undefined) return;
+  let current = path.join(root, relativeDirectory);
   while (current !== root) {
     const relative = path.relative(root, current);
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
@@ -185,8 +196,8 @@ export function diskCache(root: string, warn: (message: string) => void, repoRoo
   const file = (key: string) => path.join(root, 'v1', key.slice(0, 2), `${key}.json`);
   let userKey: Promise<Buffer | undefined> | undefined;
   const secret = () => userKey ??= (async () => {
-    const keyFile = path.join(home, '.quorum', 'cache.key');
     try {
+      const keyFile = path.join(canonicalPath(home, true), '.quorum', 'cache.key');
       await mkdir(path.dirname(keyFile), { recursive: true, mode: 0o700 });
       const readKey = () => readFile(keyFile).catch(error => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;

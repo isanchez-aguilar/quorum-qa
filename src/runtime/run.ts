@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -259,7 +260,7 @@ export async function runRuntimeEvidence(context: ReviewContext, config: QuorumC
           '--mount', `type=bind,src=${deps.root},dst=/work`, '--mount', dependencyMount, deps.image, ...command]);
         if (setup.exitCode !== 0) throw new Error('setup failure');
       }
-      directory = await mkdtemp(path.join(os.tmpdir(), 'quorum-runtime-'));
+      directory = await mkdtemp(path.join(canonicalPath(os.tmpdir()), 'quorum-runtime-'));
       if (directory.includes(',') || /[\r\n\0]/.test(directory)) throw new Error('invalid script mount');
       for (const file of ['collector.cjs', 'runner.cjs', 'scrub.cjs']) await copyFile(new URL(`../../src/runtime/${file}`, import.meta.url), path.join(directory, file));
       const plan = { readyUrl: runtime.readyUrl, readyTimeoutSeconds: runtime.readyTimeoutSeconds,

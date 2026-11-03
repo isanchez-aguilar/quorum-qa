@@ -1,7 +1,8 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { realpath, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
+import { runtimeImageWorkspace } from '../../src/runtime/image-workspace.js';
 import { AgyProvider, AGY_NO_TOOLS } from '../../src/providers/agy.js';
 import { ClaudeProvider } from '../../src/providers/claude.js';
 import type { CommandRunner, ReviewContext } from '../../src/types/index.js';
@@ -12,7 +13,7 @@ it.each(['agy', 'claude'] as const)('gives %s only the image directory without a
   try {
     for (const image of images) await writeFile(image, Buffer.from([255, 216, 255, 1]));
     const runner = vi.fn<CommandRunner>(async (file, args, options) => {
-      expect(path.basename(file)).toBe(name); expect(options!.cwd).toBe(root);
+      expect(path.basename(file)).toBe(name); expect(options!.cwd).toBe(await realpath(root));
       expect(await readdir(root)).toEqual(['home-0-after.jpg', 'home-0-before.jpg']);
       const prompt = name === 'agy' ? args.find(arg => arg.startsWith('--print='))! : options!.stdin!;
       expect(prompt).toContain('home-0-before.jpg'); expect(prompt).toContain('home-0-after.jpg');
@@ -25,4 +26,21 @@ it.each(['agy', 'claude'] as const)('gives %s only the image directory without a
     expect(await provider.executeReview(context, 'synthetic', 'Compare images', { deadlineMs: 1000 })).toMatchObject({ rawOutput: '[]', worktreeClean: true });
     expect(runner).toHaveBeenCalledOnce();
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('refuses image paths reached through a junction even when their canonical parent is the workspace', async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'quorum-runtime-images-')));
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'quorum-image-link-'));
+  try {
+    const name = 'home-0-before.jpg';
+    await writeFile(path.join(root, name), Buffer.from([255, 216, 255, 1]));
+    const alias = path.join(outside, 'alias');
+    await symlink(path.dirname(root), alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const image = path.join(alias, path.basename(root), name);
+    const context: ReviewContext = { mode: 'runtime', worktreeRoot: root, images: [image], diff: '', touchedFiles: [], baseCommit: '', headCommit: '' };
+    await expect(runtimeImageWorkspace(context)).rejects.toThrow(/symlink/);
+  } finally {
+    await rm(outside, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
 });

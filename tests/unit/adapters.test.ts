@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile, access } from 'node:fs/promises';
+import { realpath, mkdtemp, readFile, rm, writeFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -173,7 +173,7 @@ describe('codex adapter', () => {
     const call = providerCalls()[0]!;
     expect(call.args).toEqual(['exec', '-C', call.options!.cwd!, '-s', 'read-only', '-o', outfile, '-']);
     expect(call.options!.stdin).toBe('prompt');
-    expect(path.relative(tmpdir(), outfile)).not.toMatch(/^\.\./);
+    expect(path.relative(await realpath(tmpdir()), outfile)).not.toMatch(/^\.\./);
     await expect(access(outfile)).rejects.toThrow();
   });
   it.each([false, true])('retries missing/empty output once, charging budget (empty=%s)', async empty => {

@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { lstat, open, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultConfig, validateConfig } from '../config/schema.js';
@@ -72,7 +73,7 @@ async function proposal(root: string): Promise<{ config: Record<string, unknown>
 
 export async function init(flags: ParsedFlags, positionals: string[], io: CliIo, dependencies: CliDependencies): Promise<number> {
   if (positionals.length || Object.keys(flags).some(key => !['dryRun', 'force'].includes(key))) throw new UsageError('Use quorum init [--dry-run] [--force].');
-  const root = path.resolve(dependencies.repoRoot ?? process.cwd());
+  const root = canonicalPath(dependencies.repoRoot ?? process.cwd());
   await requireWorktreeRoot(root, dependencies.gitRunner ?? runCommand);
   const configFile = path.join(root, 'quorum.config.json'); const ignoreFile = path.join(root, '.gitignore');
   const existing = await regularFile(configFile);

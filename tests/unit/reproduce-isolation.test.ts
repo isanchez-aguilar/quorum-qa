@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,7 +53,8 @@ const report = {
 };
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), 'quorum-isolation-'));
+  // Canonical, as the mount source is: TEMP may be an 8.3 alias on Windows.
+  root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'quorum-isolation-')));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0' }));
   await writeFile(path.join(root, 'pnpm-lock.yaml'), lock);
   hash = await dependencyKey(root, 'pnpm-lock.yaml', 'pnpm', '10.0.0', DEFAULT_REPRODUCE_IMAGE, false);

@@ -6,7 +6,7 @@ Quorum runs several AI coding CLIs over a git diff and reports only findings ver
 
 The [synthetic benchmark suite](docs/BENCHMARKS.md) measures recall, clean-change noise, severity, calls and wall time. Preview its cost with `node bench/run.mjs --dry-run` after building. Its twelve cases use general review by default; `--mode feature` retains the specifications for feature audits.
 
-Milestones M0 through M6 are implemented and merged (v1).
+Milestones M0 through M6 (v1) are implemented and merged, together with the later bughunt, contract, refactor and runtime modes, suppressions and rule mining.
 
 Verified on a real machine (Windows 11, agy 1.2.x, codex 0.160.0, Claude Code 2.1.285, a local Qwen server):
 - `quorum doctor` and `quorum doctor --probe`
@@ -14,13 +14,13 @@ Verified on a real machine (Windows 11, agy 1.2.x, codex 0.160.0, Claude Code 2.
 - The reproduction lane and escape test under Docker Desktop (engine 29.8.1, Linux): a real BLOCKER was confirmed by a second model family and reproduced by a failing test
 - Qwen: doctor probe against a real local server (one chat completion)
 - Claude Code: CLI present; review blocked by an expired login on the test machine
+- A pnpm + Turbo monorepo (Windows): `quorum init`, setup and checks in a disposable worktree, and general reviews of real pull requests with a cross-family second pass
 
 Not verified:
 - a full review through the Qwen or Claude adapters
 - Linux and macOS hosts
 - Podman
 - npm and Yarn repositories
-- Monorepos
 
 ## Requirements
 

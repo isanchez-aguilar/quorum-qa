@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { canonicalPath } from '../paths.js';
 import path from 'node:path';
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -17,19 +17,11 @@ function isInside(realRoot: string, target: string): boolean {
 
 // Resolves symlinks on the deepest ancestor that exists and re-appends the missing tail, so a
 // not-yet-existing file is still confined by the real location of its parent directories.
+// A dangling link on the way is refused, not mistaken for a missing directory that could
+// later be re-pointed outside the root.
 function realpathOfDeepestExisting(absolute: string): string | null {
-  const tail: string[] = [];
-  let current = absolute;
-  for (;;) {
-    try {
-      return path.join(realpathSync.native(current), ...tail.reverse());
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) return null;
-      tail.push(path.basename(current));
-      current = parent;
-    }
-  }
+  try { return canonicalPath(absolute, true); }
+  catch { return null; }
 }
 
 /**
@@ -55,7 +47,7 @@ export function normalizePath(root: string, relativePath: string): string | null
 
   let realRoot: string;
   try {
-    realRoot = realpathSync.native(root);
+    realRoot = canonicalPath(root);
   } catch {
     return null;
   }

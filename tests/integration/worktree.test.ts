@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, access, symlink, mkdir, utimes } from 'node:fs/promises';
+import { realpath, mkdtemp, rm, writeFile, access, symlink, mkdir, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -45,7 +45,7 @@ describe.skipIf(!gitPath)('disposable review worktrees', () => {
   it('creates detached head, detects tracked/untracked writes and cleans idempotently', async () => {
     const { root, sha, git } = await repository(true);
     const tree = await createReviewWorktree(root, sha, runner);
-    expect(tree.path.startsWith(path.join(root, '.quorum', 'worktrees'))).toBe(true);
+    expect(tree.path.startsWith(path.join(await realpath(root), '.quorum', 'worktrees'))).toBe(true);
     expect(await isClean(tree.path, runner)).toBe(true);
     const head = await runner(gitPath!, ['symbolic-ref', '-q', 'HEAD'], { cwd: tree.path });
     expect(head.exitCode).toBe(1);
@@ -64,6 +64,8 @@ describe.skipIf(!gitPath)('disposable review worktrees', () => {
     const active = await createReviewWorktree(root, sha, runner);
     const parent = path.join(root, '.quorum', 'worktrees');
     const stale = path.join(parent, 'stale'); const fresh = path.join(parent, 'fresh');
+    const dangling = path.join(parent, 'dangling');
+    await symlink(path.join(root, 'missing'), dangling, process.platform === 'win32' ? 'junction' : 'dir');
     await mkdir(stale); await mkdir(fresh);
     const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
     await utimes(stale, old, old); await utimes(active.path, old, old);

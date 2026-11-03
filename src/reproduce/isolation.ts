@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { machineTestCommand } from './command.js';
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -133,7 +134,8 @@ export async function prepareDependencies(worktreePath: string, config: QuorumCo
   let release: (() => void) | undefined;
   let lease: string | undefined;
   try {
-    const root = path.resolve(worktreePath);
+    // Canonical, so a container engine never receives an 8.3 alias it cannot resolve.
+    const root = canonicalPath(path.resolve(worktreePath));
     // Docker's --mount syntax treats commas as separators; reject rather than
     // letting a repository name alter the mount configuration.
     if (root.includes(',') || /[\r\n\0]/.test(root)) return failure('unsupported worktree mount path');
@@ -181,7 +183,7 @@ export async function prepareDependencies(worktreePath: string, config: QuorumCo
     const preparedImage = `quorum-prep:${hash}${suffix}`;
     volume = `quorum-deps-${hash}${suffix}`;
     release = await lockPreparation(volume);
-    context = await mkdtemp(path.join(os.tmpdir(), 'quorum-build-'));
+    context = await mkdtemp(path.join(canonicalPath(os.tmpdir()), 'quorum-build-'));
     // This context contains only this generated Dockerfile, never repository data.
     await writeFile(path.join(context, 'Dockerfile'), `FROM ${image}\nRUN ${JSON.stringify(['npm', 'install', '-g', `${managerName}@${manager[2]}`])}\nRUN ${JSON.stringify(['mkdir', '-p', '/work/node_modules'])}\nRUN ${JSON.stringify(['chown', user, '/work/node_modules'])}\n`, { flag: 'wx' });
     const imageExists = await invoke(['image', 'inspect', '--format', '{{ index .Config.Labels "quorum.preparation" }}', preparedImage]);

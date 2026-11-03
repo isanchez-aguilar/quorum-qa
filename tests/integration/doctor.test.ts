@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { realpath, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +23,7 @@ describe('doctor with synthetic executables and injected runner', () => {
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'qwen-test' }] }))));
-    root = await mkdtemp(path.join(tmpdir(), 'quorum-doctor-test-'));
+    root = await realpath(await mkdtemp(path.join(tmpdir(), 'quorum-doctor-test-')));
     home = path.join(root, 'home');
     const bin = path.join(root, 'bin');
     await mkdir(bin);

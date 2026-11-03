@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,7 @@ export async function command(context: CheckContext, name: string, args: string[
 }
 
 export function permissionPath(value: string): string {
+  value = canonicalPath(value, true);
   const normalized = value.replace(/\\/g, '/').replace(/^[a-z]:/i, '');
   return path.posix.normalize(normalized).replace(/\/$/, '') || '/';
 }
@@ -34,7 +36,7 @@ export async function checkPermissions(homedir: string, repoRoot: string): Promi
   let allowed = false;
   try {
     // PowerShell writes a UTF-8 BOM, which agy accepts and JSON.parse does not.
-    const text = (await readFile(path.join(homedir, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')).replace(/^﻿/, '');
+    const text = (await readFile(path.join(canonicalPath(homedir), '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')).replace(/^﻿/, '');
     const settings: unknown = JSON.parse(text);
     const allow = (settings as { permissions?: { allow?: unknown } } | null)?.permissions?.allow;
     const deny = (settings as { permissions?: { deny?: unknown } } | null)?.permissions?.deny;
@@ -43,7 +45,10 @@ export async function checkPermissions(homedir: string, repoRoot: string): Promi
       const match = /^read_file\(([^\r\n]+)\)$/.exec(entry);
       if (match?.[1] === '*') return true;
       if (!match || !match[1]!.startsWith('/')) return false;
-      let permitted = permissionPath(match[1]!.replace(/\/\*\*?$/, ''));
+      // agy rules carry no drive letter. Resolve them on the repository's drive, not the
+      // current directory's, or an 8.3 alias in the rule cannot be expanded.
+      const drive = process.platform === 'win32' ? /^[a-z]:/i.exec(canonicalPath(repoRoot, true))?.[0] ?? '' : '';
+      let permitted = permissionPath(drive + match[1]!.replace(/\/\*\*?$/, ''));
       let target = parent;
       if (process.platform === 'win32') { permitted = permitted.toLowerCase(); target = target.toLowerCase(); }
       return permitted === '/' || target === permitted || target.startsWith(`${permitted}/`);
@@ -113,7 +118,7 @@ export async function readProbe(provider: 'agy' | 'codex' | 'claude', model: str
         if (answer === undefined) throw new Error('Invalid response');
         output = answer;
       } else {
-        const temp = await mkdtemp(path.join(tmpdir(), 'quorum-doctor-'));
+        const temp = await mkdtemp(path.join(canonicalPath(tmpdir()), 'quorum-doctor-'));
         try {
           const file = path.join(temp, 'response.txt');
           const result = await command(context, 'codex', ['exec', '-C', worktree.path, '-s', 'read-only', '-o', file, '-'], worktree.path, prompt);

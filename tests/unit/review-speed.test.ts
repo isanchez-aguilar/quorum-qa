@@ -12,7 +12,6 @@ import { FakeProvider } from '../../src/providers/fake.js';
 import { ProviderError } from '../../src/providers/types.js';
 import type { ProviderAdapter } from '../../src/providers/types.js';
 import { catalog, context, FakeClock, finding, originRunner, source } from '../fixtures/cascade.js';
-import { fastest } from '../helpers/timing.js';
 
 let root: string;
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), 'quorum-speed-')); });
@@ -215,16 +214,23 @@ it('formats milliseconds without claiming summed overlapping phases as total', (
     .toBe('quorum: done in 2m 08s (checks 2m 00s ran in parallel with triage 28s)');
 });
 
-it('six 50 ms chunks finish under 60% of sequential time (best of three)', async () => {
+// Overlap is measured as calls in flight, not wall time: a loaded CI runner makes
+// the per-chunk git and verifier work dominate and turns a timing ratio into noise.
+it('six 50 ms chunks overlap up to the concurrency limit and never beyond it', async () => {
   const ctx = await chunks();
-  const provider = new FakeProvider('agy', 'google', originRunner(root), {});
-  provider.executeReview = async () => { await pause(50); return { rawOutput: '[]', durationMs: 50, worktreeClean: true }; };
-  const run = (concurrency: number) => runCascade(ctx, config(concurrency), new Map([['agy', provider]]), {
-    catalog, gitRunner: originRunner(root), clock: new FakeClock(),
-  });
-  const sequential = await fastest(() => run(1), 3);
-  const parallel = await fastest(() => run(3), 3);
-  expect(parallel / sequential).toBeLessThan(0.6);
+  const peakAt = async (concurrency: number) => {
+    let active = 0; let peak = 0;
+    const provider = new FakeProvider('agy', 'google', originRunner(root), {});
+    provider.executeReview = async () => {
+      peak = Math.max(peak, ++active);
+      try { await pause(50); } finally { active--; }
+      return { rawOutput: '[]', durationMs: 50, worktreeClean: true };
+    };
+    await runCascade(ctx, config(concurrency), new Map([['agy', provider]]), { catalog, gitRunner: originRunner(root), clock: new FakeClock() });
+    return peak;
+  };
+  expect(await peakAt(1)).toBe(1);
+  expect(await peakAt(3)).toBe(3);
 });
 
 it.each(['invalid', 'local'] as const)('keeps %s fallback and verification order identical', async scenario => {

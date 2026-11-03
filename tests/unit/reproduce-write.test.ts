@@ -88,14 +88,15 @@ describe('writeProposedTest', () => {
   it('counts UTF-8 bytes instead of characters', async () => {
     await expect(writeProposedTest(root, 'large.test.ts', 'é'.repeat(MAX_TEST_BYTES / 2 + 1), globs)).rejects.toThrow(/64 KiB/);
   });
-  it('exclusive create refuses a dangling leaf link', async context => {
-    try { await symlink(path.join(sandbox, 'missing'), path.join(root, 'a.test.ts'), 'file'); }
+  it.for(['file', 'dir', 'junction'] as const)('exclusive create refuses a dangling %s leaf link', async (type, context) => {
+    try { await symlink(path.join(sandbox, 'missing'), path.join(root, 'a.test.ts'), type); }
     catch (error) {
       if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-        context.skip('Windows refused file symlink creation'); return;
+        context.skip(`Windows refused ${type} symlink creation`); return;
       }
       throw error;
     }
+    expect((await lstat(path.join(root, 'a.test.ts'))).isSymbolicLink()).toBe(true);
     await expect(writeProposedTest(root, 'a.test.ts', 'test', globs)).rejects.toMatchObject({ code: 'EEXIST' });
     await expect(lstat(path.join(sandbox, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' });
   });

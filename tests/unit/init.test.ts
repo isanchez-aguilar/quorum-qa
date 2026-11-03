@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { realpath, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import { runCommand } from '../../src/process/runner.js';
 let temporary: string; let root: string; let home: string;
 const doctor = vi.fn<NonNullable<CliDependencies['runDoctor']>>(async () => []);
 beforeEach(async () => {
-  temporary = await mkdtemp(path.join(tmpdir(), 'quorum-init-'));
+  temporary = await realpath(await mkdtemp(path.join(tmpdir(), 'quorum-init-')));
   root = path.join(temporary, 'repo'); home = path.join(temporary, 'home');
   await mkdir(root); await mkdir(home);
   expect((await runCommand('git', ['init'], { cwd: root })).exitCode).toBe(0);

@@ -1,4 +1,5 @@
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { canonicalPath } from '../paths.js';
+import { lstat, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export const MAX_TEST_BYTES = 64 * 1024;
@@ -51,11 +52,11 @@ export async function writeProposedTest(
   }
   if (!testGlobs.some(glob => matchesTestGlob(relative, glob))) throw new Error('Proposed test does not match testGlobs.');
   if (Buffer.byteLength(content, 'utf8') > MAX_TEST_BYTES) throw new Error('Proposed test exceeds 64 KiB.');
-  const root = await realpath(worktreePath);
+  const root = canonicalPath(worktreePath);
   const checkDirectory = async (directory: string): Promise<void> => {
     const info = await lstat(directory);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Proposed test parent must be a real directory, not a symlink or junction.');
-    const actual = await realpath(directory);
+    const actual = canonicalPath(directory);
     const fromRoot = path.relative(root, actual);
     if (fromRoot === '..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) {
       throw new Error('Proposed test parent escapes the worktree.');
@@ -80,6 +81,14 @@ export async function writeProposedTest(
   // Providers have stopped before this walk. Like the verifier, this does not claim
   // protection against a concurrent host attacker replacing checked parent directories.
   const absolute = path.join(directory, segments.at(-1)!);
+  // Windows exclusive creation alone does not reliably reject dangling links.
+  // lstat checks the leaf itself, including file/dir symlinks with missing targets.
+  try {
+    await lstat(absolute);
+    throw Object.assign(new Error('Proposed test already exists.'), { code: 'EEXIST' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   await writeFile(absolute, content, { encoding: 'utf8', flag: 'wx' });
   return { absolute, relative };
 }

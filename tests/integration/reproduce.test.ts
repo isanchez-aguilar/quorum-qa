@@ -61,8 +61,10 @@ beforeEach(async () => {
   base = await git('rev-parse', 'HEAD');
   await writeFile(path.join(root, 'sample.ts'), source); await git('add', '.'); await git('commit', '-m', 'head');
   head = await git('rev-parse', 'HEAD');
-}, 20000);
-afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+  // A dozen git processes; a loaded Windows CI runner has needed more than 20 s.
+}, 60_000);
+// Windows can briefly keep a just-exited git process's files open (EBUSY).
+afterEach(async () => { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }, 60_000);
 
 async function review(runner: CommandRunner, flags: string[] = [], overrides: CliDependencies = {}) {
   const triage = new FakeProvider('agy', 'google', gitRunner, { flash: [JSON.stringify([finding({ severity: 'BLOCKER' })])] });

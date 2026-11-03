@@ -1,4 +1,5 @@
-import { lstat, realpath, rm } from 'node:fs/promises';
+import { canonicalPath } from '../paths.js';
+import { lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { git } from '../context/git.js';
 import type { CommandRunner } from '../types/index.js';
@@ -8,10 +9,10 @@ export async function cleanupWorktree(repo: string, parent: string, location: st
   if (path.dirname(path.resolve(location)) !== path.resolve(parent)) throw new Error('Worktree cleanup must stay inside its root.');
   const parentStat = await lstat(parent);
   if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new Error('Worktree cleanup root must be a real directory.');
-  if (options.expectedParent && await realpath(parent) !== options.expectedParent) throw new Error('Worktree cleanup root changed since creation.');
+  if (options.expectedParent && canonicalPath(parent) !== options.expectedParent) throw new Error('Worktree cleanup root changed since creation.');
   try {
     const stat = await lstat(location);
-    if (stat.isSymbolicLink() || path.dirname(await realpath(location)) !== await realpath(parent)) throw new Error('Worktree cleanup must stay inside its root.');
+    if (stat.isSymbolicLink() || path.dirname(canonicalPath(location)) !== canonicalPath(parent)) throw new Error('Worktree cleanup must stay inside its root.');
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const prune = async () => {
     const result = await git(['worktree', 'prune', '--expire', 'now'], repo, runner);

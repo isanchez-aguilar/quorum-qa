@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { createHash } from 'node:crypto';
 import { lstat, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -50,7 +51,8 @@ export function pairRuntimeShots(evidence: RuntimeEvidence): { pairs: VisualPair
 }
 
 export async function createVisualImages(root: string, pairs: VisualPair[]): Promise<VisualImages> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'quorum-runtime-images-'));
+  root = canonicalPath(root);
+  const directory = await mkdtemp(path.join(canonicalPath(os.tmpdir()), 'quorum-runtime-images-'));
   // Only delete this freshly created absolute path, never a path derived from page/model text.
   const cleanup = () => rm(directory, { recursive: true, force: true });
   try {

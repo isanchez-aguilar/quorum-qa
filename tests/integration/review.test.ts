@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { realpath, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +23,7 @@ async function git(...args: string[]) {
 const config = (checks: string[][] = []) => ({ base: 'base', checks, tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: ['agy:pro'] }, escalate: { focus: [], belowConfidence: 0.6 } });
 async function commitConfig(value = config()) { await writeFile(path.join(root, 'quorum.config.json'), JSON.stringify(value)); }
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'quorum-m5-'));
+  root = await realpath(await mkdtemp(path.join(tmpdir(), 'quorum-m5-')));
   await git('init'); await git('config', 'commit.gpgsign', 'false'); await git('config', 'core.autocrlf', 'false');
   await writeFile(path.join(root, '.gitignore'), '.quorum/\n');
   await writeFile(path.join(root, 'sample.ts'), 'export const value = 1;\n');
@@ -123,7 +123,7 @@ describe('M5 zero-quota review CLI', () => {
     await commitConfig({ ...config([[process.execPath, '--version']]), ...{ setup: [[process.execPath, '--help']] } });
     await git('add', '.'); await git('commit', '-m', 'synthetic setup config');
     const checkRunner = vi.fn<CommandRunner>(async (_file, args, opts) => {
-      expect(opts?.cwd).toContain(path.join('.quorum', 'worktrees'));
+      expect(opts?.cwd).toMatch(/[\\/]\.quorum[\\/](?:worktrees|wt)[\\/]/);
       expect(await readFile(path.join(opts!.cwd!, 'sample.ts'), 'utf8')).toBe(source);
       if (state === 'timeout') throw new CommandTimeoutError('', 'synthetic setup timeout');
       return { exitCode: state === 'failure' && args.includes('--help') ? 1 : 0, stdout: '', stderr: 'synthetic setup output' };
@@ -342,7 +342,7 @@ describe('M5 zero-quota review CLI', () => {
     await git('checkout', '-b', 'change'); await git('add', '.'); await git('commit', '-m', 'head checks');
     const checks: string[][] = [];
     const checkRunner: CommandRunner = async (_command, args, options) => {
-      checks.push(args); expect(options?.cwd).toContain(path.join('.quorum', 'worktrees'));
+      checks.push(args); expect(options?.cwd).toMatch(/[\\/]\.quorum[\\/](?:worktrees|wt)[\\/]/);
       expect(options?.cwd).not.toBe(root); return { stdout: 'failure tail', stderr: '', exitCode: 1 };
     };
     const provider = fake([JSON.stringify([finding({ confidence: 0.2 })])]);

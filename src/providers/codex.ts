@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,7 +22,7 @@ export class CodexProvider extends ProviderCommands implements ProviderAdapter {
     let directory: string | undefined;
     let failure: unknown;
     try {
-      directory = await mkdtemp(path.join(tmpdir(), 'quorum-codex-'));
+      directory = await mkdtemp(path.join(canonicalPath(tmpdir()), 'quorum-codex-'));
       const outfile = path.join(directory, 'response.txt');
       for (let attempt = 0; attempt < 2; attempt++) {
         const timeoutMs = remaining(options, started, this.now);

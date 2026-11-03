@@ -1,3 +1,4 @@
+import { canonicalPath } from '../paths.js';
 import { pathLengthCheck } from '../worktree/paths.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -20,7 +21,7 @@ export type { DoctorCheck } from './checks.js';
 export interface DoctorOptions { platform?: string; runner?: CommandRunner; env?: NodeJS.ProcessEnv; homedir?: string; repoRoot?: string; probe?: boolean; fetch?: typeof globalThis.fetch }
 
 export async function runDoctor(config: QuorumConfig | undefined, options: DoctorOptions = {}): Promise<DoctorCheck[]> {
-  const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: options.repoRoot ?? process.cwd() };
+  const context = { runner: options.runner ?? runCommand, env: options.env ?? process.env, repoRoot: canonicalPath(options.repoRoot ?? process.cwd()) };
   const results: DoctorCheck[] = [];
   results.push(...await checkSuppressions(context.repoRoot, context.runner, config?.base));
   if (!hasConfiguredTestCommand(config)) {

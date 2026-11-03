@@ -9,13 +9,25 @@
   "bin": {
     "quorum": "bin/quorum.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "!dist/**/*.map",
+    "src/runtime/*.cjs",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm build && vitest run"
+    "test": "pnpm build && vitest run",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm typecheck && pnpm test"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
