@@ -92,3 +92,12 @@ it('detects the replay from the full output, not the kept tail', async () => {
   const failed = await runDeterministicChecks([[process.execPath]], process.cwd(), async () => ({ exitCode: 1, stdout, stderr: '' }));
   expect(failed.results[0]?.cached).toBeUndefined();
 });
+
+it('reports the package version in SARIF', async () => {
+  const { version } = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string };
+  const sarif = JSON.parse(generateSarifReport([], report()));
+  expect(sarif.runs[0].tool.driver).toMatchObject({ name: 'Quorum', version });
+  let printed = '';
+  await main(['--version'], { out: text => { printed += text; }, err: () => {} });
+  expect(printed.trim()).toBe(version);
+});

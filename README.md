@@ -24,12 +24,21 @@ Not verified:
 
 ## Requirements
 
-- Node 22
-- pnpm
+- Node 22 or later
 - Git
+- pnpm, only to build from source
 - Your own logins for the providers you configure: Antigravity (`agy`), OpenAI Codex (`codex`) and optionally Claude Code (`claude`)
 - Docker (optional, required for containerized `--reproduce`)
 - A local OpenAI-compatible model server such as Qwen at `http://127.0.0.1:8080/v1` (optional, triage only; its findings never stand alone)
+
+## Install
+
+```sh
+npm install --global quorum-qa
+quorum --help
+```
+
+The package is `quorum-qa`; the command it installs is `quorum`. To try it without installing: `npx quorum-qa --help`.
 
 ## Install from source
 

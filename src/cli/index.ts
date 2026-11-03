@@ -1,6 +1,6 @@
 import { review, type ReviewDependencies } from './review.js';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { packageVersion } from '../version.js';
 import { ConfigError, loadConfig } from '../config/index.js';
 import { runDoctor } from '../doctor/index.js';
 import { parseArgs, UsageError } from './args.js';
@@ -130,11 +130,6 @@ Exit codes: 0 = complete coverage with no failing BLOCKER or error-severity rule
 or tool/config/usage error.
 `;
 
-function packageVersion(): string {
-  // Same depth from src/cli and from dist/cli.
-  const file = new URL('../../package.json', import.meta.url);
-  return (JSON.parse(readFileSync(file, 'utf8')) as { version: string }).version;
-}
 
 export async function main(
   argv: string[],

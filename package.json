@@ -1,11 +1,31 @@
 {
   "name": "quorum-qa",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A quorum of AI reviewers for your code. It reports only verified findings.",
   "license": "Apache-2.0",
+  "author": "Isaac Sanchez Aguilar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isanchez-aguilar/quorum-qa.git"
+  },
+  "homepage": "https://github.com/isanchez-aguilar/quorum-qa#readme",
+  "bugs": {
+    "url": "https://github.com/isanchez-aguilar/quorum-qa/issues"
+  },
+  "keywords": [
+    "code-review",
+    "ai",
+    "llm",
+    "qa",
+    "cli",
+    "gemini",
+    "codex",
+    "claude",
+    "multi-model",
+    "sarif"
+  ],
   "packageManager": "pnpm@9.15.0",
   "type": "module",
-  "private": true,
   "bin": {
     "quorum": "bin/quorum.js"
   },

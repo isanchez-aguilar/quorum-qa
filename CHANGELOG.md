@@ -5,7 +5,7 @@ All notable changes to Quorum are listed here. The format follows
 [Semantic Versioning](https://semver.org/). Until 1.0, a minor version may change
 configuration or report formats; each such change is listed here.
 
-## [Unreleased] — first public release (0.1.0)
+## [0.1.0] — first public release
 
 ### Review
 - `quorum review` runs a cascade of AI reviewers over a git diff (every mode except `runtime` without `--visual` and `refactor --deterministic-only`, which call no model):

@@ -10,7 +10,7 @@ The working name is **Quorum**, with the package name `quorum-qa`. A quorum is s
 | Veredicto | Spanish flavour that still reads in English | Harder for an English-speaking audience |
 
 Before choosing a name:
-- [ ] npm: `quorum-qa`, or a scoped `@<user>/quorum`
+- [x] npm: `quorum-qa`, unscoped (decided 2026-11-03; free on npm that day, and no punctuation variant such as `quorumqa` exists)
 - [ ] GitHub org or repo name
 - [ ] a domain (`.dev`)
 - [ ] a quick trademark search (USPTO TESS / IMPI in Mexico) in the software class

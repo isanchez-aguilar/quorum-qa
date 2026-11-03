@@ -1,4 +1,5 @@
 import { formatDuration } from '../cascade/timing.js';
+import { packageVersion } from '../version.js';
 import { createHash } from 'node:crypto';
 import type { CascadeResult } from '../cascade/index.js';
 import type { runDeterministicChecks } from '../checks/index.js';
@@ -155,7 +156,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
     level: check.timedOut ? 'warning' : 'error', message: { text: `${check.argv.join(' ')}: ${checkStatus(check)}` },
   }));
   return JSON.stringify({ $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0', runs: [{
-    tool: { driver: { name: 'Quorum', version: '0.0.0', rules } },
+    tool: { driver: { name: 'Quorum', version: packageVersion(), informationUri: 'https://github.com/isanchez-aguilar/quorum-qa', rules } },
     invocations: [{ executionSuccessful: result ? !result.errors.length && result.coverage.complete : true,
       ...(notifications.length ? { toolExecutionNotifications: notifications } : {}),
     }],
