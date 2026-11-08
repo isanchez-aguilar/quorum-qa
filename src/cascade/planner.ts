@@ -57,6 +57,7 @@ export function createExecutionPlan(context: ReviewContext, config: QuorumConfig
   for (const note of [...(context.contextNotes ?? []), ...payload.notes]) warnings.push(note);
   for (const file of payload.skippedFiles) warnings.push(file + ': skipped review; no diff content fits.');
   for (const item of payload.truncatedHunks) warnings.push(item.file + ': truncated hunk ' + item.hunk + '.');
+  for (const file of payload.generatedFiles) warnings.push(file + ': generated snapshot excluded from text review.');
   const confirmationReserve = Math.max(1, Math.floor(config.budget.maxCalls / 3));
   return { nowMs, confirmationReserve, context: structuredClone(context), config: structuredClone(config), tiers, routes, quotas, warnings: [...new Set(warnings)],
     chunkCount: payload.chunks.length, budgetCoversChunks: config.budget.maxCalls - confirmationReserve >= payload.chunks.length,

@@ -1,4 +1,5 @@
 import { formatDuration } from '../cascade/timing.js';
+import { NO_CHANGED_FILE_NOTE } from '../checks/output.js';
 import { packageVersion } from '../version.js';
 import { createHash } from 'node:crypto';
 import type { CascadeResult } from '../cascade/index.js';
@@ -44,7 +45,8 @@ const checkStatus = (check: NonNullable<ReviewResult['checks']>['results'][numbe
   if (check.timedOut) return `TIMED OUT after ${check.timeoutMs / 1000}s (exit ${check.exitCode})`;
   // Recorded only for passed checks: a failure ran at least its failing task here.
   const cached = check.exitCode === 0 && check.cached ? `; cached: ${check.cached}` : '';
-  return `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode}${cached})`;
+  const note = check.namesNoChangedFile && check.exitCode !== 0 ? `; ${NO_CHANGED_FILE_NOTE}` : '';
+  return `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode}${cached}${note})`;
 };
 
 function reproductionDetails(findings: Finding[]): string {
@@ -102,6 +104,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     `- Skipped: ${coverage.skippedFiles.map(cell).join(', ') || 'none'}`,
     `- Truncated: ${coverage.truncatedHunks.map(h => `${cell(h.file)} hunk ${h.hunk}`).join(', ') || 'none'}`,
     `- Binary: ${coverage.binaryFiles.map(cell).join(', ') || 'none'} (excluded from text review)`,
+    ...(coverage.generatedFiles?.length ? [`- Generated snapshots: ${coverage.generatedFiles.map(cell).join(', ')} (excluded from text review)`] : []),
     `- Lost: ${coverage.lostFindings.map(f => `${cell(f.reason)}: ${f.count}`).join(', ') || 'none'}`,
     ...(result.mode === 'feature' ? ['## Acceptance criteria', '| Criterion | Status |', '|---|---|',
       ...result.criteria.map((criterion, i) => `| AC${i + 1}: ${cell(criterion)} | ${all.some(f => new RegExp(`\\bAC${i + 1}\\b`, 'i').test(f.trigger + '\n' + f.impact)) ? 'unmet' : 'not assessed (no finding)'} |`)]
@@ -155,6 +158,8 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
   const notifications = (result?.checks?.results ?? []).filter(check => check.timedOut || check.exitCode !== 0).map(check => ({
     level: check.timedOut ? 'warning' : 'error', message: { text: `${check.argv.join(' ')}: ${checkStatus(check)}` },
   }));
+  // Excluded snapshots are a coverage fact, not a pass: say so next to the checks.
+  for (const file of result?.coverage.generatedFiles ?? []) notifications.push({ level: 'note', message: { text: `${file}: generated snapshot excluded from text review.` } });
   return JSON.stringify({ $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0', runs: [{
     tool: { driver: { name: 'Quorum', version: packageVersion(), informationUri: 'https://github.com/isanchez-aguilar/quorum-qa', rules } },
     invocations: [{ executionSuccessful: result ? !result.errors.length && result.coverage.complete : true,
@@ -162,7 +167,8 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
     }],
     properties: {
       coverage: { complete: result?.coverage.complete ?? true, skipped: result?.coverage.skippedFiles.length ?? 0,
-        lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0 },
+        lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0,
+        ...(result?.coverage.generatedFiles?.length ? { generatedFiles: result.coverage.generatedFiles } : {}) },
       unconfirmedCount: result?.unconfirmed.length ?? 0,
       ...(result ? { checks: result.checks } : {}),
       ...(result?.refactor ? { refactor: result.refactor } : {}),

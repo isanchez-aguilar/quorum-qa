@@ -1,5 +1,8 @@
 import { bytePrefix, byteTail } from '../process/runner.js';
 
+/** Not proof of anything: a removed export surfaces in an unchanged consumer, and some runners print no paths. */
+export const NO_CHANGED_FILE_NOTE = 'no changed file named in its output; origin unknown';
+
 /** Compact terminal output before applying the evidence byte limit. */
 export function summarizeCheckOutput(output: string, failed: boolean, cap = 4096): string {
   const lines = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/\r?\n/).map(line => line.split('\r').filter(Boolean).at(-1) ?? '');
@@ -16,10 +19,11 @@ export function summarizeCheckOutput(output: string, failed: boolean, cap = 4096
 }
 
 /** Keep metadata outside the shrinking output fields; never slice serialized JSON. */
-export function checkEvidence(checks: Array<{ argv: string[]; exitCode: number; timedOut: boolean; timeoutMs: number; stdoutTail: string; stderrTail: string }>, cap = 8192): string {
+export function checkEvidence(checks: Array<{ argv: string[]; exitCode: number; timedOut: boolean; timeoutMs: number; stdoutTail: string; stderrTail: string; namesNoChangedFile?: boolean }>, cap = 8192): string {
   const rows = checks.filter(check => check.exitCode !== 0 || check.timedOut).map(check => ({
     name: check.argv.join(' '), exitCode: check.exitCode,
     ...(check.timedOut ? { status: `TIMED OUT after ${check.timeoutMs / 1000}s` } : {}),
+    ...(check.namesNoChangedFile ? { note: NO_CHANGED_FILE_NOTE } : {}),
     stdout: check.stdoutTail, stderr: check.stderrTail,
   }));
   let outputCap = 4096;

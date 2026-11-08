@@ -43,7 +43,7 @@ export function resolveAuthorFamily(author: string): Family {
   );
 }
 
-export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author' | 'refactor' | 'runtime'>> {
+export function defaultConfig(): Required<Omit<QuorumConfig, 'checks' | 'setup' | 'author' | 'refactor' | 'runtime' | 'includeSnapshots'>> {
   return {
     context: { provider: 'git' },
     base: 'origin/main',
@@ -195,6 +195,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     'jules',
     'qwen',
     'context',
+    'includeSnapshots',
   ]) as Obj;
 
   const checks = readChecks(top.checks, r.issues);
@@ -206,6 +207,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     else r.issues.push('context.provider must be "git" or "codegraph"');
   }
   const base = r.string(top.base, 'base', defaults.base);
+  if (top.includeSnapshots !== undefined && typeof top.includeSnapshots !== 'boolean') r.issues.push('includeSnapshots must be a boolean');
 
   let author: string | undefined;
   if (top.author !== undefined) {
@@ -395,6 +397,7 @@ export function validateConfig(raw: unknown): QuorumConfig {
     base,
     checks,
     ...(setup === undefined ? {} : { setup }),
+    ...(top.includeSnapshots === true ? { includeSnapshots: true } : {}),
     tiers,
     escalate,
     budget,

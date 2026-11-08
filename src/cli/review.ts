@@ -228,6 +228,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const suppressionNotes = flags.trustHeadConfig ? [] : await suppressionChanges(trustBase, head, root, runner);
   if (flags.author) config.author = flags.author;
   if (config.author) context.authorFamily = resolveAuthorFamily(config.author);
+  if (config.includeSnapshots) context.includeSnapshots = true;
   for (const [flag, property] of [['spec', 'specContent'], ['inventory', 'inventoryContent'], ['rules', 'rulesContent']] as const) {
     if (flags[flag] && !(mode === 'general' && flag === 'spec')) {
       const file = path.resolve(root, flags[flag]);
@@ -316,7 +317,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
           const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand, options);
           if (!setup.passed) checks = setup;
           else {
-            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand, options);
+            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand, { ...options, changedFiles: context.touchedFiles });
             checks = { passed: checked.passed, results: [...setup.results, ...checked.results] };
           }
         }

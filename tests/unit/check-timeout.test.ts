@@ -101,3 +101,19 @@ it('reports the package version in SARIF', async () => {
   await main(['--version'], { out: text => { printed += text; }, err: () => {} });
   expect(printed.trim()).toBe(version);
 });
+
+it('keeps a failure that names no changed file as FAILED, with a neutral note and the same count and SARIF level', () => {
+  const named = { ...timeout, timedOut: false, argv: ['pnpm', 'typecheck'] };
+  const unnamed = { ...timeout, timedOut: false, argv: ['pnpm', 'run', 'lint'], namesNoChangedFile: true };
+  const markdown = generateMarkdownReport(report([named, unnamed]));
+  expect(markdown).toContain('pnpm typecheck: FAILED (exit 1)');
+  expect(markdown).toContain('pnpm run lint: FAILED (exit 1; no changed file named in its output; origin unknown)');
+  expect(markdown).toContain('2 failed deterministic checks · 0 checks timed out');
+  expect(markdown).not.toContain('pre-existing');
+  const sarif = JSON.parse(generateSarifReport([], report([named, unnamed])));
+  expect(sarif.runs[0].invocations[0].toolExecutionNotifications.map((item: { level: string }) => item.level)).toEqual(['error', 'error']);
+});
+
+it('adds no note to a failure that names a changed file', () => {
+  expect(generateMarkdownReport(report([{ ...timeout, timedOut: false }]))).not.toContain('origin unknown');
+});
