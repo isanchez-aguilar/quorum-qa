@@ -316,7 +316,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
           const setup = await runDeterministicChecks(config.setup ?? [], checksTree.path, dependencies.checkRunner ?? runCommand, options);
           if (!setup.passed) checks = setup;
           else {
-            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand, options);
+            const checked = await runDeterministicChecks(config.checks, checksTree.path, dependencies.checkRunner ?? runCommand, { ...options, changedFiles: context.touchedFiles });
             checks = { passed: checked.passed, results: [...setup.results, ...checked.results] };
           }
         }
@@ -331,7 +331,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const settled = await checksPending!;
     if (!settled.ok) throw settled.error;
     context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : checkEvidence(checks?.results ?? []);
-    if (parallelChecks && checks?.results.some(check => !check.timedOut && check.exitCode !== 0)) warn('Deterministic checks failed after triage had started; triage ran without that context.');
+    if (parallelChecks && checks?.results.some(check => !check.timedOut && check.exitCode !== 0 && !check.preExisting)) warn('Deterministic checks failed after triage had started; triage ran without that context.');
   };
   try {
     const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);

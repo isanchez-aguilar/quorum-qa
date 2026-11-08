@@ -16,10 +16,11 @@ export function summarizeCheckOutput(output: string, failed: boolean, cap = 4096
 }
 
 /** Keep metadata outside the shrinking output fields; never slice serialized JSON. */
-export function checkEvidence(checks: Array<{ argv: string[]; exitCode: number; timedOut: boolean; timeoutMs: number; stdoutTail: string; stderrTail: string }>, cap = 8192): string {
+export function checkEvidence(checks: Array<{ argv: string[]; exitCode: number; timedOut: boolean; timeoutMs: number; stdoutTail: string; stderrTail: string; preExisting?: boolean }>, cap = 8192): string {
   const rows = checks.filter(check => check.exitCode !== 0 || check.timedOut).map(check => ({
     name: check.argv.join(' '), exitCode: check.exitCode,
     ...(check.timedOut ? { status: `TIMED OUT after ${check.timeoutMs / 1000}s` } : {}),
+    ...(check.preExisting ? { attribution: 'pre-existing (no changed file in its output)' } : {}),
     stdout: check.stdoutTail, stderr: check.stderrTail,
   }));
   let outputCap = 4096;

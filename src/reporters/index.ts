@@ -44,6 +44,7 @@ const checkStatus = (check: NonNullable<ReviewResult['checks']>['results'][numbe
   if (check.timedOut) return `TIMED OUT after ${check.timeoutMs / 1000}s (exit ${check.exitCode})`;
   // Recorded only for passed checks: a failure ran at least its failing task here.
   const cached = check.exitCode === 0 && check.cached ? `; cached: ${check.cached}` : '';
+  if (check.preExisting && check.exitCode !== 0) return `pre-existing failure (no changed file in its output) (exit ${check.exitCode})`;
   return `${check.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${check.exitCode}${cached})`;
 };
 
@@ -71,13 +72,14 @@ export function generateMarkdownReport(result: ReviewResult): string {
   const refactor = result.mode === 'refactor';
   const findingDetails = (findings: Finding[]) => details(findings, refactor);
   const timedOutChecks = result.checks?.results.filter(check => check.timedOut).length ?? 0;
+  const preExistingChecks = result.checks?.results.filter(check => check.preExisting && check.exitCode !== 0 && !check.timedOut).length ?? 0;
   return [
     '# Quorum QA Review Report', `**Run ID:** ${cell(result.runId)} · **Mode:** ${result.mode} · **Diff:** ${cell(result.range)}`,
     ...budget,
     ...(result.refactor ? [`**Verdict:** ${result.refactor.verdict}`] : []),
     `**Time:** ${cell(result.timestamp)} · Provider duration: ${(result.ledgerDraft.reduce((sum, row) => sum + row.durationMs, 0) / 1000).toFixed(2)}s`,
     ...(result.durations ? ['**Durations:** ' + Object.entries(result.durations).map(([phase, ms]) => `${phase} ${formatDuration(ms)}`).join(' · ')] : []),
-    `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 && !check.timedOut).length ?? 0} failed deterministic checks · ${timedOutChecks} ${timedOutChecks === 1 ? 'check' : 'checks'} timed out · Cache hits: ${result.cacheHits}`,
+    `**Status:** exit ${result.exitCode} · ${all.filter(f => f.severity === 'BLOCKER').length} Blockers Found · ${result.checks?.results.filter(check => check.exitCode !== 0 && !check.timedOut && !check.preExisting).length ?? 0} failed deterministic checks${preExistingChecks ? ` · ${preExistingChecks} pre-existing ${preExistingChecks === 1 ? 'failure' : 'failures'}` : ''} · ${timedOutChecks} ${timedOutChecks === 1 ? 'check' : 'checks'} timed out · Cache hits: ${result.cacheHits}`,
     '## Executive Summary', ...(refactor ? ['| Category | Suspected behaviour changes |', '|---|---:|',
       ...(['BLOCKER', 'IMPORTANT', 'OPTIONAL'] as const).map(severity => `| ${severity} | ${all.filter(f => f.severity === severity).length} |`)] : [
     '| Category | Introduced | Pre-existing | Improvement | Total |', '|---|---:|---:|---:|---:|',
@@ -154,7 +156,7 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
   ];
   // Only checks that did not pass are reported; a normal run keeps the plain invocation shape.
   const notifications = (result?.checks?.results ?? []).filter(check => check.timedOut || check.exitCode !== 0).map(check => ({
-    level: check.timedOut ? 'warning' : 'error', message: { text: `${check.argv.join(' ')}: ${checkStatus(check)}` },
+    level: check.timedOut || check.preExisting ? 'warning' : 'error', message: { text: `${check.argv.join(' ')}: ${checkStatus(check)}` },
   }));
   return JSON.stringify({ $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0', runs: [{
     tool: { driver: { name: 'Quorum', version: packageVersion(), informationUri: 'https://github.com/isanchez-aguilar/quorum-qa', rules } },

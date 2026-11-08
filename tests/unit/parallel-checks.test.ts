@@ -141,6 +141,19 @@ it.each(['BLOCKER', 'rule'] as const)('keeps exit 1 for %s even with a check tim
   expect(actual.result.coverage.complete).toBe(false);
 });
 
+it('hands the changed files to the checks and stays quiet about a failure that predates the change', async () => {
+  const inherited = { passed: false, results: [{ ...failed.results[0]!, preExisting: true }] };
+  vi.mocked(runDeterministicChecks).mockImplementation(async (commands, _directory, _runner, options) => {
+    if (commands[0]![1] !== 'setup.cjs') expect(options?.changedFiles).toEqual(context(root).touchedFiles);
+    else expect(options?.changedFiles).toBeUndefined();
+    return commands[0]![1] === 'setup.cjs' ? { passed: true, results: [] } : inherited;
+  });
+  const actual = await fixture().run();
+  expect(runDeterministicChecks).toHaveBeenCalledTimes(2);
+  expect(actual.result.warnings).not.toContain('Deterministic checks failed after triage had started; triage ran without that context.');
+  expect(actual.markdown).toContain('pre-existing failure (no changed file in its output)');
+});
+
 it('overlaps checks with triage, joins before confirmation, and preserves failed-check status', async () => {
   const order: string[] = [];
   let release!: () => void;

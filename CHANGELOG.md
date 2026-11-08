@@ -9,6 +9,7 @@ configuration or report formats; each such change is listed here.
 
 ### Changed
 - Generated test snapshots (`*.snap` and anything under `__snapshots__/`) are excluded from text review, like binary files: they no longer spend prompt budget or show up as truncated hunks. They are listed under "Generated snapshots" in the coverage section and in the warnings, and do not make the run incomplete. There is no opt-out yet.
+- A deterministic check that fails with none of the change's files in its output is reported as "pre-existing failure (no changed file in its output)" instead of FAILED, counted separately in the status line, and no longer triggers the "failed after triage had started" warning. Exit codes are unchanged. Setup commands are never classified.
 
 ## [0.1.1]
 

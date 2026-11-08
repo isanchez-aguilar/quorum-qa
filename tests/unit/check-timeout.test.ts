@@ -101,3 +101,18 @@ it('reports the package version in SARIF', async () => {
   await main(['--version'], { out: text => { printed += text; }, err: () => {} });
   expect(printed.trim()).toBe(version);
 });
+
+it('labels a failure that names no changed file as pre-existing, without changing the failed count semantics for real ones', () => {
+  const introduced = { ...timeout, timedOut: false, argv: ['pnpm', 'typecheck'] };
+  const inherited = { ...timeout, timedOut: false, argv: ['pnpm', 'run', 'lint'], preExisting: true };
+  const markdown = generateMarkdownReport(report([introduced, inherited]));
+  expect(markdown).toContain('pnpm typecheck: FAILED (exit 1)');
+  expect(markdown).toContain('pnpm run lint: pre-existing failure (no changed file in its output) (exit 1)');
+  expect(markdown).toContain('1 failed deterministic checks · 1 pre-existing failure · 0 checks timed out');
+  const sarif = JSON.parse(generateSarifReport([], report([introduced, inherited])));
+  expect(sarif.runs[0].invocations[0].toolExecutionNotifications.map((item: { level: string }) => item.level)).toEqual(['error', 'warning']);
+});
+
+it('omits the pre-existing count when every failure is real', () => {
+  expect(generateMarkdownReport(report([{ ...timeout, timedOut: false }]))).not.toContain('pre-existing');
+});
