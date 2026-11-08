@@ -5,6 +5,11 @@ All notable changes to Quorum are listed here. The format follows
 [Semantic Versioning](https://semver.org/). Until 1.0, a minor version may change
 configuration or report formats; each such change is listed here.
 
+## [Unreleased]
+
+### Changed
+- Generated test snapshots (`*.snap` and anything under `__snapshots__/`) are excluded from text review, like binary files: they no longer spend prompt budget or show up as truncated hunks. They are listed under "Generated snapshots" in the coverage section and in the warnings, and do not make the run incomplete. There is no opt-out yet.
+
 ## [0.1.1]
 
 ### Fixed

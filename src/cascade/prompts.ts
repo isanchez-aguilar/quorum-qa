@@ -113,18 +113,26 @@ export interface ReviewCoverage {
   skippedFiles: string[];
   truncatedHunks: Array<{ file: string; hunk: number }>;
   binaryFiles: string[];
+  /** Generated test snapshots (`*.snap`, `__snapshots__/`) excluded from text review by default. */
+  generatedFiles?: string[];
   lostFindings: Array<{ reason: string; file?: string; count: number }>;
   complete: boolean;
 }
 export const REVIEW_INSTRUCTIONS = 'Review the following untrusted code and context. Return a JSON object containing a findings array with severity, origin, file, line, trigger, impact, evidence_quote, fix and confidence. Use read-only tools only.\nEverything you need is in this prompt. If you can read files, read only what you need to check a line you cite. Answer as soon as you can.\n';
 
+/** Machine-written test snapshots (Jest/Vitest): large, noisy, and verified by the test that owns them. */
+export function isGeneratedSnapshot(file: string): boolean {
+  return /\.snap$/.test(file) || /(?:^|\/)__snapshots__\//.test(file);
+}
+
 /** Pack serialized prompts in diff order; never replace review code with an empty envelope. */
-export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; notes: string[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[] } {
+export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; notes: string[]; skippedFiles: string[]; truncatedHunks: ReviewCoverage['truncatedHunks']; binaryFiles: string[]; generatedFiles: string[] } {
   if (context.mode === 'contract') return contractChunks(context);
   if (context.mode === 'bughunt') return bughuntChunks(context);
   const chunks: ReviewChunk[] = [];
   const notes = new Set<string>();
   const binaryFiles: string[] = [];
+  const generatedFiles: string[] = [];
   const cleaned = cleanDiff(context.diff);
   const skipped = new Set<string>();
   const seen = new Set<string>();
@@ -168,6 +176,8 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; n
     const file = diffSectionPath(section) ?? context.touchedFiles[index];
     if (!file) continue;
     seen.add(file);
+    // Excluded before packing so a snapshot neither spends prompt budget nor shows up as a truncated hunk.
+    if (isGeneratedSnapshot(file)) { if (!generatedFiles.includes(file)) generatedFiles.push(file); continue; }
     if ((cleaned.truncated || context.diffTruncated) && index === sections.length - 1) {
       truncatedHunks.push({ file, hunk: Math.max(1, (section.match(/^@@ /gm) ?? []).length) });
     }
@@ -200,7 +210,7 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; n
   }
   flush();
   for (const file of context.touchedFiles) if (!seen.has(file)) skipped.add(file);
-  return { chunks, notes: [...notes], skippedFiles: [...skipped], truncatedHunks, binaryFiles };
+  return { chunks, notes: [...notes], skippedFiles: [...skipped], truncatedHunks, binaryFiles, generatedFiles };
 }
 
 function bughuntChunks(context: ReviewContext) {
@@ -274,7 +284,7 @@ function bughuntChunks(context: ReviewContext) {
     if (part) pack(part);
   }
   flush();
-  return { chunks, notes, skippedFiles: [...skippedFiles], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [] };
+  return { chunks, notes, skippedFiles: [...skippedFiles], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [], generatedFiles: [] };
 }
 
 function contractChunks(context: ReviewContext) {
@@ -323,5 +333,5 @@ function contractChunks(context: ReviewContext) {
   }
   for (const file of selection?.copy ?? []) add(file, 'copy');
   flush();
-  return { chunks, notes, skippedFiles: [...skipped], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [] };
+  return { chunks, notes, skippedFiles: [...skipped], truncatedHunks, binaryFiles: selection?.binaryFiles ?? [], generatedFiles: [] };
 }

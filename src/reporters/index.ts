@@ -102,6 +102,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     `- Skipped: ${coverage.skippedFiles.map(cell).join(', ') || 'none'}`,
     `- Truncated: ${coverage.truncatedHunks.map(h => `${cell(h.file)} hunk ${h.hunk}`).join(', ') || 'none'}`,
     `- Binary: ${coverage.binaryFiles.map(cell).join(', ') || 'none'} (excluded from text review)`,
+    ...(coverage.generatedFiles?.length ? [`- Generated snapshots: ${coverage.generatedFiles.map(cell).join(', ')} (excluded from text review)`] : []),
     `- Lost: ${coverage.lostFindings.map(f => `${cell(f.reason)}: ${f.count}`).join(', ') || 'none'}`,
     ...(result.mode === 'feature' ? ['## Acceptance criteria', '| Criterion | Status |', '|---|---|',
       ...result.criteria.map((criterion, i) => `| AC${i + 1}: ${cell(criterion)} | ${all.some(f => new RegExp(`\\bAC${i + 1}\\b`, 'i').test(f.trigger + '\n' + f.impact)) ? 'unmet' : 'not assessed (no finding)'} |`)]

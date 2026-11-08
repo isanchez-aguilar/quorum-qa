@@ -434,7 +434,7 @@ export async function runCascade(
   }
 
   [...(context.contextNotes ?? []), ...payload.notes].forEach(warn);
-  const coverage: ReviewCoverage = { reviewedFiles: [], skippedFiles: [...payload.skippedFiles], truncatedHunks: payload.truncatedHunks, binaryFiles: payload.binaryFiles, lostFindings: [], complete: false };
+  const coverage: ReviewCoverage = { reviewedFiles: [], skippedFiles: [...payload.skippedFiles], truncatedHunks: payload.truncatedHunks, binaryFiles: payload.binaryFiles, generatedFiles: payload.generatedFiles, lostFindings: [], complete: false };
   if (context.mode === 'bughunt') { coverage.reviewedWindows = []; coverage.skippedWindows = []; }
   function lost(reason: string, file?: string, count = 1): void {
     const existing = coverage.lostFindings.find(item => item.reason === reason && item.file === file);
@@ -569,6 +569,7 @@ export async function runCascade(
   coverage.complete = coverageComplete();
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
   for (const file of coverage.binaryFiles) warn(`${file}: binary file excluded from text review; visual review requires redesign mode with --images.`);
+  for (const file of coverage.generatedFiles ?? []) warn(`${file}: generated snapshot excluded from text review.`);
   for (const file of coverage.skippedFiles) warn(file + ': skipped review; budget, deadline, unavailable provider or no usable diff response.');
   for (const item of coverage.truncatedHunks) warn(item.file + ': truncated hunk ' + item.hunk + ' (diff or prompt limit).');
 
