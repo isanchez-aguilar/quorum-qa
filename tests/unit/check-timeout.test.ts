@@ -102,17 +102,18 @@ it('reports the package version in SARIF', async () => {
   expect(printed.trim()).toBe(version);
 });
 
-it('labels a failure that names no changed file as pre-existing, without changing the failed count semantics for real ones', () => {
-  const introduced = { ...timeout, timedOut: false, argv: ['pnpm', 'typecheck'] };
-  const inherited = { ...timeout, timedOut: false, argv: ['pnpm', 'run', 'lint'], preExisting: true };
-  const markdown = generateMarkdownReport(report([introduced, inherited]));
+it('keeps a failure that names no changed file as FAILED, with a neutral note and the same count and SARIF level', () => {
+  const named = { ...timeout, timedOut: false, argv: ['pnpm', 'typecheck'] };
+  const unnamed = { ...timeout, timedOut: false, argv: ['pnpm', 'run', 'lint'], namesNoChangedFile: true };
+  const markdown = generateMarkdownReport(report([named, unnamed]));
   expect(markdown).toContain('pnpm typecheck: FAILED (exit 1)');
-  expect(markdown).toContain('pnpm run lint: pre-existing failure (no changed file in its output) (exit 1)');
-  expect(markdown).toContain('1 failed deterministic checks · 1 pre-existing failure · 0 checks timed out');
-  const sarif = JSON.parse(generateSarifReport([], report([introduced, inherited])));
-  expect(sarif.runs[0].invocations[0].toolExecutionNotifications.map((item: { level: string }) => item.level)).toEqual(['error', 'warning']);
+  expect(markdown).toContain('pnpm run lint: FAILED (exit 1; no changed file named in its output; origin unknown)');
+  expect(markdown).toContain('2 failed deterministic checks · 0 checks timed out');
+  expect(markdown).not.toContain('pre-existing');
+  const sarif = JSON.parse(generateSarifReport([], report([named, unnamed])));
+  expect(sarif.runs[0].invocations[0].toolExecutionNotifications.map((item: { level: string }) => item.level)).toEqual(['error', 'error']);
 });
 
-it('omits the pre-existing count when every failure is real', () => {
-  expect(generateMarkdownReport(report([{ ...timeout, timedOut: false }]))).not.toContain('pre-existing');
+it('adds no note to a failure that names a changed file', () => {
+  expect(generateMarkdownReport(report([{ ...timeout, timedOut: false }]))).not.toContain('origin unknown');
 });

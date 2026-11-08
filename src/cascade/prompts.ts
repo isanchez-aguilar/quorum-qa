@@ -177,7 +177,7 @@ export function reviewChunks(context: ReviewContext): { chunks: ReviewChunk[]; n
     if (!file) continue;
     seen.add(file);
     // Excluded before packing so a snapshot neither spends prompt budget nor shows up as a truncated hunk.
-    if (isGeneratedSnapshot(file)) { if (!generatedFiles.includes(file)) generatedFiles.push(file); continue; }
+    if (!context.includeSnapshots && isGeneratedSnapshot(file)) { if (!generatedFiles.includes(file)) generatedFiles.push(file); continue; }
     if ((cleaned.truncated || context.diffTruncated) && index === sections.length - 1) {
       truncatedHunks.push({ file, hunk: Math.max(1, (section.match(/^@@ /gm) ?? []).length) });
     }

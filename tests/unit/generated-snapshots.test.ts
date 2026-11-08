@@ -3,7 +3,7 @@ import { runCascade } from '../../src/cascade/index.js';
 import { createExecutionPlan } from '../../src/cascade/planner.js';
 import { isGeneratedSnapshot, reviewChunks } from '../../src/cascade/prompts.js';
 import { validateConfig } from '../../src/config/schema.js';
-import { generateMarkdownReport, type ReviewResult } from '../../src/reporters/index.js';
+import { generateMarkdownReport, generateSarifReport, type ReviewResult } from '../../src/reporters/index.js';
 import { catalog, context, originRunner } from '../fixtures/cascade.js';
 
 const config = () => validateConfig({ checks: [], tiers: { triage: ['agy:flash'], review: ['agy:pro'], confirm: ['codex'], visual: [] } });
@@ -69,4 +69,30 @@ it('omits the generated-snapshot line when nothing was excluded', () => {
     calls: [], ledgerDraft: [], cacheHits: 0, reviewedFamilies: [],
     coverage: { complete: true, reviewedFiles: [], skippedFiles: [], truncatedHunks: [], binaryFiles: [], lostFindings: [] } } as unknown as ReviewResult);
   expect(markdown).not.toContain('Generated snapshots');
+});
+
+it('reviews snapshots again when includeSnapshots is set on the context', () => {
+  const payload = reviewChunks({ ...withSnapshot(), includeSnapshots: true });
+  expect(payload.generatedFiles).toEqual([]);
+  expect(payload.chunks.flatMap(chunk => chunk.files)).toContain(SNAPSHOT);
+});
+
+it('validates the includeSnapshots config key', () => {
+  expect(validateConfig({ checks: [] })).not.toHaveProperty('includeSnapshots');
+  expect(validateConfig({ checks: [], includeSnapshots: false })).not.toHaveProperty('includeSnapshots');
+  expect(validateConfig({ checks: [], includeSnapshots: true }).includeSnapshots).toBe(true);
+  expect(() => validateConfig({ checks: [], includeSnapshots: 'yes' })).toThrow('includeSnapshots must be a boolean');
+});
+
+it('lists excluded snapshots in SARIF as a note and in the coverage properties', () => {
+  const result = { runId: 'synthetic', timestamp: '', mode: 'feature', range: 'base...HEAD', headSha: 'b', baseSha: 'a', checks: null,
+    criteria: [], inventory: [], families: [], exitCode: 0, findings: [], unconfirmed: [], related: [], warnings: [], errors: [], calls: [],
+    ledgerDraft: [], cacheHits: 0, reviewedFamilies: [],
+    coverage: { complete: true, reviewedFiles: [], skippedFiles: [], truncatedHunks: [], binaryFiles: [], generatedFiles: [SNAPSHOT], lostFindings: [] } } as unknown as ReviewResult;
+  const run = JSON.parse(generateSarifReport([], result)).runs[0];
+  expect(run.invocations[0].toolExecutionNotifications).toEqual([{ level: 'note', message: { text: `${SNAPSHOT}: generated snapshot excluded from text review.` } }]);
+  expect(run.properties.coverage.generatedFiles).toEqual([SNAPSHOT]);
+  const clean = JSON.parse(generateSarifReport([], { ...result, coverage: { ...result.coverage, generatedFiles: [] } })).runs[0];
+  expect(clean.invocations[0]).not.toHaveProperty('toolExecutionNotifications');
+  expect(clean.properties.coverage).not.toHaveProperty('generatedFiles');
 });

@@ -343,7 +343,7 @@ describe('M5 zero-quota review CLI', () => {
     const checks: string[][] = [];
     const checkRunner: CommandRunner = async (_command, args, options) => {
       checks.push(args); expect(options?.cwd).toMatch(/[\\/]\.quorum[\\/](?:worktrees|wt)[\\/]/);
-      expect(options?.cwd).not.toBe(root); return { stdout: 'failure tail in sample.ts', stderr: '', exitCode: 1 };
+      expect(options?.cwd).not.toBe(root); return { stdout: 'failure tail', stderr: '', exitCode: 1 };
     };
     const provider = fake([JSON.stringify([finding({ confidence: 0.2 })])]);
     const confirmer = new FakeProvider('codex', 'openai', runner, { codex: ['{"decision":"reject"}'] });

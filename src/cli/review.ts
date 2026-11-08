@@ -228,6 +228,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const suppressionNotes = flags.trustHeadConfig ? [] : await suppressionChanges(trustBase, head, root, runner);
   if (flags.author) config.author = flags.author;
   if (config.author) context.authorFamily = resolveAuthorFamily(config.author);
+  if (config.includeSnapshots) context.includeSnapshots = true;
   for (const [flag, property] of [['spec', 'specContent'], ['inventory', 'inventoryContent'], ['rules', 'rulesContent']] as const) {
     if (flags[flag] && !(mode === 'general' && flag === 'spec')) {
       const file = path.resolve(root, flags[flag]);
@@ -331,7 +332,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const settled = await checksPending!;
     if (!settled.ok) throw settled.error;
     context.checksContext = flags.noChecks ? 'Checks skipped (--no-checks).' : checkEvidence(checks?.results ?? []);
-    if (parallelChecks && checks?.results.some(check => !check.timedOut && check.exitCode !== 0 && !check.preExisting)) warn('Deterministic checks failed after triage had started; triage ran without that context.');
+    if (parallelChecks && checks?.results.some(check => !check.timedOut && check.exitCode !== 0)) warn('Deterministic checks failed after triage had started; triage ran without that context.');
   };
   try {
     const ruleChecks = flags.noChecks ? null : await runRules(deterministicRules, context);

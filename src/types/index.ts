@@ -76,6 +76,7 @@ export interface ProviderResult {
 }
 
 export interface ReviewContext {
+  includeSnapshots?: boolean;
   refactorSummary?: string;
   contract?: import('../context/contract.js').ContractContext;
   rulesFile?: string;
@@ -102,6 +103,8 @@ export interface ReviewContext {
 }
 
 export interface QuorumConfig {
+  // Review generated test snapshots (`*.snap`, `__snapshots__/`) instead of excluding them. Default false.
+  includeSnapshots?: boolean;
   runtime?: import('../runtime/config.js').RuntimeConfig;
   refactor?: { testCommand?: string[]; timeoutSeconds?: number; mutation?: { maxMutants?: number; budgetSeconds?: number } };
   context?: { provider: 'git' | 'codegraph' };

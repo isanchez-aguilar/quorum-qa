@@ -562,7 +562,7 @@ export async function runCascade(
     }
     return remaining;
   });
-  const coverageComplete = () => !(context.mode === 'bughunt' && !context.bughunt?.windows.length) && !localOnlyFiles.size && !(context.mode !== 'bughunt' && context.touchedFiles.length > 0 && !coverage.reviewedFiles.length)
+  const coverageComplete = () => !(context.mode === 'bughunt' && !context.bughunt?.windows.length) && !localOnlyFiles.size && !(context.mode !== 'bughunt' && context.touchedFiles.some(file => !coverage.generatedFiles?.includes(file)) && !coverage.reviewedFiles.length)
     && !coverage.skippedWindows?.length
     && coverage.binaryFiles.every(file => coverage.reviewedFiles.includes(file))
     && !context.diffTruncated && !coverage.skippedFiles.length && !coverage.truncatedHunks.length && !coverage.lostFindings.length;

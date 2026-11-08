@@ -130,7 +130,7 @@ Set `budget.concurrency: 1` for the previous triage schedule.
 Setup and checks run sequentially in their own disposable worktree, concurrently
 with triage by default. Triage prompts say that checks are running and omit their
 output; escalation and confirmation wait for the failed-check summary. Failed
-checks add a warning that triage ran without that context. The timeout and exit
+checks add a warning that triage ran without that context. A failed check whose output names none of the change's files is annotated "no changed file named in its output; origin unknown"; that is a hint, not a verdict. The timeout and exit
 policy above applies in both modes. `--sequential-checks` (or `budget.sequentialChecks: true`)
 restores checks before triage and the previous prompt text. Refactor still waits
 for its evidence; runtime and `--no-checks` retain their existing behavior.
@@ -149,6 +149,8 @@ Runtime and refactor `--deterministic-only` keep the plain default of 12.
 above 12 on stderr, and Markdown/JSON reports include the resolved number and
 whether it was automatic. `--no-cache` does not affect scaling. Time limits,
 the confirmation reserve and provider quota-floor skipping are unchanged.
+
+Generated test snapshots (`*.snap` and anything under `__snapshots__/`) are excluded from text review by default, listed under "Generated snapshots" in the coverage section, the warnings and the SARIF notifications, and do not make a run incomplete. Set `includeSnapshots: true` in the trusted config to review them like any other file.
 
 `context.provider` defaults to `"git"`; set it to `"codegraph"` to add bounded, possibly stale symbol/caller context from an existing `.codegraph/` index and a shell-free CodeGraph executable on PATH (Quorum never creates or updates the index and falls back to git when unavailable).
 

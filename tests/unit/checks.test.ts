@@ -56,42 +56,57 @@ it.each([
   ['a full relative path', 'src/app/sample.ts(3,1): error TS2304', true],
   ['a bare file name from a package-relative run', 'FAIL  sample.ts > loads', true],
   ['a Windows absolute path', String.raw`C:\work\tree\src\app\sample.ts` + '\n  1:1  error  no-require-imports', true],
+  ['a Windows path whose case differs', String.raw`C:\Work\Tree\SRC\APP\Sample.TS(3,1): error`, true],
   ['colored output', '\x1b[31mFAIL\x1b[0m \x1b[1msample.ts\x1b[0m', true],
+  ['a name at the end of a sentence', 'could not parse sample.ts.', true],
   ['no file of the change', '/work/OfflineBanner.test.tsx\n  4:9  error  no-require-imports', false],
   ['the tail of a longer file name', 'my-sample.ts 1:1 error', false],
+  ['the head of a longer file name', 'src/app/sample.tsx(3,1): error', false],
+  ['the head of a longer extension chain', 'wrote sample.ts.map', false],
   ['empty output', '', false],
-])('attributes a failure to the change from %s: %s', async (_label, output, attributed) => {
+])('notes whether the output names a changed file from %s', async (_label, output, named) => {
   const runner: CommandRunner = async () => ({ exitCode: 1, stdout: '', stderr: output });
   const result = await runDeterministicChecks([['pnpm', 'run', 'lint']], process.cwd(), runner, { changedFiles: ['src/app/sample.ts'] });
   expect(result.passed).toBe(false);
   expect(result.results[0]).toMatchObject({ exitCode: 1, timedOut: false });
-  expect(result.results[0]?.preExisting).toBe(attributed ? undefined : true);
+  expect(result.results[0]?.namesNoChangedFile).toBe(named ? undefined : true);
 });
 
-it('judges attribution on the full output, not on the kept tail', async () => {
+it('keeps the failure and only flags the unknown origin when an unchanged consumer reports the error', async () => {
+  // The change removed an export from src/api.ts; TypeScript reports the break in src/consumer.ts.
+  const runner: CommandRunner = async () => ({ exitCode: 2, stdout: "src/consumer.ts(4,10): error TS2305: Module './api' has no exported member 'gone'.", stderr: '' });
+  const result = await runDeterministicChecks([['pnpm', 'typecheck']], process.cwd(), runner, { changedFiles: ['src/api.ts'] });
+  expect(result.passed).toBe(false);
+  expect(result.results[0]).toMatchObject({ exitCode: 2, namesNoChangedFile: true });
+  expect(result.results[0]).not.toHaveProperty('preExisting');
+});
+
+it('judges the output on the full text, not on the kept tail', async () => {
   const runner: CommandRunner = async () => ({ exitCode: 1, stdout: 'sample.ts failed\n' + 'noise\n'.repeat(5000), stderr: '' });
   const result = await runDeterministicChecks([['pnpm', 'test']], process.cwd(), runner, { changedFiles: ['sample.ts'] });
   expect(result.results[0]?.stdoutTail).not.toContain('sample.ts');
-  expect(result.results[0]?.preExisting).toBeUndefined();
+  expect(result.results[0]?.namesNoChangedFile).toBeUndefined();
 });
 
-it('never marks passes, timeouts, spawn errors or runs without a changed-file list as pre-existing', async () => {
+it('never flags passes, timeouts, spawn errors or runs without a changed-file list', async () => {
   const changedFiles = ['sample.ts'];
   const passed = await runDeterministicChecks([['a']], process.cwd(), async () => ({ exitCode: 0, stdout: '', stderr: '' }), { changedFiles });
-  expect(passed.results[0]?.preExisting).toBeUndefined();
+  expect(passed.results[0]?.namesNoChangedFile).toBeUndefined();
   const timed = await runDeterministicChecks([['a']], process.cwd(), async () => { throw new CommandTimeoutError('', 'deadline'); }, { changedFiles });
-  expect(timed.results[0]?.preExisting).toBeUndefined();
+  expect(timed.results[0]?.namesNoChangedFile).toBeUndefined();
   const spawnError = await runDeterministicChecks([['a']], process.cwd(), async () => { throw new Error('spawn ENOENT'); }, { changedFiles });
   expect(spawnError.results[0]).toMatchObject({ exitCode: 1 });
-  expect(spawnError.results[0]?.preExisting).toBeUndefined();
+  expect(spawnError.results[0]?.namesNoChangedFile).toBeUndefined();
   const unlisted = await runDeterministicChecks([['a']], process.cwd(), async () => ({ exitCode: 1, stdout: '', stderr: 'boom' }));
-  expect(unlisted.results[0]?.preExisting).toBeUndefined();
+  expect(unlisted.results[0]?.namesNoChangedFile).toBeUndefined();
   expect(unlisted.passed).toBe(false);
 });
 
-it('tells the models when a failing check predates the change', async () => {
+it('gives the models a neutral note, never a pre-existing claim', async () => {
   const { checkEvidence } = await import('../../src/checks/output.js');
   const base = { argv: ['pnpm', 'run', 'lint'], exitCode: 1, timedOut: false, timeoutMs: 1000, stdoutTail: 'x', stderrTail: 'y' };
-  expect(JSON.parse(checkEvidence([{ ...base, preExisting: true }]))[0]).toMatchObject({ attribution: 'pre-existing (no changed file in its output)' });
-  expect(JSON.parse(checkEvidence([base]))[0]).not.toHaveProperty('attribution');
+  const flagged = checkEvidence([{ ...base, namesNoChangedFile: true }]);
+  expect(JSON.parse(flagged)[0]).toMatchObject({ note: 'no changed file named in its output; origin unknown' });
+  expect(flagged).not.toContain('pre-existing');
+  expect(JSON.parse(checkEvidence([base]))[0]).not.toHaveProperty('note');
 });

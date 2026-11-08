@@ -8,8 +8,8 @@ configuration or report formats; each such change is listed here.
 ## [Unreleased]
 
 ### Changed
-- Generated test snapshots (`*.snap` and anything under `__snapshots__/`) are excluded from text review, like binary files: they no longer spend prompt budget or show up as truncated hunks. They are listed under "Generated snapshots" in the coverage section and in the warnings, and do not make the run incomplete. There is no opt-out yet.
-- A deterministic check that fails with none of the change's files in its output is reported as "pre-existing failure (no changed file in its output)" instead of FAILED, counted separately in the status line, and no longer triggers the "failed after triage had started" warning. Exit codes are unchanged. Setup commands are never classified.
+- Generated test snapshots (`*.snap` and anything under `__snapshots__/`) are excluded from text review, like binary files: they no longer spend prompt budget or show up as truncated hunks. They are listed under "Generated snapshots" in the coverage section, the warnings and the SARIF notifications, and do not make the run incomplete (a snapshot-only diff exits 0). Set `includeSnapshots: true` in the trusted config to review them.
+- A deterministic check that fails with none of the change's files named in its output keeps its FAILED status, count, SARIF error level and late-checks warning, and gains a neutral note, "no changed file named in its output; origin unknown", in the report line and in the evidence sent to the models. It is a hint only: a removed export surfaces in an unchanged consumer, and some runners print no paths. File matching is by whole name, case-insensitive. Setup commands are never annotated.
 
 ## [0.1.1]
 
