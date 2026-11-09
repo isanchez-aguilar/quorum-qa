@@ -1,4 +1,5 @@
 import { formatDuration } from '../cascade/timing.js';
+import { SKIP_REASONS, skipReasonCounts, skipRemedy, type ReviewSkipReason } from '../cascade/coverage.js';
 import { NO_CHANGED_FILE_NOTE } from '../checks/output.js';
 import { packageVersion } from '../version.js';
 import { createHash } from 'node:crypto';
@@ -102,6 +103,9 @@ export function generateMarkdownReport(result: ReviewResult): string {
       `- Clauses: ${(result.clauses ?? []).map((_, i) => `R${i + 1}`).join(', ')}`,
     ] : []),
     `- Skipped: ${coverage.skippedFiles.map(cell).join(', ') || 'none'}`,
+    ...(coverage.skippedFileReasons ?? []).map(({ file, reason }) => `- ${cell(file)}: skipped review; ${SKIP_REASONS[reason]}.${skipRemedy(reason)}`),
+    ...Object.entries(skipReasonCounts(coverage.skippedFileReasons ?? [])).map(([reason, count]) =>
+      `- Skipped summary: ${SKIP_REASONS[reason as ReviewSkipReason]}: ${count} file(s).`),
     `- Truncated: ${coverage.truncatedHunks.map(h => `${cell(h.file)} hunk ${h.hunk}`).join(', ') || 'none'}`,
     `- Binary: ${coverage.binaryFiles.map(cell).join(', ') || 'none'} (excluded from text review)`,
     ...(coverage.generatedFiles?.length ? [`- Generated snapshots: ${coverage.generatedFiles.map(cell).join(', ')} (excluded from text review)`] : []),
@@ -133,7 +137,7 @@ export function generateMarkdownReport(result: ReviewResult): string {
     ].join('\n')).join('\n\n') : 'None.',
     ...(result.mode === 'bughunt' ? ['## Points at the change (use feature mode)', details(result.pointsAtChange ?? [])] : []),
     '## Reproduction', reproductionDetails([...result.findings, ...result.unconfirmed]),
-    '## Deterministic checks', 'Checks execute the change\'s own code in a disposable HEAD worktree, just as CI does.',
+    '## Deterministic checks', 'Checks execute the change\'s own code in a disposable worktree at the reviewed head, just as CI does.',
     result.checks === null ? refactor ? 'Setup and suite tests are reported above for merge-base and HEAD.' : 'Skipped (--no-checks).' : result.checks.results.length ? result.checks.results.map(check =>
       `- ${cell(check.argv.join(' '))}: ${checkStatus(check)}\n\n${cell(check.stdoutTail + '\n' + check.stderrTail)}`).join('\n') : 'No checks configured.',
     '## Rule matches',
@@ -167,6 +171,8 @@ export function generateSarifReport(findings: Finding[], result?: ReviewResult):
     }],
     properties: {
       coverage: { complete: result?.coverage.complete ?? true, skipped: result?.coverage.skippedFiles.length ?? 0,
+        skippedFileReasons: result?.coverage.skippedFileReasons ?? [],
+        skipReasonCounts: skipReasonCounts(result?.coverage.skippedFileReasons ?? []),
         lost: result?.coverage.lostFindings.reduce((sum, item) => sum + item.count, 0) ?? 0,
         ...(result?.coverage.generatedFiles?.length ? { generatedFiles: result.coverage.generatedFiles } : {}) },
       unconfirmedCount: result?.unconfirmed.length ?? 0,

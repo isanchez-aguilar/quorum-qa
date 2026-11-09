@@ -53,7 +53,7 @@ Options for review:
                             Any textual signature change is breaking, including compatible
                             widening or an added optional parameter; review compatibility
   --radius <n>              Unchanged lines around hunks (bughunt; default 40, clamped 1-200)
-  --diff <range>             Git range to review, e.g. origin/main...HEAD
+  --diff <range>             Git range to review, e.g. origin/main...HEAD or main...feature-branch
   --spec <file>              Spec with the acceptance criteria (feature)
   --inventory <file>         Inventory of the old features (redesign)
   --images <dir>             Screenshots to review (redesign)
@@ -76,7 +76,7 @@ Options for review:
   --no-cache                Bypass cache reads and writes
   --no-checks               Skip deterministic checks; use with untrusted changes
   --sequential-checks       Finish checks before triage (budget.sequentialChecks: true)
-  --trust-head-config       Use committed HEAD config (own repos only)
+  --trust-head-config       Use the config committed at the reviewed head (own repos only)
 
 Options for doctor:
   --probe                    Run one read probe per provider (spends quota)
@@ -104,7 +104,7 @@ General:
   --help                     Print this help
   --version                  Print the version
 
---diff <sha>...HEAD trusts config at the merge-base of the range you chose.
+--diff <base>...<head> trusts config at the merge-base of the range you chose.
 Call budget defaults to clamp(3 x review chunks, 12, 40); budget.maxCalls pins it (1–200).
 Runtime and refactor --deterministic-only keep the default of 12. Quota floors still apply.
 Triage concurrency: budget.concurrency (1–6, default 3; 1 restores sequential triage).

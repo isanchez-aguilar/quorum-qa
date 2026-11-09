@@ -47,6 +47,53 @@ async function review(provider = fake(), args: string[] = [], dependencies: CliD
 }
 
 describe('M5 zero-quota review CLI', () => {
+  it.each(['branch', 'sha', 'ancestry'])('reviews a non-HEAD %s and runs checks at that commit', async kind => {
+    await commitConfig({ ...config([[process.execPath, '--version']]), ...{ context: { provider: 'codegraph' } } });
+    await git('add', '.'); await git('commit', '-m', 'lane configuration');
+    const reviewedHead = await git('rev-parse', 'HEAD');
+    await git('branch', 'lane', reviewedHead);
+    await writeFile(path.join(root, 'sample.ts'), 'export const unrelated = 999;\n');
+    await commitConfig();
+    await git('add', '.'); await git('commit', '-m', 'later lane');
+    const checkoutHead = await git('rev-parse', 'HEAD');
+    await writeFile(path.join(root, 'sample.ts'), 'dirty checkout content\n');
+    const before = await git('status', '--porcelain');
+    const provider = fake([JSON.stringify([finding()])]);
+    const execute = vi.spyOn(provider, 'executeReview');
+    const contextProvider = { name: 'codegraph', available: vi.fn(async () => true),
+      enrich: vi.fn(async () => ({ perFile: new Map([['sample.ts', 'wrong checkout context']]), notes: [] })) };
+    const checkRunner = vi.fn<CommandRunner>(async (_command, _args, options) => {
+      expect(options?.cwd).not.toBe(root);
+      expect(await readFile(path.join(options!.cwd!, 'sample.ts'), 'utf8')).toBe(source);
+      const revision = await runner('git', ['rev-parse', 'HEAD'], { cwd: options!.cwd });
+      expect(revision.stdout.trim()).toBe(reviewedHead);
+      return { exitCode: 0, stdout: 'checked selected head', stderr: '' };
+    });
+    const ref = kind === 'branch' ? 'lane' : kind === 'sha' ? reviewedHead : 'HEAD~1';
+    const result = await review(provider, ['--diff', `base...${ref}`, '--trust-head-config', '--no-cache'], { checkRunner, contextProvider });
+    expect(result.code, result.err).toBe(0);
+    expect(result.result?.headSha).toBe(reviewedHead);
+    expect(result.result?.findings).toContainEqual(expect.objectContaining({ verified: true, evidence_quote: finding().evidence_quote }));
+    expect(execute.mock.calls[0]?.[0].headCommit).toBe(reviewedHead);
+    expect(provider.calls[0]?.prompt).toContain('compute(input)');
+    expect(provider.calls[0]?.prompt).not.toMatch(/unrelated|dirty checkout|wrong checkout/);
+    expect(checkRunner).toHaveBeenCalledOnce();
+    expect(contextProvider.enrich).not.toHaveBeenCalled();
+    expect(result.result?.warnings.join(' ')).toContain('CodeGraph context skipped for a non-HEAD range');
+    expect(result.err).not.toContain('must end at HEAD');
+    expect(await git('rev-parse', 'HEAD')).toBe(checkoutHead);
+    expect(await git('status', '--porcelain')).toBe(before);
+    expect(await readFile(path.join(root, 'sample.ts'), 'utf8')).toBe('dirty checkout content\n');
+  });
+  it('rejects a missing review head clearly before calls or checks', async () => {
+    const provider = fake();
+    const checkRunner = vi.fn<CommandRunner>();
+    const result = await review(provider, ['--diff', 'base...missing-lane'], { checkRunner });
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('Cannot resolve review head: missing-lane');
+    expect(provider.calls).toEqual([]);
+    expect(checkRunner).not.toHaveBeenCalled();
+  });
   it('preserves dropped raw output with --no-cache and leaves exit semantics unchanged', async () => {
     const raw = JSON.stringify([{ ...finding(), severity: 'severe', trigger: 'synthetic dropped finding' }]);
     const { code, result } = await review(fake([raw]), ['--no-cache', '--sarif', '.quorum/dropped.sarif']);

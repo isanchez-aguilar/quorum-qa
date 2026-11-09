@@ -105,6 +105,8 @@ export interface ReviewChunk {
   windows?: ReviewWindow[];
 }
 export interface ReviewCoverage {
+  /** One entry per file/cause; separate chunks of a file can be skipped for different causes. */
+  skippedFileReasons?: import('./coverage.js').SkippedFileReason[];
   sensitiveChunks?: number;
   sensitiveSecondPasses?: number;
   reviewedWindows?: ReviewWindow[];

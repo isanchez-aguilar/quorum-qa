@@ -1,4 +1,5 @@
 import { isSensitiveChunk } from './sensitive.js';
+import { SKIP_REASONS, skipRemedy, type ReviewSkipReason } from './coverage.js';
 import type { PhaseDurations } from './timing.js';
 import { citedClause, contractClauses } from '../modes/index.js';
 import { fileExistsAtCommit } from '../context/git.js';
@@ -215,7 +216,11 @@ export async function runCascade(
     excludeLocal?: boolean; attempted?: Set<string>; preferOtherThan?: ReadonlySet<string>;
     refs?: readonly string[]; label?: string; firstOnly?: boolean;
     diagnostics?: { calls: CascadeCall[]; ledger: LedgerDraft[]; warnings: string[] };
+    skipReasons?: Set<ReviewSkipReason>;
   } = {}): Promise<CallResult | null> {
+    const stopped = (reason: ReviewSkipReason): null => { settings.skipReasons?.add(reason); return null; };
+    const limitReason = (): ReviewSkipReason => budget.deadlineExceeded || budget.remainingMs <= 0
+      ? 'run-deadline-reached' : 'budget-exhausted';
     const warn = (message: string) => {
       const target = settings.diagnostics?.warnings ?? warnings;
       if (!target.includes(message)) target.push(message);
@@ -225,7 +230,7 @@ export async function runCascade(
     while (true) {
       if (settings.firstOnly && attempted.size > firstAttempt) return null;
       if (settings.firstOnly && budget.calls >= triageLimit) return null;
-      if (errors.length) return null;
+      if (errors.length) return stopped('no-usable-response');
       const resolved = resolveTier(tier, config, catalog, snapshot, {
         nowMs: budget.clock.now(), authorFamily: context.authorFamily, excludeLocal: settings.excludeLocal,
         unavailableGroups: budget.unavailableGroups,
@@ -237,11 +242,11 @@ export async function runCascade(
       if (settings.requireIndependent && !independent.length) return null;
       resolved.warnings.forEach(warn);
       let entry = (independent.length ? independent : resolved.models)[0];
-      if (!entry) return null;
+      if (!entry) return stopped('no-provider-available');
       if (settings.preferOtherThan?.size && !independent.length) {
         warn(`Independence rule cannot be met in ${settings.label ?? tier}: only the finding's own family (${entry.family}) is available.`);
       }
-      if (budget.remainingMs <= 0) { warn(BUDGET_WARNING); return null; }
+      if (budget.remainingMs <= 0) { warn(BUDGET_WARNING); return stopped('run-deadline-reached'); }
       const ref = modelRef(entry);
       attempted.add(ref);
       if (quotaStatus(entry, snapshot, config.budget.quotaFloorPercent, budget.clock.now()) === 'unchecked') warn(`${entry.quotaGroup}: unknown quota; floor unchecked.`);
@@ -277,12 +282,12 @@ export async function runCascade(
             parsed, chunkIndex < 0 ? null : chunkIndex);
         }
       }
-      if (settings.optionalSecondPass && budget.calls >= triageLimit) return null;
-      if (purpose === 'review' && !mandatoryEscalationDone && initial.some(needsEscalation) && budget.calls >= triageLimit) return null;
+      if (settings.optionalSecondPass && budget.calls >= triageLimit) return stopped('budget-exhausted');
+      if (purpose === 'review' && !mandatoryEscalationDone && initial.some(needsEscalation) && budget.calls >= triageLimit) return stopped('budget-exhausted');
       // Until ordered verification has established whether escalation is needed,
       // speculative calls must leave the confirmation reserve untouched.
       if (settings.firstOnly && budget.calls >= triageLimit) { attempted.delete(ref); return null; }
-      if (!budget.allowed) { warn(BUDGET_WARNING); return null; }
+      if (!budget.allowed) { warn(BUDGET_WARNING); return stopped(limitReason()); }
       if (errors.length) return null;
       if (budget.unavailableGroups.has(entry.quotaGroup) || unavailable.has(ref)) continue;
       (settings.diagnostics?.calls ?? calls).push(call);
@@ -330,7 +335,7 @@ export async function runCascade(
         if (call.status === 'timeout') {
           ledger.timedOutCalls = 1;
           if (budget.deadlineExceeded) warn(BUDGET_WARNING);
-          if (tier === 'triage' || budget.deadlineExceeded) return null;
+          if (tier === 'triage' || budget.deadlineExceeded) return stopped(budget.deadlineExceeded ? 'run-deadline-reached' : 'no-usable-response');
         }
       }
     }
@@ -434,7 +439,8 @@ export async function runCascade(
   }
 
   [...(context.contextNotes ?? []), ...payload.notes].forEach(warn);
-  const coverage: ReviewCoverage = { reviewedFiles: [], skippedFiles: [...payload.skippedFiles], truncatedHunks: payload.truncatedHunks, binaryFiles: payload.binaryFiles, generatedFiles: payload.generatedFiles, lostFindings: [], complete: false };
+  const skippedFileReasons: NonNullable<ReviewCoverage['skippedFileReasons']> = payload.skippedFiles.map(file => ({ file, reason: 'no-diff-content' }));
+  const coverage: ReviewCoverage = { skippedFileReasons, reviewedFiles: [], skippedFiles: [...payload.skippedFiles], truncatedHunks: payload.truncatedHunks, binaryFiles: payload.binaryFiles, generatedFiles: payload.generatedFiles, lostFindings: [], complete: false };
   if (context.mode === 'bughunt') { coverage.reviewedWindows = []; coverage.skippedWindows = []; }
   function lost(reason: string, file?: string, count = 1): void {
     const existing = coverage.lostFindings.find(item => item.reason === reason && item.file === file);
@@ -468,7 +474,7 @@ export async function runCascade(
   const localChunks: typeof payload.chunks = [];
   const localReviewedChunks = new Set<typeof payload.chunks[number]>();
   const concurrency = Math.min(config.budget.concurrency ?? 3, payload.chunks.length);
-  const outcomes = payload.chunks.map(() => ({ response: null as CallResult | null, attempted: new Set<string>(),
+  const outcomes = payload.chunks.map(() => ({ response: null as CallResult | null, attempted: new Set<string>(), skipReasons: new Set<ReviewSkipReason>(),
     diagnostics: { calls: [] as CascadeCall[], ledger: [] as LedgerDraft[], warnings: [] as string[] } }));
   let waveEnd = 0;
   for (const [index, chunk] of payload.chunks.entries()) {
@@ -484,7 +490,7 @@ export async function runCascade(
         const settled = await Promise.allSettled(payload.chunks.slice(index, waveEnd).map(async (item, offset) => {
           const outcome = outcomes[index + offset]!;
           outcome.response = await invoke('triage', item.prompt, 'review', {
-            firstOnly: true, attempted: outcome.attempted, diagnostics: outcome.diagnostics,
+            firstOnly: true, attempted: outcome.attempted, diagnostics: outcome.diagnostics, skipReasons: outcome.skipReasons,
           });
         }));
         const failed = settled.find(item => item.status === 'rejected');
@@ -496,16 +502,16 @@ export async function runCascade(
     calls.push(...outcome.diagnostics.calls);
     ledgerDraft.push(...outcome.diagnostics.ledger);
     outcome.diagnostics.warnings.forEach(warn);
-    const triage = index >= waveEnd ? await invoke('triage', chunk.prompt, 'review')
+    const triage = index >= waveEnd ? await invoke('triage', chunk.prompt, 'review', { skipReasons: outcome.skipReasons })
       : outcome.response ?? (outcome.diagnostics.calls.at(-1)?.status === 'timeout' ? null
-        : await invoke('triage', chunk.prompt, 'review', { attempted: outcome.attempted }));
+        : await invoke('triage', chunk.prompt, 'review', { attempted: outcome.attempted, skipReasons: outcome.skipReasons }));
     let reviewed = triage ? await readReview(triage, index) : null;
     let reviewFamily = triage?.entry.family;
     if (triage && reviewed?.length === 0 && sensitive.has(chunk)) sensitiveEmpty.push({ chunk, family: triage.entry.family });
     if (reviewed === null) {
       const attempted = new Set<string>();
       while (reviewed === null) {
-        const response = await invoke('review', chunk.prompt, 'review', { attempted, excludeLocal: true });
+        const response = await invoke('review', chunk.prompt, 'review', { attempted, excludeLocal: true, skipReasons: outcome.skipReasons });
         if (!response) break;
         reviewed = await readReview(response, payload.chunks.indexOf(chunk));
         reviewFamily = response.entry.family;
@@ -513,6 +519,14 @@ export async function runCascade(
     }
     if (reviewed === null) {
       coverage.skippedFiles.push(...chunk.files);
+      // Capture the stopping condition for this chunk, before later calls change the budget.
+      // A failed response takes precedence over an exhausted provider list, but a blocked
+      // fallback records the budget/deadline that actually prevented it from running.
+      const chunkCalls = calls.slice(callStart);
+      if (chunkCalls.some(call => ['invalid', 'dirty', 'timeout', 'error'].includes(call.status))) outcome.skipReasons.add('no-usable-response');
+      const reason = (['run-deadline-reached', 'budget-exhausted', 'no-usable-response', 'no-provider-available'] as const)
+        .find(reason => outcome.skipReasons.has(reason)) ?? 'no-provider-available';
+      for (const file of chunk.files) if (!skippedFileReasons.some(item => item.file === file && item.reason === reason)) skippedFileReasons.push({ file, reason });
       const invalid = calls.slice(callStart).filter(call => call.status === 'invalid').length;
       if (invalid) lost('invalid response', undefined, invalid);
     }
@@ -570,7 +584,7 @@ export async function runCascade(
   for (const item of coverage.lostFindings) warn(`${item.file ?? 'Review'}: lost findings: ${item.reason} (${item.count}).`);
   for (const file of coverage.binaryFiles) warn(`${file}: binary file excluded from text review; visual review requires redesign mode with --images.`);
   for (const file of coverage.generatedFiles ?? []) warn(`${file}: generated snapshot excluded from text review.`);
-  for (const file of coverage.skippedFiles) warn(file + ': skipped review; budget, deadline, unavailable provider or no usable diff response.');
+  for (const { file, reason } of skippedFileReasons) warn(`${file}: skipped review; ${SKIP_REASONS[reason]}.${skipRemedy(reason)}`);
   for (const item of coverage.truncatedHunks) warn(item.file + ': truncated hunk ' + item.hunk + ' (diff or prompt limit).');
 
   async function confirm(finding: Finding, tier: 'review' | 'confirm', preferOtherThan: ReadonlySet<string> = new Set([finding.family])): Promise<Candidate | null> {
