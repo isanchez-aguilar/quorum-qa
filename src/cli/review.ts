@@ -157,7 +157,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const parts = /^(.+?)(\.{2,3})([^.].*)$/.exec(range);
   if (!parts) throw new UsageError('Invalid range; expected <base>..<head> or <base>...<head>.');
   try { head = await revParse(parts[3]!, root, runner); }
-  catch { throw new UsageError(`Cannot resolve review head: ${parts[3]}. Expected an existing commit or branch.`); }
+  catch (err) {
+    const detail = err instanceof Error && err.message ? ` (${err.message})` : "";
+    throw new UsageError(`Cannot resolve review head: ${parts[3]}. Expected an existing commit or branch${detail}.`);
+  }
   if (flags.trustHeadConfig && !headConfig) headConfig = await configAt(head, root, runner);
   if (mode === 'runtime') {
     const base = flags.since && !headConfig ? (await bootstrapConfig()).base : parts[1]!;
