@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCascade } from '../../src/cascade/index.js';
-import { BUDGET_WARNING } from '../../src/cascade/budget.js';
+import { BUDGET_WARNING, RunBudget } from '../../src/cascade/budget.js';
+import { SKIP_REASONS, skipReasonCounts, skipRemedy } from '../../src/cascade/coverage.js';
+import { generateMarkdownReport, generateSarifReport, type ReviewResult } from '../../src/reporters/index.js';
 import { validateConfig } from '../../src/config/schema.js';
 import { FakeProvider, type FakeResponse } from '../../src/providers/fake.js';
 import type { QuorumConfig } from '../../src/types/index.js';
@@ -26,6 +28,68 @@ describe('fake provider cascade', () => {
       new FakeProvider(name, name === 'qwen' ? 'local' : name === 'codex' ? 'openai' : 'google', originRunner(root), responses)]));
   }
   const yes = (fields = {}) => JSON.stringify({ decision: 'confirm', evidence_quote: finding().evidence_quote, ...fields });
+
+  it.each(['budget-exhausted', 'run-deadline-reached', 'no-provider-available', 'no-usable-response'] as const)(
+    'records and reports the actual skipped-file cause: %s', async reason => {
+      const clock = new FakeClock();
+      const cfg = config({ budget: { maxCalls: 3, maxMinutes: 1 } });
+      const budget = new RunBudget(cfg.budget, clock);
+      if (reason === 'budget-exhausted') budget.calls = 3;
+      if (reason === 'run-deadline-reached') clock.advance(60000);
+      const pool = reason === 'no-provider-available' ? new Map() : providers({ agy: { flash: ['invalid'], pro: ['invalid'] } });
+      const cascade = await runCascade(context(root), cfg, pool, { catalog, budget, gitRunner: originRunner(root) });
+      expect(cascade.coverage.skippedFiles).toEqual(['sample.ts']);
+      expect(cascade.coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason }]);
+      expect(cascade.coverage.complete).toBe(false);
+      expect(cascade.warnings).toContain(`sample.ts: skipped review; ${SKIP_REASONS[reason]}.${skipRemedy(reason)}`);
+      const result: ReviewResult = { ...cascade, runId: 'synthetic', timestamp: '', mode: 'general', range: 'base...lane',
+        headSha: 'b'.repeat(40), baseSha: 'a'.repeat(40), checks: null, criteria: [], inventory: [], families: [], exitCode: 2 };
+      const markdown = generateMarkdownReport(result);
+      expect(markdown).toContain(`sample.ts: skipped review; ${SKIP_REASONS[reason]}.`);
+      expect(markdown).toContain(`Skipped summary: ${SKIP_REASONS[reason]}: 1 file(s).`);
+      if (reason === 'budget-exhausted') expect(markdown).toContain('Raise budget.maxCalls or review per lane with a narrower --diff.');
+      if (reason === 'run-deadline-reached') expect(markdown).toContain('Raise budget.maxMinutes or review per lane with a narrower --diff.');
+      const coverage = JSON.parse(generateSarifReport([], result)).runs[0].properties.coverage;
+      expect(coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason }]);
+      expect(coverage.skipReasonCounts).toEqual({ [reason]: 1 });
+    });
+
+  it('keeps no usable response when the last invalid call also exhausts the budget', async () => {
+    const result = await runCascade(context(root), config({ budget: { maxCalls: 2 } }),
+      providers({ agy: { flash: ['invalid'], pro: ['invalid'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
+    expect(result.coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason: 'no-usable-response' }]);
+  });
+
+  it('records budget exhaustion when it prevents the fallback after an invalid response', async () => {
+    const result = await runCascade(context(root), config({ budget: { maxCalls: 1 } }),
+      providers({ agy: { flash: ['invalid'], pro: ['[]'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
+    expect(result.coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason: 'budget-exhausted' }]);
+  });
+
+  it('counts each file once per cause, including files skipped across multiple chunks', () => {
+    expect(skipReasonCounts([
+      { file: 'a.ts', reason: 'budget-exhausted' }, { file: 'a.ts', reason: 'budget-exhausted' },
+      { file: 'b.ts', reason: 'budget-exhausted' }, { file: 'a.ts', reason: 'run-deadline-reached' },
+    ])).toEqual({ 'budget-exhausted': 2, 'run-deadline-reached': 1 });
+  });
+
+  it('preserves earlier causes when later chunks exhaust the call budget', async () => {
+    const ctx = context(root);
+    ctx.touchedFiles = ['first.ts', 'second.ts', 'third.ts'];
+    ctx.diff = ctx.touchedFiles.map(file => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n+${'x'.repeat(15000)}\n`).join('');
+    const result = await runCascade(ctx, config({ budget: { maxCalls: 3, concurrency: 1 } }),
+      providers({ agy: { flash: ['invalid', '[]'], pro: ['invalid'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
+    expect(result.coverage.reviewedFiles).toEqual(['second.ts']);
+    expect(result.coverage.skippedFileReasons).toEqual([
+      { file: 'first.ts', reason: 'no-usable-response' }, { file: 'third.ts', reason: 'budget-exhausted' },
+    ]);
+  });
+
+  it.each(['unavailable', 'quota'] as const)('records no provider available after %s errors', async error => {
+    const result = await runCascade(context(root), config(), providers({ agy: { flash: [{ error }], pro: [{ error }] } }),
+      { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
+    expect(result.coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason: 'no-provider-available' }]);
+  });
 
   it('retains a fake provider finding quoted with a diff marker', async () => {
     const evidence_quote = '+' + finding().evidence_quote;
@@ -187,6 +251,7 @@ describe('fake provider cascade', () => {
     expect(result.ledgerDraft[0]).toMatchObject({ timedOutCalls: 1, durationMs: 60_000 });
     expect(pool.get('agy')!.calls[0]!.aborted).toBe(true);
     expect(result.warnings).toContain(BUDGET_WARNING);
+    expect(result.coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason: 'run-deadline-reached' }]);
     expect(clock.pending).toBe(0);
   });
 
@@ -337,6 +402,7 @@ describe('fake provider cascade', () => {
     const result = await runCascade(ctx, config(), providers({ agy: { flash: ['[]'] } }), { catalog, clock: new FakeClock(), gitRunner: originRunner(root) });
     expect(result.calls).toHaveLength(0);
     expect(result.coverage).toMatchObject({ complete: false, skippedFiles: ['sample.ts'] });
+    expect(result.coverage.skippedFileReasons).toEqual([{ file: 'sample.ts', reason: 'no-diff-content' }]);
   });
   it('counts findings left at the verification deadline', async () => {
     const clock = new FakeClock();

@@ -248,7 +248,7 @@ omitted.
 - **Cascade:** Diff chunks go to a cheap triage model first. A finding escalates to the confirm tier when it is a BLOCKER, touches a focus area (money, auth, permissions), has low confidence, or comes only from a local model; unparseable answers go to the review tier.
 - **Verifier:** Every finding must point at a real file inside the repo, and its quote must match the code (exactly, or near-exactly with the same operators, literals and identifiers). Anything else is dropped.
 - **Dedupe:** Findings merge only on a strong textual match a few lines apart. Similar-looking findings are kept separate and marked as possibly related, and the confirm tier decides whether they are the same defect. Only independent agreement across model families raises confidence.
-- **Coverage:** Quorum tracks reviewed files, skipped files, truncated hunks, and lost findings, failing closed if limits prevent full diff coverage.
+- **Coverage:** Quorum tracks reviewed files, skipped files, truncated hunks, and lost findings, failing closed if limits prevent full diff coverage. Each skipped file records its cause, with a one-line count per cause in Markdown. JSON exposes `coverage.skippedFileReasons` as `{ file, reason }` entries; SARIF includes these entries and `skipReasonCounts` under `runs[].properties.coverage`. Causes are `budget-exhausted`, `run-deadline-reached`, `no-provider-available`, `no-usable-response`, and `no-diff-content` (nothing fits the prompt or the diff is missing). Counts include each file once per cause; different chunks of one file can have different causes. A blocked fallback records the budget or deadline that prevented it; otherwise invalid responses take precedence over an exhausted provider list. Budget omissions suggest raising `budget.maxCalls`; deadline omissions suggest raising `budget.maxMinutes` (the run-time setting, not `maxRunMinutes`). Both suggest reviewing per lane with a narrower `--diff`.
 - **Reproduction:** For confirmed blockers, `--reproduce` attempts to generate and run an isolated test that fails at HEAD and passes at base.
 
 ## Safety model
@@ -268,6 +268,16 @@ omitted.
 
 ## Flags
 
+`--diff <base>...<head>` reviews from the merge-base to the selected head;
+`<base>..<head>` uses the exact base (refactor mode always uses the merge-base).
+For example, `--diff main...lane-branch` reviews one lane without switching your
+checkout. Code reads, verification, provider worktrees and deterministic checks
+use the selected head commit. The default and `--since` still end at `HEAD`.
+Non-HEAD reviews use Git context rather than a potentially unrelated CodeGraph
+index in the current checkout. Explicit attachments (`--spec`, `--inventory`,
+`--rules`, `--copy`, `--images`) still come from the paths you supply.
+Missing head refs fail before checks or provider calls.
+
 | Command | Flag | Description |
 |---|---|---|
 | `review` | `--mode <general\|feature\|redesign\|bughunt\|contract\|refactor\|runtime>` | Default general; `--spec` alone selects feature. Runtime: deterministic base/head comparison; optional advisory visual review |
@@ -275,7 +285,7 @@ omitted.
 | `review` | `--mutation` | Refactor only: up to maxMutants extra suite runs (default 8); survivors yield SUSPECT |
 | `review` | `--allow-api-change` | List refactor API breakage without failing for it |
 | `review` | `--radius <n>` | Bughunt lines before/after each hunk; default 40, clamped to 1-200 |
-| `review` | `--diff <range>` | Git range to review, e.g. origin/main...HEAD |
+| `review` | `--diff <range>` | Git range to review, e.g. origin/main...HEAD or main...lane-branch; the head can be any existing commit or branch |
 | `review` | `--spec <file>` | Spec with the acceptance criteria (feature) |
 | `review` | `--inventory <file>` | Inventory of the old features (redesign) |
 | `review` | `--images <dir>` | Screenshots to review (redesign) |
@@ -297,7 +307,7 @@ omitted.
 | `review` | `--no-checks` | Skip deterministic checks; use with untrusted changes |
 | `review` | `--verbose` | Print completion timing on non-interactive stderr; durations always remain in Markdown/JSON metadata |
 | `review` | `--sequential-checks` | Finish setup and checks before triage; also configurable as `budget.sequentialChecks: true` |
-| `review` | `--trust-head-config` | Use committed HEAD config (own repos only) |
+| `review` | `--trust-head-config` | Use config committed at the reviewed head (own repos only) |
 | `doctor` | `--probe` | Run one read probe per provider (spends quota) |
 | `doctor` | `--json` | Print the diagnostic check list as JSON |
 | `init` | `--dry-run` | Print the proposed config and gitignore change without writing or diagnostics |

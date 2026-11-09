@@ -65,6 +65,21 @@ async function review(args: string[] = [], dependencies: CliDependencies = {}) {
     appendLedger: async () => {}, appendFindings: async () => {}, ...dependencies });
   return { code, out, err, provider, quota, result: out.startsWith('{') ? JSON.parse(out) as ReviewResult : undefined };
 }
+it('compares tests and API at a non-HEAD lane using trusted base configuration', async () => {
+  const head = await git('rev-parse', 'HEAD');
+  await git('branch', 'lane', head);
+  await writeFile(path.join(root, 'sample.ts'), source.replace('return 2', 'return 0'));
+  await git('add', '.'); await git('commit', '-m', 'later regression outside lane');
+  const contextRunner = vi.fn<CommandRunner>(async () => { throw new Error('must not query the checkout index'); });
+  const result = await review(['--diff', 'base..lane'], { contextRunner });
+  expect(result.code, result.err).toBe(0);
+  expect(result.result?.headSha).toBe(head);
+  expect(result.result?.refactor?.tests.head).toMatchObject({ failed: 0, passed: 1 });
+  expect(result.result?.refactor?.tests.regressions).toEqual([]);
+  expect(result.result?.refactor?.verdict).toBe('NO BEHAVIOUR CHANGE FOUND');
+  expect(result.provider.calls.length).toBeGreaterThan(0);
+  expect(contextRunner).not.toHaveBeenCalled();
+});
 it.each([
   ['referenced local interface', 'sample.ts', 'interface Props { label: string; } export function Button(props: Props) { return props.label; }', 'interface Props { label: number; } export function Button(props: Props) { return props.label; }'],
   ['class method', 'sample.ts', 'export class S { run(); stop(); }', 'export class S { run(); }'],

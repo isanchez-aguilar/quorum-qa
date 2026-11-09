@@ -134,9 +134,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const now = dependencies.now ?? Date.now;
   const reviewStarted = now();
   let baseline = await checkoutSnapshot(root, runner);
-  const head = await revParse('HEAD', root, runner);
+  const checkoutHead = await revParse('HEAD', root, runner);
+  let head = checkoutHead;
   let headConfig: QuorumConfig | undefined;
-  if (flags.trustHeadConfig) headConfig = await configAt(head, root, runner);
+  if (flags.trustHeadConfig && !flags.diff) headConfig = await configAt(head, root, runner);
   async function bootstrapConfig(): Promise<QuorumConfig> {
     if (headConfig) return headConfig;
     let defaultBase: string;
@@ -154,8 +155,10 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     range = `${bootstrap.base}...HEAD`;
   }
   const parts = /^(.+?)(\.{2,3})([^.].*)$/.exec(range);
-  if (!parts) throw new UsageError('Invalid range; expected <base>..HEAD or <base>...HEAD.');
-  if (await revParse(parts[3]!, root, runner) !== head) throw new UsageError('The review range must end at HEAD.');
+  if (!parts) throw new UsageError('Invalid range; expected <base>..<head> or <base>...<head>.');
+  try { head = await revParse(parts[3]!, root, runner); }
+  catch { throw new UsageError(`Cannot resolve review head: ${parts[3]}. Expected an existing commit or branch.`); }
+  if (flags.trustHeadConfig && !headConfig) headConfig = await configAt(head, root, runner);
   if (mode === 'runtime') {
     const base = flags.since && !headConfig ? (await bootstrapConfig()).base : parts[1]!;
     const trusted = headConfig ?? await configAt(await mergeBase(await revParse(base, root, runner), head, root, runner), root, runner);
@@ -248,10 +251,16 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     throw new UsageError('No acceptance criteria detected. Use Markdown checkboxes (- [ ] criterion), or a list under a heading containing "acceptance".');
   }
   const catalog = withQwenModel(dependencies.catalog ?? DEFAULT_CATALOG, config.qwen?.model);
-  const selected = await selectContextProvider(deterministicOnly ? 'git' : config.context?.provider ?? 'git', root,
+  // The checkout's index describes its own revision, not an arbitrary review head.
+  const historicalHead = head !== checkoutHead;
+  const selected = await selectContextProvider(deterministicOnly || historicalHead ? 'git' : config.context?.provider ?? 'git', root,
     dependencies.contextProvider ?? new CodeGraphContextProvider({ now }));
   context.contextProvider = { requested: config.context?.provider ?? 'git', available: selected.available, effective: selected.provider.name };
   context.contextNotes = selected.notes;
+  if (historicalHead && config.context?.provider === 'codegraph') {
+    context.contextProvider.available = false;
+    context.contextNotes.push('CodeGraph context skipped for a non-HEAD range; using git context from the reviewed commit.');
+  }
   if (mode === 'bughunt' || mode === 'contract') {
     const tree = await createReviewWorktree(root, head, runner, message => context.contextNotes!.push(message));
     try {
@@ -285,7 +294,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     if (mode === 'refactor') {
       io.out('Refactor evidence plan (no commands run):\n'
         + `  Disposable worktree at merge-base: ${context.mergeBaseCommit ?? context.baseCommit}\n`
-        + `  Disposable worktree at HEAD: ${head}\n`
+        + `  Disposable worktree at reviewed head: ${head}\n`
         + `  Setup in each worktree: ${JSON.stringify(config.setup ?? [])}\n`
         + `  Test command in each worktree: ${JSON.stringify(resolveRefactorTestCommand(config))}\n`
         + `  Mutation sampling: ${flags.mutation ? 'on' : 'off (use --mutation)'}; max mutants: ${config.refactor?.mutation?.maxMutants ?? 8}; budget: ${config.refactor?.mutation?.budgetSeconds ?? 300} seconds (up to ${config.refactor?.mutation?.maxMutants ?? 8} extra suite runs)\n`
@@ -299,7 +308,8 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
   const warnings: string[] = [];
   const warn = (message: string) => { if (!warnings.includes(message)) warnings.push(message); };
   if (baseline.status.trim()) {
-    const message = mode === 'contract' && flags.copy ? 'Checkout has uncommitted changes; code is reviewed at committed HEAD, alongside explicitly supplied copy.' : 'Checkout has uncommitted changes; only committed HEAD was reviewed.';
+    const revision = historicalHead ? `review head ${head}` : 'committed HEAD';
+    const message = mode === 'contract' && flags.copy ? `Checkout has uncommitted changes; code is reviewed at ${revision}, alongside explicitly supplied copy.` : `Checkout has uncommitted changes; only ${revision} was reviewed.`;
     warn(message); io.err(`quorum: ${message}\n`);
   }
   plan?.warnings.filter(message => message.startsWith('Independence')).forEach(warn);
@@ -340,7 +350,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const evidence = mode === 'refactor' ? await runRefactorEvidence(context, config, {
       root, mutation: flags.mutation === true, gitRunner: runner, checkRunner: dependencies.checkRunner ?? runCommand, warn,
       announce: message => io.err(message.endsWith('\n') ? message : message + '\n'),
-      ...(deterministicOnly ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
+      ...(deterministicOnly || historicalHead ? { skipCodegraph: true } : { contextRunner: dependencies.contextRunner ?? runCommand }),
     }) : undefined;
     if (evidence) context.refactorSummary = evidence.summary;
     const providers = reviewProviders(config, dependencies);
