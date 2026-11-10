@@ -7,11 +7,16 @@ configuration or report formats; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.1.2]
+
 ### Changed
 - `--diff <base>...<head>` (and `..`) accepts any existing commit or branch as its head. Diff context, verification, provider worktrees and deterministic checks use that revision; `--trust-head-config` also reads that revision. Non-HEAD ranges fall back to Git context instead of the checkout's CodeGraph index.
 - Skipped coverage records per-file causes and counts in Markdown and SARIF: exhausted call budget, run deadline, unavailable providers, unusable responses, or missing diff content. Budget and deadline omissions suggest increasing the relevant limit or reviewing a narrower lane.
 - Generated test snapshots (`*.snap` and anything under `__snapshots__/`) are excluded from text review, like binary files: they no longer spend prompt budget or show up as truncated hunks. They are listed under "Generated snapshots" in the coverage section, the warnings and the SARIF notifications, and do not make the run incomplete (a snapshot-only diff exits 0). Set `includeSnapshots: true` in the trusted config to review them.
 - A deterministic check that fails with none of the change's files named in its output keeps its FAILED status, count, SARIF error level and late-checks warning, and gains a neutral note, "no changed file named in its output; origin unknown", in the report line and in the evidence sent to the models. It is a hint only: a removed export surfaces in an unchanged consumer, and some runners print no paths. File matching is by whole name, case-insensitive. Setup commands are never annotated.
+
+### Documentation
+- The README opens with an animated demo of a real run on a synthetic repo (`docs/demo/`), with the recorder and renderer that rebuild it.
 
 ## [0.1.1]
 
