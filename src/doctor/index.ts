@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { homedir as userHome } from 'node:os';
 import { resolveCommand } from '../checks/resolver.js';
+import { checksRunTests, hasTestScript, UNTESTED_CHECKS_FIX, UNTESTED_CHECKS_MESSAGE } from '../checks/test-coverage.js';
 import { runCommand } from '../process/runner.js';
 import { parseAgyQuota } from '../providers/agy.js';
 import type { CommandRunner, QuorumConfig } from '../types/index.js';
@@ -43,6 +44,9 @@ export async function runDoctor(config: QuorumConfig | undefined, options: Docto
   if (config?.checks.length && !config.setup?.length && existsSync(path.join(context.repoRoot, 'package.json'))) {
     results.push({ id: 'checks.setup', status: 'WARN', message: 'checks run in a fresh worktree without node_modules',
       fix: 'Configure setup argv commands to install dependencies before checks.' });
+  }
+  if (config?.checks.length && !checksRunTests(config.checks) && await hasTestScript(context.repoRoot)) {
+    results.push({ id: 'checks.tests', status: 'WARN', message: UNTESTED_CHECKS_MESSAGE, fix: UNTESTED_CHECKS_FIX });
   }
   const indexFound = await hasCodeGraphIndex(context.repoRoot);
   if (config?.context?.provider === 'codegraph') {

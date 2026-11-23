@@ -14,9 +14,9 @@ async function files(dir: string, prefix = ''): Promise<Record<string, string>> 
   return output;
 }
 
-it('ships twelve valid, changed, syntactically valid synthetic projects', async () => {
+it('ships fourteen valid, changed, syntactically valid synthetic projects', async () => {
   const ids = await readdir(root);
-  expect(ids).toHaveLength(12);
+  expect(ids).toHaveLength(14);
   let seeded = 0;
   for (const id of ids) {
     const dir = path.join(root, id);
@@ -59,5 +59,5 @@ it('ships twelve valid, changed, syntactically valid synthetic projects', async 
       expect(truth.lines[1]).toBeLessThanOrEqual(head[truth.file]!.trimEnd().split('\n').length);
     }
   }
-  expect(seeded).toBe(8);
+  expect(seeded).toBe(10);
 });

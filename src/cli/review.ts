@@ -9,6 +9,7 @@ import { DEFAULT_CATALOG, parseModelRef, withQwenModel } from '../catalog/index.
 import type { QuotaSnapshot } from '../catalog/groups.js';
 import { createExecutionPlan, formatDryRun, runCascade, type CascadeResult } from '../cascade/index.js';
 import { runDeterministicChecks } from '../checks/index.js';
+import { checksRunTests, hasTestScript, UNTESTED_CHECKS_FIX, UNTESTED_CHECKS_MESSAGE } from '../checks/test-coverage.js';
 import { resolveAuthorFamily, validateConfig } from '../config/index.js';
 import { buildReviewContext } from '../context/index.js';
 import { assertNoLinks, buildContractContext, loadCopy } from '../context/contract.js';
@@ -323,6 +324,7 @@ export async function review(flags: ParsedFlags, io: CliIo, dependencies: Review
     const started = now();
     try {
       if (!flags.noChecks && mode !== 'refactor') {
+        if (config.checks.length && !checksRunTests(config.checks) && await hasTestScript(root)) warn(`${UNTESTED_CHECKS_MESSAGE} ${UNTESTED_CHECKS_FIX}`);
         if (config.checks.length || config.setup?.length) io.err(`quorum: running ${config.setup?.length ?? 0} setup commands and ${config.checks.length} configured checks from the reviewed change in a disposable worktree; this executes the change's code and install scripts unless the setup command disables them (use --no-checks for untrusted changes)\n`);
         const checksTree = await createReviewWorktree(root, head, runner, warn, { checks: true });
         try {

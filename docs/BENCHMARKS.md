@@ -44,7 +44,7 @@ node bench/compare.mjs .quorum/bench/baseline/summary.json .quorum/bench/candida
 ```
 
 Omitting `--cases` selects all cases, sorted by ID. `--repeat` defaults to 1.
-The twelve bundled cases default to `general`; `--mode general|feature`
+The fourteen bundled cases default to `general`; `--mode general|feature`
 overrides the case mode. Specifications are retained and supplied only in
 feature mode. Compare runs using the same mode.
 `--config` defaults to the repository's `quorum.config.json`. The harness copies
