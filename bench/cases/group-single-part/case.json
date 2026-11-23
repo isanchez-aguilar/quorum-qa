@@ -1,0 +1,15 @@
+{
+  "id": "group-single-part",
+  "title": "Join split payments on the customer statement",
+  "kind": "seeded",
+  "mode": "general",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "statement.mjs",
+      "lines": [17, 17],
+      "class": "wrong-flag",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}

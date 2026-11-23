@@ -1,0 +1,15 @@
+{
+  "id": "windowed-abono-count",
+  "title": "Show each debt's abonos on its card",
+  "kind": "seeded",
+  "mode": "general",
+  "spec": "spec.md",
+  "truth": [
+    {
+      "file": "card.mjs",
+      "lines": [10, 12],
+      "class": "inconsistent-total",
+      "minSeverity": "IMPORTANT"
+    }
+  ]
+}
