@@ -7,8 +7,8 @@ import path from 'node:path';
  * A repository can configure typecheck and lint and leave its unit tests out
  * (they are slow, or a narrower `test:scripts` stood in for them). Then a
  * change that breaks a test reports «0 failed deterministic checks», which
- * reads as «tests pass» — a Rachi hotfix went through exactly so while its own
- * web tests were red. The review says so instead of staying silent.
+ * reads as «tests pass» while the repository's own test suite is red. The
+ * review says so instead of staying silent.
  */
 
 const TEST_RUNNERS = new Set(['test', 'vitest', 'jest', 'mocha', 'ava', 'tap', 'pytest', 'phpunit', 'rspec']);
