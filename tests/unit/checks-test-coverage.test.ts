@@ -18,7 +18,7 @@ describe('checksRunTests', () => {
   });
 
   it('does not count typecheck, lint or a narrower script suite as the tests', () => {
-    // The Rachi config that let a red web suite through: no unit tests at all.
+    // A config that lets a red test suite through: no unit tests at all.
     expect(checksRunTests([['pnpm', 'run', 'typecheck'], ['pnpm', 'run', 'lint'], ['pnpm', 'test:scripts']])).toBe(false);
     expect(checksRunTests([['go', 'vet']])).toBe(false);
     expect(checksRunTests([])).toBe(false);
